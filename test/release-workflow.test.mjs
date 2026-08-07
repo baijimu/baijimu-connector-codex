@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -6,12 +7,15 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-test("connector owns one self-contained GitHub release workflow", async () => {
+test("connector owns its application release and upstream artifact sync workflows", async () => {
   const workflowDirectory = join(root, ".github", "workflows");
   const workflowFiles = (await readdir(workflowDirectory)).filter((name) =>
     /\.ya?ml$/.test(name),
   );
-  assert.deepEqual(workflowFiles, ["release.yml"]);
+  assert.deepEqual(workflowFiles, [
+    "release.yml",
+    "sync-codex-upstream-artifacts.yml",
+  ]);
 
   const workflow = await readFile(join(workflowDirectory, "release.yml"), "utf8");
   assert.match(workflow, /tags:\s*\n\s*- "v\*"/);
@@ -44,8 +48,10 @@ test("connector owns one self-contained GitHub release workflow", async () => {
   assert.doesNotMatch(workflow, /release-codex-local-app/);
   assert.doesNotMatch(workflow, /Jenkins/i);
   assert.doesNotMatch(workflow, /gitee\.com|zxflimit_admin/);
-  assert.match(workflow, /baijimu-cli-v\$\{BAIJIMU_CLI_VERSION\}/);
-  assert.match(workflow, /ea97f240485a2d85bc866d486d2480c71bd22c12d359ad248d2b246ff371499e/);
+  assert.match(workflow, /BAIJIMU_CLI_VERSION: "0\.1\.41"/);
+  assert.match(workflow, /796a706b00e163429d2915010342e8569c6e5224466764a1e8efe3fbd772518b/);
+  assert.match(workflow, /managed-tool-artifacts\/baijimu-cli\/releases\/v0\.1\.41/);
+  assert.doesNotMatch(workflow, /bridge-agent\/releases/);
   assert.match(workflow, /git merge-base --is-ancestor "\$sha" origin\/main/);
   assert.match(workflow, /needs\.validate\.outputs\.verify == 'true'/);
   assert.match(workflow, /published-release\.json/);
@@ -60,6 +66,100 @@ test("connector owns one self-contained GitHub release workflow", async () => {
     const pattern = new RegExp(`${action.replace("/", "\\/")}@[0-9a-f]{40}`);
     assert.match(workflow, pattern);
   }
+});
+
+test("upstream sync is release-side, complete, immutable, and independently scheduled", async () => {
+  const workflow = await readFile(
+    join(root, ".github", "workflows", "sync-codex-upstream-artifacts.yml"),
+    "utf8",
+  );
+  const wrapper = await readFile(
+    join(root, "tools", "codex-artifacts", "sync-codex-artifacts.sh"),
+    "utf8",
+  );
+  const synchronizer = await readFile(
+    join(root, "tools", "codex-artifacts", "sync_codex_artifacts.py"),
+    "utf8",
+  );
+
+  assert.match(workflow, /schedule:/);
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.doesNotMatch(workflow, /push:\s*\n\s*tags:/);
+  assert.match(workflow, /concurrency:\s*\n\s*group: codex-upstream-artifact-sync/);
+  assert.match(workflow, /verify-macos-apps:/);
+  assert.match(workflow, /codesign --verify --deep --strict/);
+  assert.match(workflow, /spctl --assess --type execute/);
+  assert.match(workflow, /verify-windows-apps:/);
+  assert.match(workflow, /signtool\.exe/);
+  assert.match(workflow, /verify \/pa \/all \/v/);
+  assert.match(workflow, /needs: \[verify-macos-apps, verify-windows-apps\]/);
+  assert.match(workflow, /sync-codex-artifacts\.sh/);
+  assert.match(wrapper, /Customer installers read the published/);
+  assert.match(synchronizer, /schema_version": 2/);
+  assert.match(synchronizer, /assets\/sha256/);
+  assert.match(synchronizer, /latest\.json/);
+  assert.match(synchronizer, /Publishing this pointer last/);
+  assert.doesNotMatch(synchronizer, /PRESERVE_EXISTING_MANIFEST/);
+  for (const name of [
+    "codex-app-aarch64-apple-darwin.dmg",
+    "codex-app-x86_64-apple-darwin.dmg",
+    "codex-app-windows-x64.msix",
+    "codex-app-windows-arm64.msix",
+    "codex-aarch64-apple-darwin.tar.gz",
+    "codex-x86_64-apple-darwin.tar.gz",
+  ]) {
+    assert.match(synchronizer, new RegExp(name.replaceAll(".", "\\.")));
+  }
+});
+
+test("upstream manifest builder produces one complete content-addressed snapshot", () => {
+  const script = String.raw`
+import importlib.util
+from pathlib import Path
+
+path = Path("tools/codex-artifacts/sync_codex_artifacts.py")
+spec = importlib.util.spec_from_file_location("sync_codex_artifacts", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+sources = []
+for name in module.CLI_ASSET_NAMES:
+    sources.append({
+        "name": name,
+        "component": "codex_cli",
+        "platform": "macos",
+        "arch": "aarch64" if "aarch64" in name else "x86_64",
+        "source_kind": "official_openai_github_release",
+        "upstream_url": "https://example.invalid/" + name,
+        "effective_upstream_url": "https://example.invalid/" + name,
+        "upstream_sha256": "a" * 64,
+        "sha256": "a" * 64,
+        "size": 10,
+        "content_type": "application/gzip",
+    })
+for source in module.APP_ASSETS:
+    sources.append({
+        **source,
+        "component": "codex_desktop_app",
+        "effective_upstream_url": source["upstream_url"],
+        "upstream_sha256": "b" * 64,
+        "sha256": "b" * 64,
+        "size": 20,
+        "signature_verification": "native-platform",
+    })
+release = {"tag_name": "rust-v-test", "published_at": "2026-01-01T00:00:00Z"}
+manifest = module.manifest_for(release, sources, "https://oss.example", "codex-artifacts")
+module.validate_manifest(manifest)
+assert manifest["schema_version"] == 2
+assert len(manifest["assets"]) == 6
+assert all("/assets/sha256/" in item["mirror_url"] for item in manifest["assets"])
+assert not any("preserved_from_manifest" in item for item in manifest["assets"])
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test("market publisher uses explicit immutable version creation and review submission", async () => {

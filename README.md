@@ -118,9 +118,19 @@ credentials.
 
 ## Release
 
-This repository is the source of truth for Codex local-app releases. A single
-GitHub Actions workflow validates and builds the exact tagged commit, signs the
-macOS and Windows binaries, publishes the three platform archives to GitHub and
-content-addressed Baijimu OSS paths, creates the immutable local-app market
-version, submits it for review, and verifies the resulting publication. Formal
-releases use one tag only: `v<version>`.
+This repository is the source of truth for both Codex local-app delivery paths,
+which intentionally have independent cadences:
+
+- `release.yml` builds a tagged Connector commit, signs the native binaries,
+  publishes immutable platform archives, and creates the local-app market
+  version. Formal application releases use one tag only: `v<version>`.
+- `sync-codex-upstream-artifacts.yml` runs on a schedule or by explicit manual
+  dispatch. It downloads the complete customer installer contract (the official
+  Codex CLI packages plus desktop App packages), verifies upstream integrity,
+  publishes every object under its SHA256, verifies anonymous OSS reads, and
+  replaces `codex-artifacts/latest.json` only after every referenced object is
+  available.
+
+The synchronizer is a release-side operation. Bridge Agent and customer devices
+never execute it. First-use installers only read the already published manifest,
+download the platform asset named by that contract, and verify its SHA256.

@@ -25,8 +25,9 @@ permissions:
   contents: read
 
 env:
-  BAIJIMU_CLI_VERSION: "0.1.40"
-  BAIJIMU_CLI_LINUX_SHA256: "ea97f240485a2d85bc866d486d2480c71bd22c12d359ad248d2b246ff371499e"
+  BAIJIMU_CLI_VERSION: "0.1.41"
+  BAIJIMU_CLI_LINUX_SHA256: "796a706b00e163429d2915010342e8569c6e5224466764a1e8efe3fbd772518b"
+  BAIJIMU_CLI_LINUX_URL: "https://lowcode-common.oss-cn-beijing.aliyuncs.com/managed-tool-artifacts/baijimu-cli/releases/v0.1.41/796a706b00e163429d2915010342e8569c6e5224466764a1e8efe3fbd772518b/baijimu-cli-0.1.41-linux-x64.zip"
   MACOSX_DEPLOYMENT_TARGET: "11.0"
 
 jobs:
@@ -520,7 +521,7 @@ jobs:
           set -euo pipefail
           archive="$RUNNER_TEMP/baijimu-cli.zip"
           curl -fsSL --retry 6 --retry-all-errors --retry-delay 3 \
-            "https://github.com/momoplan/bridge-agent/releases/download/baijimu-cli-v${BAIJIMU_CLI_VERSION}/baijimu-cli-${BAIJIMU_CLI_VERSION}-linux-x64.zip" \
+            "$BAIJIMU_CLI_LINUX_URL" \
             -o "$archive"
           printf '%s  %s\n' "$BAIJIMU_CLI_LINUX_SHA256" "$archive" | sha256sum -c -
           unzip -q "$archive" -d "$RUNNER_TEMP/baijimu-cli"
@@ -650,7 +651,7 @@ jobs:
           set -euo pipefail
           archive="$RUNNER_TEMP/baijimu-cli.zip"
           curl -fsSL --retry 6 --retry-all-errors --retry-delay 3 \
-            "https://github.com/momoplan/bridge-agent/releases/download/baijimu-cli-v${BAIJIMU_CLI_VERSION}/baijimu-cli-${BAIJIMU_CLI_VERSION}-linux-x64.zip" \
+            "$BAIJIMU_CLI_LINUX_URL" \
             -o "$archive"
           printf '%s  %s\n' "$BAIJIMU_CLI_LINUX_SHA256" "$archive" | sha256sum -c -
           unzip -q "$archive" -d "$RUNNER_TEMP/baijimu-cli"

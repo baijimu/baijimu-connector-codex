@@ -1,0 +1,140 @@
+name: sync-codex-upstream-artifacts
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: codex-upstream-artifact-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify-macos-apps:
+    runs-on: macos-15
+    timeout-minutes: 120
+    outputs:
+      arm64_sha256: ${{ steps.verify.outputs.arm64_sha256 }}
+      x64_sha256: ${{ steps.verify.outputs.x64_sha256 }}
+    steps:
+      - name: Verify official OpenAI macOS packages
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_dmg() {
+            local arch="$1" url="$2" dmg="$RUNNER_TEMP/ChatGPT-$1.dmg" mount="$RUNNER_TEMP/mount-$1"
+            curl -fsSL --retry 8 --retry-all-errors --retry-delay 3 "$url" -o "$dmg"
+            mkdir -p "$mount"
+            hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$dmg" >/dev/null
+            app="$mount/ChatGPT.app"
+            test -d "$app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            spctl --assess --type execute --verbose=2 "$app"
+            codesign --display --verbose=4 "$app" 2>&1 | grep -E 'Authority=|TeamIdentifier=' >&2
+            hdiutil detach "$mount" >/dev/null
+            shasum -a 256 "$dmg" | awk '{print $1}'
+          }
+          arm64_sha256="$(verify_dmg arm64 'https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg')"
+          x64_sha256="$(verify_dmg x64 'https://persistent.oaistatic.com/codex-app-prod/ChatGPT-latest-x64.dmg')"
+          test "${#arm64_sha256}" = 64
+          test "${#x64_sha256}" = 64
+          echo "arm64_sha256=$arm64_sha256" >> "$GITHUB_OUTPUT"
+          echo "x64_sha256=$x64_sha256" >> "$GITHUB_OUTPUT"
+
+  verify-windows-apps:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    outputs:
+      arm64_sha256: ${{ steps.verify.outputs.arm64_sha256 }}
+      x64_sha256: ${{ steps.verify.outputs.x64_sha256 }}
+    steps:
+      - name: Verify Microsoft Store package signatures
+        id: verify
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found' }
+          function Verify-Package([string]$Arch, [string]$Url) {
+            $package = Join-Path $env:RUNNER_TEMP "ChatGPT-$Arch.msix"
+            Invoke-WebRequest -Uri $Url -OutFile $package -MaximumRetryCount 8 -RetryIntervalSec 3
+            $output = & $signtool.FullName verify /pa /all /v $package 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) { throw "MSIX signature verification failed for $Arch`n$output" }
+            if ($output -notmatch '(?i)OpenAI') { throw "MSIX signer is not OpenAI for $Arch`n$output" }
+            return (Get-FileHash -Algorithm SHA256 $package).Hash.ToLowerInvariant()
+          }
+          $arm64 = Verify-Package 'arm64' 'https://codexapp.agentsmirror.com/latest/win-arm64'
+          $x64 = Verify-Package 'x64' 'https://codexapp.agentsmirror.com/latest/win-x64'
+          if ($arm64.Length -ne 64 -or $x64.Length -ne 64) { throw 'invalid package digest' }
+          "arm64_sha256=$arm64" >> $env:GITHUB_OUTPUT
+          "x64_sha256=$x64" >> $env:GITHUB_OUTPUT
+
+  sync:
+    needs: [verify-macos-apps, verify-windows-apps]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 330
+    env:
+      OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+      OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+    steps:
+      - name: Check out Codex application source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Validate synchronizer contract
+        run: npm test
+
+      - name: Install pinned ossutil
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$OSS_ACCESS_KEY_ID"
+          test -n "$OSS_ACCESS_KEY_SECRET"
+          version=2.3.0
+          checksum=3ae4d9fc85a7a6e9f5654d1599766f1a3a42a3692870887b5ae9338d582ef65a
+          curl -fsSL --retry 5 "https://gosspublic.alicdn.com/ossutil/v2/${version}/ossutil-${version}-linux-amd64.zip" -o "$RUNNER_TEMP/ossutil.zip"
+          printf '%s  %s\n' "$checksum" "$RUNNER_TEMP/ossutil.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/ossutil.zip" -d "$RUNNER_TEMP/ossutil"
+          install -m 0755 "$RUNNER_TEMP/ossutil/ossutil-${version}-linux-amd64/ossutil" "$RUNNER_TEMP/ossutil-bin"
+
+      - name: Synchronize the complete customer install artifact set
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OSSUTIL: ${{ runner.temp }}/ossutil-bin
+          CODEX_APP_MACOS_ARM64_SHA256: ${{ needs.verify-macos-apps.outputs.arm64_sha256 }}
+          CODEX_APP_MACOS_X64_SHA256: ${{ needs.verify-macos-apps.outputs.x64_sha256 }}
+          CODEX_APP_WINDOWS_ARM64_SHA256: ${{ needs.verify-windows-apps.outputs.arm64_sha256 }}
+          CODEX_APP_WINDOWS_X64_SHA256: ${{ needs.verify-windows-apps.outputs.x64_sha256 }}
+        run: tools/codex-artifacts/sync-codex-artifacts.sh
+
+      - name: Verify the public installation manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 6 --retry-all-errors --retry-delay 3 \
+            'https://lowcode-common.oss-cn-beijing.aliyuncs.com/codex-artifacts/latest.json' \
+            | jq -e '
+                .schema_version == 2 and
+                .manifest_kind == "baijimu.codex.customer-install-artifacts" and
+                (.snapshot_id | length) == 64 and
+                (.assets | length) == 6 and
+                ([.assets[].name] | sort) == ([
+                  "codex-aarch64-apple-darwin.tar.gz",
+                  "codex-app-aarch64-apple-darwin.dmg",
+                  "codex-app-windows-arm64.msix",
+                  "codex-app-windows-x64.msix",
+                  "codex-app-x86_64-apple-darwin.dmg",
+                  "codex-x86_64-apple-darwin.tar.gz"
+                ] | sort) and
+                all(.assets[];
+                  (.mirror_url | startswith("https://lowcode-common.oss-cn-beijing.aliyuncs.com/codex-artifacts/assets/sha256/")) and
+                  (.sha256 | length) == 64 and
+                  .size > 0
+                )' >/dev/null

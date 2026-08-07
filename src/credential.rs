@@ -1390,6 +1390,7 @@ mod tests {
         fs::create_dir_all(&managed_home).unwrap();
         fs::create_dir_all(&user_home).unwrap();
         let _home = EnvironmentRestore::set("HOME", &user_home);
+        let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
         let _codex = EnvironmentRestore::set("CODEX_HOME", &managed_home);
         let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
         let profile = CredentialProfile {

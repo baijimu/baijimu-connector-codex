@@ -193,6 +193,8 @@ jobs:
       - name: Build and test Windows binary
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static -D warnings"
         run: |
           $ErrorActionPreference = "Stop"
           cargo test --locked
@@ -200,6 +202,43 @@ jobs:
           $binDir = Join-Path $env:RUNNER_TEMP "codex-local-app\bin\${{ matrix.platform_dir }}"
           New-Item -ItemType Directory -Force -Path $binDir | Out-Null
           Copy-Item -Force "target\release\baijimu-connector-codex.exe" (Join-Path $binDir "baijimu-connector-codex.exe")
+
+      - name: Verify Windows binaries are self-contained
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vswhere)) {
+            throw "vswhere.exe was not found"
+          }
+          $visualStudioRoot = & $vswhere -latest -products * -property installationPath
+          $dumpbin = Get-ChildItem `
+            -Path "$visualStudioRoot\VC\Tools\MSVC" `
+            -Filter "dumpbin.exe" `
+            -File `
+            -Recurse `
+            -ErrorAction Stop | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dumpbin) {
+            throw "dumpbin.exe was not found"
+          }
+
+          $packageBinDir = Join-Path $env:RUNNER_TEMP "codex-local-app\bin\${{ matrix.platform_dir }}"
+          $nativeFiles = @(
+            Get-ChildItem -LiteralPath $packageBinDir -File -ErrorAction Stop |
+              Where-Object { $_.Extension -in @(".exe", ".dll") }
+          )
+          if ($nativeFiles.Count -eq 0) {
+            throw "No Windows executables or libraries were found in $packageBinDir"
+          }
+          foreach ($nativeFile in $nativeFiles) {
+            $imports = (& $dumpbin.FullName /DEPENDENTS $nativeFile.FullName 2>&1) -join "`n"
+            Write-Host $imports
+            if ($imports -match '(?i)\b(?:VCRUNTIME|MSVCP)\d*(?:_\d+)?\.dll\b') {
+              throw "Windows artifact requires the Visual C++ runtime: $($nativeFile.FullName)"
+            }
+          }
+          Write-Host "Verified Windows artifacts do not require VCRUNTIME/MSVCP"
 
       - name: Download and run Windows signing tool
         if: runner.os == 'Windows' && needs.validate.outputs.publish == 'true'

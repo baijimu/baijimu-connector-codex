@@ -50,6 +50,10 @@ test("connector owns one self-contained GitHub release workflow", async () => {
   assert.match(workflow, /needs\.validate\.outputs\.verify == 'true'/);
   assert.match(workflow, /published-release\.json/);
   assert.match(workflow, /\.assets\[\] \| \[\.name, \.url\]/);
+  assert.match(workflow, /RUSTFLAGS: "-C target-feature=\+crt-static -D warnings"/);
+  assert.match(workflow, /Verify Windows binaries are self-contained/);
+  assert.match(workflow, /dumpbin\.exe/);
+  assert.match(workflow, /VCRUNTIME\|MSVCP/);
 
   for (const action of ["actions/checkout", "actions/upload-artifact", "actions/download-artifact"]) {
     const pattern = new RegExp(`${action.replace("/", "\\/")}@[0-9a-f]{40}`);

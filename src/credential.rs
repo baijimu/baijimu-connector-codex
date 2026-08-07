@@ -1246,19 +1246,19 @@ fn verify_private_file(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-fn set_private_directory(path: &Path) -> Result<()> {
+fn set_private_directory(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(_path, fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
 }
-fn set_private_file(path: &Path) -> Result<()> {
+fn set_private_file(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        fs::set_permissions(_path, fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
 }

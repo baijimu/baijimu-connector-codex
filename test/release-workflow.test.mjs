@@ -51,6 +51,7 @@ test("connector owns one self-contained GitHub release workflow", async () => {
   assert.match(workflow, /published-release\.json/);
   assert.match(workflow, /\.assets\[\] \| \[\.name, \.url\]/);
   assert.match(workflow, /RUSTFLAGS: "-C target-feature=\+crt-static -D warnings"/);
+  assert.match(workflow, /\$PSNativeCommandUseErrorActionPreference = \$true/);
   assert.match(workflow, /Verify Windows binaries are self-contained/);
   assert.match(workflow, /dumpbin\.exe/);
   assert.match(workflow, /VCRUNTIME\|MSVCP/);

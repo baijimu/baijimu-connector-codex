@@ -404,15 +404,15 @@ fn atomic_write_private(path: &Path, content: &[u8]) -> Result<()> {
     set_private_file(path)
 }
 
-fn set_private_directory(path: &Path) -> Result<()> {
+fn set_private_directory(_path: &Path) -> Result<()> {
     #[cfg(unix)]
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    fs::set_permissions(_path, fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
 
-fn set_private_file(path: &Path) -> Result<()> {
+fn set_private_file(_path: &Path) -> Result<()> {
     #[cfg(unix)]
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    fs::set_permissions(_path, fs::Permissions::from_mode(0o600))?;
     Ok(())
 }
 

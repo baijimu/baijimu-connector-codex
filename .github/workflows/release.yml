@@ -197,6 +197,7 @@ jobs:
           RUSTFLAGS: "-C target-feature=+crt-static -D warnings"
         run: |
           $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           cargo test --locked
           cargo build --locked --release
           $binDir = Join-Path $env:RUNNER_TEMP "codex-local-app\bin\${{ matrix.platform_dir }}"

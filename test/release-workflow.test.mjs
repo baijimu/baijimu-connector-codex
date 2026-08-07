@@ -92,6 +92,8 @@ test("upstream sync is release-side, complete, immutable, and independently sche
   assert.match(workflow, /verify-windows-apps:/);
   assert.match(workflow, /signtool\.exe/);
   assert.match(workflow, /verify \/pa \/all \/v/);
+  assert.match(workflow, /AppxManifest\.xml/);
+  assert.match(workflow, /OpenAI\\\.\(ChatGPT\|Codex\)/);
   assert.match(workflow, /needs: \[verify-macos-apps, verify-windows-apps\]/);
   assert.match(workflow, /sync-codex-artifacts\.sh/);
   assert.match(wrapper, /Customer installers read the published/);

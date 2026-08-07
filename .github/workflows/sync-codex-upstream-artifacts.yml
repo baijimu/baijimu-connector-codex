@@ -67,7 +67,21 @@ jobs:
             Invoke-WebRequest -Uri $Url -OutFile $package -MaximumRetryCount 8 -RetryIntervalSec 3
             $output = & $signtool.FullName verify /pa /all /v $package 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) { throw "MSIX signature verification failed for $Arch`n$output" }
-            if ($output -notmatch '(?i)OpenAI') { throw "MSIX signer is not OpenAI for $Arch`n$output" }
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $archive = [System.IO.Compression.ZipFile]::OpenRead($package)
+            try {
+              $entry = $archive.GetEntry('AppxManifest.xml')
+              if (-not $entry) { throw "AppxManifest.xml is missing for $Arch" }
+              $reader = [System.IO.StreamReader]::new($entry.Open())
+              try { [xml]$manifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
+            } finally {
+              $archive.Dispose()
+            }
+            $identity = [string]$manifest.Package.Identity.Name
+            if ($identity -notmatch '^OpenAI\.(ChatGPT|Codex)') {
+              throw "unexpected signed Microsoft Store package identity for ${Arch}: $identity"
+            }
+            Write-Host "Verified signed Microsoft Store identity $identity for $Arch"
             return (Get-FileHash -Algorithm SHA256 $package).Hash.ToLowerInvariant()
           }
           $arm64 = Verify-Package 'arm64' 'https://codexapp.agentsmirror.com/latest/win-arm64'

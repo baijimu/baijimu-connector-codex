@@ -26,6 +26,8 @@ DEFAULT_PREFIX = "codex-artifacts"
 CLI_ASSET_NAMES = (
     "codex-aarch64-apple-darwin.tar.gz",
     "codex-x86_64-apple-darwin.tar.gz",
+    "codex-aarch64-pc-windows-msvc.exe.zip",
+    "codex-x86_64-pc-windows-msvc.exe.zip",
 )
 
 APP_ASSETS = (
@@ -108,12 +110,13 @@ def select_assets(release: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "name": name,
                 "component": "codex_cli",
-                "platform": "macos",
+                "platform": "windows" if "pc-windows" in name else "macos",
                 "arch": "aarch64" if "aarch64" in name else "x86_64",
                 "upstream_url": source["browser_download_url"],
                 "upstream_sha256": upstream_digest.removeprefix("sha256:"),
                 "expected_size": int(source["size"]),
-                "content_type": source.get("content_type") or "application/gzip",
+                "content_type": source.get("content_type")
+                or ("application/zip" if name.endswith(".zip") else "application/gzip"),
                 "source_kind": "official_openai_github_release",
             }
         )

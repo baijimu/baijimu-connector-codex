@@ -126,7 +126,7 @@ which intentionally have independent cadences:
   version. Formal application releases use one tag only: `v<version>`.
 - `sync-codex-upstream-artifacts.yml` runs on a schedule or by explicit manual
   dispatch. It downloads the complete customer installer contract (the official
-  Codex CLI packages plus desktop App packages), verifies upstream integrity,
+  Codex CLI packages for every installer platform plus desktop App packages), verifies upstream integrity,
   publishes every object under its SHA256, verifies anonymous OSS reads, and
   replaces `codex-artifacts/latest.json` only after every referenced object is
   available.

@@ -138,14 +138,16 @@ jobs:
                 .schema_version == 2 and
                 .manifest_kind == "baijimu.codex.customer-install-artifacts" and
                 (.snapshot_id | length) == 64 and
-                (.assets | length) == 6 and
+                (.assets | length) == 8 and
                 ([.assets[].name] | sort) == ([
                   "codex-aarch64-apple-darwin.tar.gz",
                   "codex-app-aarch64-apple-darwin.dmg",
                   "codex-app-windows-arm64.msix",
                   "codex-app-windows-x64.msix",
                   "codex-app-x86_64-apple-darwin.dmg",
-                  "codex-x86_64-apple-darwin.tar.gz"
+                  "codex-x86_64-apple-darwin.tar.gz",
+                  "codex-aarch64-pc-windows-msvc.exe.zip",
+                  "codex-x86_64-pc-windows-msvc.exe.zip"
                 ] | sort) and
                 all(.assets[];
                   (.mirror_url | startswith("https://lowcode-common.oss-cn-beijing.aliyuncs.com/codex-artifacts/assets/sha256/")) and

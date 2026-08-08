@@ -109,6 +109,8 @@ test("upstream sync is release-side, complete, immutable, and independently sche
     "codex-app-windows-arm64.msix",
     "codex-aarch64-apple-darwin.tar.gz",
     "codex-x86_64-apple-darwin.tar.gz",
+    "codex-aarch64-pc-windows-msvc.exe.zip",
+    "codex-x86_64-pc-windows-msvc.exe.zip",
   ]) {
     assert.match(synchronizer, new RegExp(name.replaceAll(".", "\\.")));
   }
@@ -153,7 +155,7 @@ release = {"tag_name": "rust-v-test", "published_at": "2026-01-01T00:00:00Z"}
 manifest = module.manifest_for(release, sources, "https://oss.example", "codex-artifacts")
 module.validate_manifest(manifest)
 assert manifest["schema_version"] == 2
-assert len(manifest["assets"]) == 6
+assert len(manifest["assets"]) == 8
 assert all("/assets/sha256/" in item["mirror_url"] for item in manifest["assets"])
 assert not any("preserved_from_manifest" in item for item in manifest["assets"])
 `;

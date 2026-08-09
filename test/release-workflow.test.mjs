@@ -103,6 +103,11 @@ test("upstream sync is release-side, complete, latest-only, and independently sc
   assert.match(synchronizer, /Publishing this pointer last/);
   assert.match(synchronizer, /DEFAULT_BUCKET = "baijimu-lowcode-public-20260420"/);
   assert.match(synchronizer, /DEFAULT_PUBLIC_BASE = "https:\/\/download\.baijimu\.com"/);
+  assert.match(
+    synchronizer,
+    /def public_asset_is_exact[\s\S]*?"--retry-all-errors"[\s\S]*?"--connect-timeout"[\s\S]*?"--max-time"/,
+  );
+  assert.match(workflow, /--connect-timeout 15 --max-time 900/);
   assert.match(synchronizer, /previous_keys - current_keys/);
   assert.doesNotMatch(synchronizer, /manifests\/sha256/);
   assert.doesNotMatch(synchronizer, /PRESERVE_EXISTING_MANIFEST/);

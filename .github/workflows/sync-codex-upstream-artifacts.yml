@@ -132,7 +132,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL --retry 6 --retry-all-errors --retry-delay 3 \
+          curl -fsSL --retry 8 --retry-all-errors --retry-delay 3 \
+            --connect-timeout 15 --max-time 900 \
             'https://download.baijimu.com/codex-artifacts/latest.json' \
             | jq -e '
                 .schema_version == 2 and

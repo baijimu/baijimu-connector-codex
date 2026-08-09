@@ -17,10 +17,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "macos")]
 const MACOS_SCRIPT_URL: &str =
-    "https://baijimu-lowcode-public-20260420.oss-cn-beijing.aliyuncs.com/docs/scripts/codex-device-install/macos-configure-terminal-and-login.sh?versionId=CAEQogIYgYCAmezf6f4ZIiBmMDQ3MWU4ZDVhYTY0ZjQxYmEzOTA3MTU0NDlmNmE5Nw--";
+    "https://download.baijimu.com/docs/scripts/codex-device-install/macos-configure-terminal-and-login.sh?versionId=CAEQogIYgYCAmezf6f4ZIiBmMDQ3MWU4ZDVhYTY0ZjQxYmEzOTA3MTU0NDlmNmE5Nw--";
 #[cfg(target_os = "windows")]
 const WINDOWS_SCRIPT_URL: &str =
-    "https://baijimu-lowcode-public-20260420.oss-cn-beijing.aliyuncs.com/docs/scripts/codex-device-install/windows-configure-terminal-and-login.ps1?versionId=CAEQogIYgYCAuuvr_f4ZIiAyZjRkYmYyYTdmOGI0YmQ2OGIxZDU3NThkYzcwOGExMQ--";
+    "https://download.baijimu.com/docs/scripts/codex-device-install/windows-configure-terminal-and-login.ps1?versionId=CAEQogIYgYCAuuvr_f4ZIiAyZjRkYmYyYTdmOGI0YmQ2OGIxZDU3NThkYzcwOGExMQ--";
 const SETUP_STATUS_FILE: &str = "setup-status.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -456,16 +456,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn default_macos_installer_is_pinned_to_an_immutable_oss_version() {
-        assert!(MACOS_SCRIPT_URL
-            .starts_with("https://baijimu-lowcode-public-20260420.oss-cn-beijing.aliyuncs.com/"));
+        assert!(MACOS_SCRIPT_URL.starts_with("https://download.baijimu.com/"));
         assert!(MACOS_SCRIPT_URL.contains("?versionId="));
     }
 
     #[cfg(target_os = "windows")]
     #[test]
     fn default_windows_installer_is_pinned_to_an_immutable_oss_version() {
-        assert!(WINDOWS_SCRIPT_URL
-            .starts_with("https://baijimu-lowcode-public-20260420.oss-cn-beijing.aliyuncs.com/"));
+        assert!(WINDOWS_SCRIPT_URL.starts_with("https://download.baijimu.com/"));
         assert!(WINDOWS_SCRIPT_URL.contains("?versionId="));
     }
 

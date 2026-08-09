@@ -48,9 +48,9 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.doesNotMatch(workflow, /release-codex-local-app/);
   assert.doesNotMatch(workflow, /Jenkins/i);
   assert.doesNotMatch(workflow, /gitee\.com|zxflimit_admin/);
-  assert.match(workflow, /BAIJIMU_CLI_VERSION: "0\.1\.41"/);
-  assert.match(workflow, /796a706b00e163429d2915010342e8569c6e5224466764a1e8efe3fbd772518b/);
-  assert.match(workflow, /managed-tool-artifacts\/baijimu-cli\/releases\/v0\.1\.41/);
+  assert.match(workflow, /BAIJIMU_CLI_VERSION: "0\.1\.43"/);
+  assert.match(workflow, /c3b73aeeef5a03166eef784d06a0825386b245d012add0910db8ee68d2447add/);
+  assert.match(workflow, /managed-tool-artifacts\/baijimu-cli\/releases\/v0\.1\.43/);
   assert.doesNotMatch(workflow, /bridge-agent\/releases/);
   assert.match(workflow, /git merge-base --is-ancestor "\$sha" origin\/main/);
   assert.match(workflow, /needs\.validate\.outputs\.verify == 'true'/);
@@ -68,7 +68,7 @@ test("connector owns its application release and upstream artifact sync workflow
   }
 });
 
-test("upstream sync is release-side, complete, immutable, and independently scheduled", async () => {
+test("upstream sync is release-side, complete, latest-only, and independently scheduled", async () => {
   const workflow = await readFile(
     join(root, ".github", "workflows", "sync-codex-upstream-artifacts.yml"),
     "utf8",
@@ -101,6 +101,10 @@ test("upstream sync is release-side, complete, immutable, and independently sche
   assert.match(synchronizer, /assets\/sha256/);
   assert.match(synchronizer, /latest\.json/);
   assert.match(synchronizer, /Publishing this pointer last/);
+  assert.match(synchronizer, /DEFAULT_BUCKET = "baijimu-lowcode-public-20260420"/);
+  assert.match(synchronizer, /DEFAULT_PUBLIC_BASE = "https:\/\/download\.baijimu\.com"/);
+  assert.match(synchronizer, /previous_keys - current_keys/);
+  assert.doesNotMatch(synchronizer, /manifests\/sha256/);
   assert.doesNotMatch(synchronizer, /PRESERVE_EXISTING_MANIFEST/);
   for (const name of [
     "codex-app-aarch64-apple-darwin.dmg",
@@ -162,6 +166,7 @@ assert not any("preserved_from_manifest" in item for item in manifest["assets"])
   const result = spawnSync("python3", ["-c", script], {
     cwd: root,
     encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });

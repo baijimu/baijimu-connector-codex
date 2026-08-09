@@ -66,7 +66,7 @@ oss_manifest="$(jq -ce \
     | select(.version == $version)
     | select((.artifacts | length) == 3)
     | select(all(.artifacts[];
-        (.source | startswith("https://lowcode-common.oss-cn-beijing.aliyuncs.com/local-app-artifacts/codex/releases/v" + $version + "/"))
+        (.source | startswith("https://download.baijimu.com/local-app-artifacts/codex/releases/v" + $version + "/"))
         and (.checksum | test("^sha256:[0-9a-f]{64}$"))))
   ' "$oss_manifest_path")" || {
   echo "OSS manifest is invalid" >&2

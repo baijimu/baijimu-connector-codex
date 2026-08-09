@@ -133,7 +133,7 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL --retry 6 --retry-all-errors --retry-delay 3 \
-            'https://lowcode-common.oss-cn-beijing.aliyuncs.com/codex-artifacts/latest.json' \
+            'https://download.baijimu.com/codex-artifacts/latest.json' \
             | jq -e '
                 .schema_version == 2 and
                 .manifest_kind == "baijimu.codex.customer-install-artifacts" and
@@ -150,7 +150,7 @@ jobs:
                   "codex-x86_64-pc-windows-msvc.exe.zip"
                 ] | sort) and
                 all(.assets[];
-                  (.mirror_url | startswith("https://lowcode-common.oss-cn-beijing.aliyuncs.com/codex-artifacts/assets/sha256/")) and
+                  (.mirror_url | startswith("https://download.baijimu.com/codex-artifacts/assets/sha256/")) and
                   (.sha256 | length) == 64 and
                   .size > 0
                 )' >/dev/null

@@ -20,8 +20,9 @@ import urllib.request
 
 USER_AGENT = "baijimu-codex-upstream-artifact-sync/2"
 DEFAULT_RELEASE_API = "https://api.github.com/repos/openai/codex/releases/latest"
-DEFAULT_PUBLIC_BASE = "https://lowcode-common.oss-cn-beijing.aliyuncs.com"
+DEFAULT_PUBLIC_BASE = "https://download.baijimu.com"
 DEFAULT_PREFIX = "codex-artifacts"
+DEFAULT_BUCKET = "baijimu-lowcode-public-20260420"
 
 CLI_ASSET_NAMES = (
     "codex-aarch64-apple-darwin.tar.gz",
@@ -262,6 +263,36 @@ def oss_cp(source: Path, target: str, content_type: str, cache_control: str) -> 
     )
 
 
+def oss_rm(target: str) -> None:
+    ossutil = os.environ.get("OSSUTIL") or shutil.which("ossutil")
+    access_key_id = os.environ.get("OSS_ACCESS_KEY_ID")
+    access_key_secret = os.environ.get("OSS_ACCESS_KEY_SECRET")
+    if not ossutil:
+        raise RuntimeError("ossutil not found; set OSSUTIL to the pinned executable")
+    if not access_key_id or not access_key_secret:
+        raise RuntimeError("OSS_ACCESS_KEY_ID and OSS_ACCESS_KEY_SECRET are required")
+    endpoint = os.environ.get("OSS_ENDPOINT", "oss-cn-beijing.aliyuncs.com")
+    region = os.environ.get("OSS_REGION", "cn-beijing")
+    subprocess.run(
+        [
+            ossutil,
+            "rm",
+            target,
+            "--access-key-id",
+            access_key_id,
+            "--access-key-secret",
+            access_key_secret,
+            "--endpoint",
+            endpoint,
+            "--region",
+            region,
+            "--force",
+            "--no-progress",
+        ],
+        check=True,
+    )
+
+
 def manifest_for(
     release: dict[str, Any], assets: list[dict[str, Any]], public_base: str, prefix: str
 ) -> dict[str, Any]:
@@ -335,8 +366,13 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise RuntimeError(f"asset has invalid integrity metadata: {asset.get('name')}")
 
 
-def publish(manifest: dict[str, Any], files: dict[str, Path], work_dir: Path) -> None:
-    bucket = os.environ.get("OSS_BUCKET", "lowcode-common")
+def publish(
+    manifest: dict[str, Any],
+    files: dict[str, Path],
+    work_dir: Path,
+    previous: dict[str, Any] | None,
+) -> None:
+    bucket = os.environ.get("OSS_BUCKET", DEFAULT_BUCKET)
     prefix = os.environ.get("OSS_PREFIX", DEFAULT_PREFIX).strip("/")
     public_base = os.environ.get("OSS_PUBLIC_BASE_URL", DEFAULT_PUBLIC_BASE).rstrip("/")
     for asset in manifest["assets"]:
@@ -353,19 +389,6 @@ def publish(manifest: dict[str, Any], files: dict[str, Path], work_dir: Path) ->
 
     manifest_path = work_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    manifest_sha = sha256_file(manifest_path)
-    immutable_key = f"{prefix}/manifests/sha256/{manifest_sha}/manifest.json"
-    immutable_url = f"{public_base}/{immutable_key}"
-    if not public_asset_is_exact(immutable_url, manifest_path):
-        oss_cp(
-            manifest_path,
-            f"oss://{bucket}/{immutable_key}",
-            "application/json",
-            "public,max-age=31536000,immutable",
-        )
-        if not public_asset_is_exact(immutable_url, manifest_path):
-            raise RuntimeError("immutable manifest public read-back verification failed")
-
     # OSS replaces one object atomically. Publishing this pointer last prevents
     # customers from observing a manifest that references unavailable objects.
     oss_cp(
@@ -377,6 +400,14 @@ def publish(manifest: dict[str, Any], files: dict[str, Path], work_dir: Path) ->
     latest_url = f"{public_base}/{prefix}/latest.json"
     if not public_asset_is_exact(latest_url, manifest_path):
         raise RuntimeError("latest manifest public read-back verification failed")
+    current_keys = {asset["object_key"] for asset in manifest["assets"]}
+    previous_keys = {
+        asset.get("object_key")
+        for asset in (previous or {}).get("assets", [])
+        if isinstance(asset, dict) and isinstance(asset.get("object_key"), str)
+    }
+    for obsolete_key in sorted(previous_keys - current_keys):
+        oss_rm(f"oss://{bucket}/{obsolete_key}")
     print(f"published snapshot {manifest['snapshot_id']}")
     print(latest_url)
 
@@ -417,7 +448,12 @@ def run(args: argparse.Namespace) -> int:
         ):
             print(f"no changes; verified published snapshot {manifest['snapshot_id']}")
             return 0
-    publish(manifest, {asset["name"]: asset["path"] for asset in completed_assets}, work_dir)
+    publish(
+        manifest,
+        {asset["name"]: asset["path"] for asset in completed_assets},
+        work_dir,
+        current,
+    )
     return 0
 
 

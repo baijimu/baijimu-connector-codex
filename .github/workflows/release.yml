@@ -25,9 +25,9 @@ permissions:
   contents: read
 
 env:
-  BAIJIMU_CLI_VERSION: "0.1.41"
-  BAIJIMU_CLI_LINUX_SHA256: "796a706b00e163429d2915010342e8569c6e5224466764a1e8efe3fbd772518b"
-  BAIJIMU_CLI_LINUX_URL: "https://lowcode-common.oss-cn-beijing.aliyuncs.com/managed-tool-artifacts/baijimu-cli/releases/v0.1.41/796a706b00e163429d2915010342e8569c6e5224466764a1e8efe3fbd772518b/baijimu-cli-0.1.41-linux-x64.zip"
+  BAIJIMU_CLI_VERSION: "0.1.43"
+  BAIJIMU_CLI_LINUX_SHA256: "c3b73aeeef5a03166eef784d06a0825386b245d012add0910db8ee68d2447add"
+  BAIJIMU_CLI_LINUX_URL: "https://download.baijimu.com/managed-tool-artifacts/baijimu-cli/releases/v0.1.43/c3b73aeeef5a03166eef784d06a0825386b245d012add0910db8ee68d2447add/baijimu-cli-0.1.43-linux-x64.zip"
   MACOSX_DEPLOYMENT_TARGET: "11.0"
 
 jobs:
@@ -417,8 +417,9 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          bucket=lowcode-common
+          bucket=baijimu-lowcode-public-20260420
           endpoint=oss-cn-beijing.aliyuncs.com
+          public_base=https://download.baijimu.com
           prefix="local-app-artifacts/codex/releases/v${VERSION}"
           dir="$RUNNER_TEMP/release-assets"
           manifest="$RUNNER_TEMP/baijimu-codex-local-app-${VERSION}-oss-manifest.json"
@@ -427,7 +428,7 @@ jobs:
             local checksum object source downloaded sidecar sidecar_url downloaded_sidecar
             checksum="$(sha256sum "$file" | awk '{print $1}')"
             object="$prefix/$checksum/$name"
-            source="https://$bucket.$endpoint/$object"
+            source="$public_base/$object"
             downloaded="$RUNNER_TEMP/verify-$platform.zip"
             sidecar="$file.sha256"
             sidecar_url="$source.sha256"
@@ -454,7 +455,7 @@ jobs:
           linux_name="baijimu-codex-local-app-${VERSION}-linux-x64.zip"
           artifacts="[$(upload_one macos universal "$macos_name"),$(upload_one windows x86_64 "$windows_name"),$(upload_one linux x86_64 "$linux_name")]"
           jq -n --arg version "$VERSION" --arg tag "$RELEASE_TAG" --argjson artifacts "$artifacts" '{schemaVersion:"1.0",applicationId:"codex",connectorId:"com.baijimu.connector.codex",releaseTag:$tag,version:$version,artifacts:$artifacts}' > "$manifest"
-          manifest_url="https://$bucket.$endpoint/$prefix/manifest.json"
+          manifest_url="$public_base/$prefix/manifest.json"
           existing_manifest="$RUNNER_TEMP/existing-oss-manifest.json"
           if curl -fsSL --retry 3 "$manifest_url" -o "$existing_manifest" 2>/dev/null; then
             diff -u <(jq -S . "$existing_manifest") <(jq -S . "$manifest")
@@ -573,8 +574,8 @@ jobs:
                   | jq -e --arg version "$VERSION" '
                     (.data // .).latestVersion.version == $version and
                     (.data // .).latestVersion.compatibility.compatible == true and
-                    ((.data // .).latestVersion.source | startswith("https://lowcode-common.oss-cn-beijing.aliyuncs.com/local-app-artifacts/codex/releases/v" + $version + "/")) and
-                    all((.data // .).latestVersion.manifest.artifacts[]; .source | startswith("https://lowcode-common.oss-cn-beijing.aliyuncs.com/local-app-artifacts/codex/releases/v" + $version + "/"))'
+                    ((.data // .).latestVersion.source | startswith("https://download.baijimu.com/local-app-artifacts/codex/releases/v" + $version + "/")) and
+                    all((.data // .).latestVersion.manifest.artifacts[]; .source | startswith("https://download.baijimu.com/local-app-artifacts/codex/releases/v" + $version + "/"))'
               done
               ;;
             *)

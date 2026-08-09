@@ -21,7 +21,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
   );
   assert.equal(manifest.schemaVersion, "2.0");
   assert.equal(manifest.version, packageManifest.version);
-  assert.equal(manifest.version, "1.2.19");
+  assert.equal(manifest.version, "1.2.20");
   assert.equal(manifest.source.type, "github");
   assert.equal(manifest.source.repo, "momoplan/baijimu-connector-codex");
   assert.equal(manifest.source.revision, `v${manifest.version}`);

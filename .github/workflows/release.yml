@@ -116,6 +116,42 @@ jobs:
           cargo test --locked
           npm test
 
+      - name: Verify immutable installer scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          read_rust_constant() {
+            local key="$1"
+            awk -v declaration="const ${key}:" '
+              index($0, declaration) {
+                getline
+                gsub(/^[[:space:]]*"|";[[:space:]]*$/, "")
+                print
+                exit
+              }
+            ' src/setup.rs
+          }
+          verify_script() {
+            local platform="$1" url="$2" expected="$3" output="$RUNNER_TEMP/$1-installer"
+            test -n "$url"
+            test "${#expected}" = 64
+            curl -fsSL --retry 6 --retry-all-errors --retry-delay 3 \
+              --connect-timeout 15 --max-time 120 \
+              "$url" -o "$output"
+            printf '%s  %s\n' "$expected" "$output" | sha256sum -c -
+            grep -F 'https://download.baijimu.com/codex-artifacts/latest.json' "$output"
+            if [ "$platform" = macos ]; then
+              grep -F 'curl exit $curl_status' "$output"
+              grep -F 'fail_install "$label failed from $url' "$output"
+            fi
+          }
+          verify_script macos \
+            "$(read_rust_constant MACOS_SCRIPT_URL)" \
+            "$(read_rust_constant MACOS_SCRIPT_SHA256)"
+          verify_script windows \
+            "$(read_rust_constant WINDOWS_SCRIPT_URL)" \
+            "$(read_rust_constant WINDOWS_SCRIPT_SHA256)"
+
   build:
     if: needs.validate.outputs.verify != 'true'
     needs: validate

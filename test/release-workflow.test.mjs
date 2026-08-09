@@ -59,6 +59,11 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.match(workflow, /RUSTFLAGS: "-C target-feature=\+crt-static -D warnings"/);
   assert.match(workflow, /\$PSNativeCommandUseErrorActionPreference = \$true/);
   assert.match(workflow, /Verify Windows binaries are self-contained/);
+  assert.match(workflow, /Verify immutable installer scripts/);
+  assert.match(workflow, /read_rust_constant MACOS_SCRIPT_SHA256/);
+  assert.match(workflow, /read_rust_constant WINDOWS_SCRIPT_SHA256/);
+  assert.match(workflow, /sha256sum -c -/);
+  assert.match(workflow, /curl exit \$curl_status/);
   assert.match(workflow, /dumpbin\.exe/);
   assert.match(workflow, /VCRUNTIME\|MSVCP/);
 

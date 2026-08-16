@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "manifest_kind": "baijimu.codex.customer-install-artifacts",
   "source": "momoplan/baijimu-connector-codex",
   "snapshot_id": "fixture-snapshot",
@@ -40,6 +40,9 @@
       "upstream_sha256": "fixture-app-sha256",
       "signature_verification": "codesign+spctl",
       "install_layout": null,
+      "host_requirements": {
+        "minimum_os_version": "14.0"
+      },
       "deprecated": false,
       "mirror_url": "https://download.baijimu.com/codex-artifacts/fixture/ChatGPT.dmg",
       "object_key": "codex-artifacts/fixture/ChatGPT.dmg",
@@ -59,6 +62,7 @@
       "upstream_sha256": "fixture-cli-sha256",
       "signature_verification": null,
       "install_layout": "legacy_single_binary_archive",
+      "host_requirements": null,
       "deprecated": false,
       "mirror_url": "https://download.baijimu.com/codex-artifacts/fixture/codex.tar.gz",
       "object_key": "codex-artifacts/fixture/codex.tar.gz",

@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.2.61";
+const VERSION = "1.2.62";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 18110;
 const DEFAULT_LISTEN = "stdio://";

@@ -19,6 +19,8 @@ jobs:
     outputs:
       arm64_sha256: ${{ steps.verify.outputs.arm64_sha256 }}
       x64_sha256: ${{ steps.verify.outputs.x64_sha256 }}
+      arm64_minimum_os_version: ${{ steps.verify.outputs.arm64_minimum_os_version }}
+      x64_minimum_os_version: ${{ steps.verify.outputs.x64_minimum_os_version }}
     steps:
       - name: Verify official OpenAI macOS packages
         id: verify
@@ -35,15 +37,24 @@ jobs:
             codesign --verify --deep --strict --verbose=2 "$app"
             spctl --assess --type execute --verbose=2 "$app"
             codesign --display --verbose=4 "$app" 2>&1 | grep -E 'Authority=|TeamIdentifier=' >&2
+            minimum_os_version="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")"
+            [[ "$minimum_os_version" =~ ^[0-9]+(\.[0-9]+)*$ ]]
+            sha256="$(shasum -a 256 "$dmg" | awk '{print $1}')"
             hdiutil detach "$mount" >/dev/null
-            shasum -a 256 "$dmg" | awk '{print $1}'
+            printf '%s|%s\n' "$sha256" "$minimum_os_version"
           }
-          arm64_sha256="$(verify_dmg arm64 'https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg')"
-          x64_sha256="$(verify_dmg x64 'https://persistent.oaistatic.com/codex-app-prod/ChatGPT-latest-x64.dmg')"
+          arm64_result="$(verify_dmg arm64 'https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg')"
+          x64_result="$(verify_dmg x64 'https://persistent.oaistatic.com/codex-app-prod/ChatGPT-latest-x64.dmg')"
+          arm64_sha256="${arm64_result%%|*}"
+          arm64_minimum_os_version="${arm64_result#*|}"
+          x64_sha256="${x64_result%%|*}"
+          x64_minimum_os_version="${x64_result#*|}"
           test "${#arm64_sha256}" = 64
           test "${#x64_sha256}" = 64
           echo "arm64_sha256=$arm64_sha256" >> "$GITHUB_OUTPUT"
           echo "x64_sha256=$x64_sha256" >> "$GITHUB_OUTPUT"
+          echo "arm64_minimum_os_version=$arm64_minimum_os_version" >> "$GITHUB_OUTPUT"
+          echo "x64_minimum_os_version=$x64_minimum_os_version" >> "$GITHUB_OUTPUT"
 
   verify-windows-apps:
     runs-on: windows-2022
@@ -51,6 +62,8 @@ jobs:
     outputs:
       arm64_sha256: ${{ steps.verify.outputs.arm64_sha256 }}
       x64_sha256: ${{ steps.verify.outputs.x64_sha256 }}
+      arm64_minimum_os_version: ${{ steps.verify.outputs.arm64_minimum_os_version }}
+      x64_minimum_os_version: ${{ steps.verify.outputs.x64_minimum_os_version }}
     steps:
       - name: Verify Microsoft Store package signatures
         id: verify
@@ -81,14 +94,26 @@ jobs:
             if ($identity -notmatch '^OpenAI\.(ChatGPT|Codex)') {
               throw "unexpected signed Microsoft Store package identity for ${Arch}: $identity"
             }
-            Write-Host "Verified signed Microsoft Store identity $identity for $Arch"
-            return (Get-FileHash -Algorithm SHA256 $package).Hash.ToLowerInvariant()
+            $minimum = @(
+              $manifest.Package.Dependencies.TargetDeviceFamily |
+                ForEach-Object { [version]([string]$_.MinVersion) } |
+                Sort-Object -Descending |
+                Select-Object -First 1
+            )[0]
+            if (-not $minimum) { throw "package does not declare a minimum Windows version for $Arch" }
+            Write-Host "Verified signed Microsoft Store identity $identity for $Arch (minimum Windows $minimum)"
+            return [pscustomobject]@{
+              Sha256 = (Get-FileHash -Algorithm SHA256 $package).Hash.ToLowerInvariant()
+              MinimumOsVersion = $minimum.ToString()
+            }
           }
           $arm64 = Verify-Package 'arm64' 'https://codexapp.agentsmirror.com/latest/win-arm64'
           $x64 = Verify-Package 'x64' 'https://codexapp.agentsmirror.com/latest/win-x64'
-          if ($arm64.Length -ne 64 -or $x64.Length -ne 64) { throw 'invalid package digest' }
-          "arm64_sha256=$arm64" >> $env:GITHUB_OUTPUT
-          "x64_sha256=$x64" >> $env:GITHUB_OUTPUT
+          if ($arm64.Sha256.Length -ne 64 -or $x64.Sha256.Length -ne 64) { throw 'invalid package digest' }
+          "arm64_sha256=$($arm64.Sha256)" >> $env:GITHUB_OUTPUT
+          "x64_sha256=$($x64.Sha256)" >> $env:GITHUB_OUTPUT
+          "arm64_minimum_os_version=$($arm64.MinimumOsVersion)" >> $env:GITHUB_OUTPUT
+          "x64_minimum_os_version=$($x64.MinimumOsVersion)" >> $env:GITHUB_OUTPUT
 
   sync:
     needs: [verify-macos-apps, verify-windows-apps]
@@ -124,8 +149,12 @@ jobs:
           OSSUTIL: ${{ runner.temp }}/ossutil-bin
           CODEX_APP_MACOS_ARM64_SHA256: ${{ needs.verify-macos-apps.outputs.arm64_sha256 }}
           CODEX_APP_MACOS_X64_SHA256: ${{ needs.verify-macos-apps.outputs.x64_sha256 }}
+          CODEX_APP_MACOS_ARM64_MINIMUM_OS_VERSION: ${{ needs.verify-macos-apps.outputs.arm64_minimum_os_version }}
+          CODEX_APP_MACOS_X64_MINIMUM_OS_VERSION: ${{ needs.verify-macos-apps.outputs.x64_minimum_os_version }}
           CODEX_APP_WINDOWS_ARM64_SHA256: ${{ needs.verify-windows-apps.outputs.arm64_sha256 }}
           CODEX_APP_WINDOWS_X64_SHA256: ${{ needs.verify-windows-apps.outputs.x64_sha256 }}
+          CODEX_APP_WINDOWS_ARM64_MINIMUM_OS_VERSION: ${{ needs.verify-windows-apps.outputs.arm64_minimum_os_version }}
+          CODEX_APP_WINDOWS_X64_MINIMUM_OS_VERSION: ${{ needs.verify-windows-apps.outputs.x64_minimum_os_version }}
         run: tools/codex-artifacts/sync-codex-artifacts.sh
 
       - name: Verify the public installation manifest
@@ -158,3 +187,15 @@ jobs:
                   (.sha256 | length) == 64 and
                   .size > 0
                 )' >/dev/null
+          curl -fsSL --retry 8 --retry-all-errors --retry-delay 3 \
+            --connect-timeout 15 --max-time 900 \
+            'https://download.baijimu.com/codex-artifacts/v4/latest.json' \
+            | jq -e '
+                .schema_version == 4 and
+                .manifest_kind == "baijimu.codex.customer-install-artifacts" and
+                (.assets | length) == 10 and
+                all(.assets[] | select(.component == "codex_desktop_app");
+                  (.host_requirements.minimum_os_version | test("^[0-9]+(\\.[0-9]+)*$"))
+                ) and
+                all(.assets[] | select(.component == "codex_cli"); .host_requirements == null)
+              ' >/dev/null

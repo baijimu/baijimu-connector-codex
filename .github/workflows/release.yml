@@ -153,7 +153,7 @@ jobs:
               fi
             fi
           }
-          grep -F 'https://download.baijimu.com/codex-artifacts/latest.json' installers/upstream-artifact-source.json
+          grep -F 'https://download.baijimu.com/codex-artifacts/v4/latest.json' installers/upstream-artifact-source.json
           verify_script macos installers/macos-configure-terminal-and-login.sh
           verify_script windows installers/windows-configure-terminal-and-login.ps1
 

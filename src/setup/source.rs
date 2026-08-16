@@ -1,17 +1,17 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-const SOURCE_SCHEMA_VERSION: u32 = 1;
+const SOURCE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpstreamArtifactSourceV1 {
+struct UpstreamArtifactSourceV2 {
     schema_version: u32,
     manifest_url: String,
 }
 
 pub(super) fn manifest_url() -> Result<String> {
-    let source = crate::json_compat::from_slice::<UpstreamArtifactSourceV1>(include_bytes!(
+    let source = crate::json_compat::from_slice::<UpstreamArtifactSourceV2>(include_bytes!(
         "../../installers/upstream-artifact-source.json"
     ))
     .context("解析安装制品源配置失败")?;
@@ -33,10 +33,10 @@ mod tests {
     fn embedded_source_is_a_closed_versioned_contract() {
         assert_eq!(
             manifest_url().unwrap(),
-            "https://download.baijimu.com/codex-artifacts/latest.json"
+            "https://download.baijimu.com/codex-artifacts/v4/latest.json"
         );
-        assert!(serde_json::from_str::<UpstreamArtifactSourceV1>(
-            r#"{"schemaVersion":1,"manifestUrl":"https://example.com/latest.json","extra":true}"#
+        assert!(serde_json::from_str::<UpstreamArtifactSourceV2>(
+            r#"{"schemaVersion":2,"manifestUrl":"https://example.com/latest.json","extra":true}"#
         )
         .is_err());
     }

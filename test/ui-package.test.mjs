@@ -108,8 +108,8 @@ test("connector manifest declares the packaged embedded UI", async () => {
   }]);
   assert.equal(manifest.releaseNotes.length, 1);
   assert.ok(manifest.releaseNotes.every((note) => typeof note === "string" && note.trim()));
-  assert.match(manifest.releaseNotes[0], /自动打开桌面应用失败/);
-  assert.match(manifest.releaseNotes[0], /手动打开 ChatGPT/);
+  assert.match(manifest.releaseNotes[0], /最低系统版本/);
+  assert.match(manifest.releaseNotes[0], /UNSUPPORTED_OS_VERSION/);
   assert.equal(manifest.configSchema.properties.codexBinary, undefined);
   assert.equal(manifest.configSchema.properties.baijimuBinary, undefined);
   const html = await readFile(join(root, manifest.ui.entry), "utf8");

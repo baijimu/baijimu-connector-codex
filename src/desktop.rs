@@ -12,6 +12,11 @@ pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+pub fn verify_system_compatibility() -> Result<()> {
+    platform::verify_system_compatibility()
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn launch_and_verify(codex_home: &Path) -> Result<()> {
     platform::launch_and_verify(codex_home)
 }
@@ -33,6 +38,13 @@ mod platform {
     #[serde(rename_all = "camelCase")]
     struct StopResult {
         was_running: bool,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CompatibilityResult {
+        current_version: String,
+        minimum_version: String,
     }
 
     const STOP_SCRIPT: &str = r#"
@@ -197,6 +209,26 @@ if ($visible.Count -eq 0) { throw 'ChatGPT/Codex 桌面应用已启动进程，�
 } | ConvertTo-Json -Compress
 "#;
 
+    const COMPATIBILITY_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$packages = @('OpenAI.Codex', 'OpenAI.ChatGPT') | ForEach-Object { Get-AppxPackage -Name $_ -ErrorAction SilentlyContinue } | Where-Object { $_ }
+if (-not $packages) {
+  $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'OpenAI.Codex*' -or ($_.Name -like 'OpenAI.ChatGPT*' -and $_.Name -notlike 'OpenAI.ChatGPT-Desktop*') })
+}
+$package = @($packages | Where-Object { $_.InstallLocation } | Select-Object -First 1)
+if ($package.Count -eq 0) { throw '当前用户尚未安装 ChatGPT/Codex 桌面应用包' }
+$manifestPath = Join-Path $package[0].InstallLocation 'AppxManifest.xml'
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'ChatGPT/Codex 应用包缺少 AppxManifest.xml' }
+[xml]$manifest = Get-Content -LiteralPath $manifestPath
+$minimumVersions = @($manifest.Package.Dependencies.TargetDeviceFamily | ForEach-Object { [string]$_.MinVersion } | Where-Object { $_ })
+if ($minimumVersions.Count -eq 0) { throw 'ChatGPT/Codex 应用包未声明最低 Windows 版本' }
+$minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -Descending | Select-Object -First 1)[0]
+[pscustomobject]@{
+  currentVersion = [System.Environment]::OSVersion.Version.ToString()
+  minimumVersion = $minimum.ToString()
+} | ConvertTo-Json -Compress
+"#;
+
     pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
         let output = run_powershell(STOP_SCRIPT, None)?;
         let result: StopResult = crate::json_compat::from_slice(&output)
@@ -206,7 +238,20 @@ if ($visible.Count -eq 0) { throw 'ChatGPT/Codex 桌面应用已启动进程，�
         })
     }
 
+    pub fn verify_system_compatibility() -> Result<()> {
+        let output = run_powershell(COMPATIBILITY_SCRIPT, None)?;
+        let compatibility: CompatibilityResult = crate::json_compat::from_slice(&output)
+            .context("解析 ChatGPT/Codex Windows 系统兼容性失败")?;
+        crate::system_compatibility::ensure_supported(
+            "Windows",
+            &compatibility.current_version,
+            &compatibility.minimum_version,
+            "ChatGPT/Codex",
+        )
+    }
+
     pub fn launch_and_verify(codex_home: &Path) -> Result<()> {
+        verify_system_compatibility()?;
         run_powershell(LAUNCH_AND_VERIFY_SCRIPT, Some(codex_home))?;
         Ok(())
     }
@@ -254,7 +299,7 @@ if ($visible.Count -eq 0) { throw 'ChatGPT/Codex 桌面应用已启动进程，�
 
         #[test]
         fn desktop_management_scripts_parse_in_windows_powershell() {
-            for script in [STOP_SCRIPT, LAUNCH_AND_VERIFY_SCRIPT] {
+            for script in [STOP_SCRIPT, COMPATIBILITY_SCRIPT, LAUNCH_AND_VERIFY_SCRIPT] {
                 let mut child = Command::new("powershell.exe")
                     .args([
                         "-NoLogo",
@@ -335,9 +380,16 @@ mod platform {
         Ok(true)
     }
 
+    pub fn verify_system_compatibility() -> Result<()> {
+        let app_path =
+            installed_application_path().context("没有找到已安装的 ChatGPT/Codex 桌面应用")?;
+        verify_application_compatibility(&app_path)
+    }
+
     pub fn launch_and_verify(codex_home: &Path) -> Result<()> {
         let app_path =
             installed_application_path().context("没有找到已安装的 ChatGPT/Codex 桌面应用")?;
+        verify_application_compatibility(&app_path)?;
         let bundle_id = application_bundle_id(&app_path)?;
 
         run_checked(
@@ -380,6 +432,30 @@ mod platform {
             anyhow::bail!("桌面应用标识为空: {}", plist.display());
         }
         Ok(bundle_id)
+    }
+
+    fn verify_application_compatibility(app_path: &Path) -> Result<()> {
+        let minimum = application_plist_value(app_path, "LSMinimumSystemVersion")
+            .context("ChatGPT/Codex 桌面应用未声明最低 macOS 版本")?;
+        let current = crate::system_compatibility::current_macos_version()?;
+        crate::system_compatibility::ensure_supported("macOS", &current, &minimum, "ChatGPT/Codex")
+    }
+
+    fn application_plist_value(app_path: &Path, key: &str) -> Result<String> {
+        let plist = app_path.join("Contents/Info.plist");
+        let output = Command::new("/usr/libexec/PlistBuddy")
+            .args(["-c", &format!("Print :{key}")])
+            .arg(&plist)
+            .output()
+            .with_context(|| format!("读取桌面应用 {key} 失败: {}", plist.display()))?;
+        if !output.status.success() {
+            anyhow::bail!("读取桌面应用 {key} 失败：{}", command_error(&output));
+        }
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if value.is_empty() {
+            anyhow::bail!("桌面应用 {key} 为空: {}", plist.display());
+        }
+        Ok(value)
     }
 
     fn application_info(bundle_id: &str) -> Result<String> {
@@ -476,6 +552,10 @@ mod platform {
 
     pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
         Ok(DesktopSwitch::default())
+    }
+
+    pub fn verify_system_compatibility() -> Result<()> {
+        anyhow::bail!("当前平台不支持 ChatGPT/Codex 桌面应用")
     }
 
     pub fn restart_and_verify(_state: &DesktopSwitch, _codex_home: &Path) -> Result<bool> {

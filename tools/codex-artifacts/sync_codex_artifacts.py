@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,7 @@ DEFAULT_RELEASE_API = "https://api.github.com/repos/openai/codex/releases/latest
 DEFAULT_PUBLIC_BASE = "https://download.baijimu.com"
 DEFAULT_PREFIX = "codex-artifacts"
 DEFAULT_BUCKET = "baijimu-lowcode-public-20260420"
+NUMERIC_VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+)*$")
 
 CLI_ASSETS = (
     {
@@ -74,6 +76,7 @@ APP_ASSETS = (
         "upstream_url": "https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg",
         "content_type": "application/x-apple-diskimage",
         "source_kind": "official_openai_static",
+        "minimum_os_version_env": "CODEX_APP_MACOS_ARM64_MINIMUM_OS_VERSION",
     },
     {
         "name": "codex-app-x86_64-apple-darwin.dmg",
@@ -82,6 +85,7 @@ APP_ASSETS = (
         "upstream_url": "https://persistent.oaistatic.com/codex-app-prod/ChatGPT-latest-x64.dmg",
         "content_type": "application/x-apple-diskimage",
         "source_kind": "official_openai_static",
+        "minimum_os_version_env": "CODEX_APP_MACOS_X64_MINIMUM_OS_VERSION",
     },
     {
         "name": "codex-app-windows-x64.msix",
@@ -90,6 +94,7 @@ APP_ASSETS = (
         "upstream_url": "https://codexapp.agentsmirror.com/latest/win-x64",
         "content_type": "application/vnd.ms-appx",
         "source_kind": "microsoft_store_signed_package_mirror",
+        "minimum_os_version_env": "CODEX_APP_WINDOWS_X64_MINIMUM_OS_VERSION",
     },
     {
         "name": "codex-app-windows-arm64.msix",
@@ -98,6 +103,7 @@ APP_ASSETS = (
         "upstream_url": "https://codexapp.agentsmirror.com/latest/win-arm64",
         "content_type": "application/vnd.ms-appx",
         "source_kind": "microsoft_store_signed_package_mirror",
+        "minimum_os_version_env": "CODEX_APP_WINDOWS_ARM64_MINIMUM_OS_VERSION",
     },
 )
 
@@ -167,15 +173,24 @@ def select_assets(release: dict[str, Any]) -> list[dict[str, Any]]:
             "codex-app-windows-arm64.msix": "CODEX_APP_WINDOWS_ARM64_SHA256",
         }[source["name"]]
         expected_sha256 = os.environ.get(expected_env)
+        minimum_os_version = os.environ.get(source["minimum_os_version_env"])
         if os.environ.get("REQUIRE_DESKTOP_SIGNATURE_DIGESTS", "1") == "1" and not expected_sha256:
             raise RuntimeError(
                 f"{expected_env} is required; verify the desktop package signature on its native platform first"
             )
+        if not minimum_os_version or not NUMERIC_VERSION.fullmatch(minimum_os_version):
+            raise RuntimeError(
+                f"{source['minimum_os_version_env']} is required; extract it from the verified native package manifest"
+            )
+        public_source = {
+            key: value for key, value in source.items() if key != "minimum_os_version_env"
+        }
         selected.append(
             {
-                **source,
+                **public_source,
                 "component": "codex_desktop_app",
                 "upstream_sha256": expected_sha256,
+                "host_requirements": {"minimum_os_version": minimum_os_version},
                 "signature_verification": (
                     "codesign+spctl" if source["platform"] == "macos" else "signtool"
                 ),
@@ -398,8 +413,20 @@ def manifest_for(
     }
 
 
+def manifest_v4_for(
+    release: dict[str, Any], assets: list[dict[str, Any]], public_base: str, prefix: str
+) -> dict[str, Any]:
+    manifest = manifest_for(release, assets, public_base, prefix)
+    manifest["schema_version"] = 4
+    for output_asset in manifest["assets"]:
+        source = next(asset for asset in assets if asset["name"] == output_asset["name"])
+        output_asset["host_requirements"] = source.get("host_requirements")
+    return manifest
+
+
 def validate_manifest(manifest: dict[str, Any]) -> None:
-    if manifest.get("schema_version") != 3:
+    schema_version = manifest.get("schema_version")
+    if schema_version not in (3, 4):
         raise RuntimeError("unexpected manifest schema")
     assets = manifest.get("assets")
     if not isinstance(assets, list) or len(assets) != len(CLI_ASSET_NAMES) + len(APP_ASSETS):
@@ -433,9 +460,24 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise RuntimeError(f"asset has invalid mirror URL: {asset.get('name')}")
         if len(asset.get("sha256", "")) != 64 or int(asset.get("size", 0)) <= 0:
             raise RuntimeError(f"asset has invalid integrity metadata: {asset.get('name')}")
+        if schema_version == 4:
+            requirements = asset.get("host_requirements")
+            if asset.get("component") == "codex_desktop_app":
+                minimum = requirements.get("minimum_os_version") if isinstance(requirements, dict) else None
+                if not isinstance(minimum, str) or not NUMERIC_VERSION.fullmatch(minimum):
+                    raise RuntimeError(
+                        f"desktop asset has no minimum OS version: {asset.get('name')}"
+                    )
+            elif requirements is not None:
+                raise RuntimeError(
+                    f"non-desktop asset has unexpected host requirements: {asset.get('name')}"
+                )
+        elif "host_requirements" in asset:
+            raise RuntimeError(f"legacy manifest contains v4 fields: {asset.get('name')}")
 
 
 def publish(
+    legacy_manifest: dict[str, Any],
     manifest: dict[str, Any],
     files: dict[str, Path],
     work_dir: Path,
@@ -456,17 +498,31 @@ def publish(
             if not public_asset_is_exact(asset["mirror_url"], source):
                 raise RuntimeError(f"public OSS read-back verification failed: {asset['name']}")
 
-    manifest_path = work_dir / "manifest.json"
+    legacy_manifest_path = work_dir / "manifest-v3.json"
+    legacy_manifest_path.write_text(
+        json.dumps(legacy_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    oss_cp(
+        legacy_manifest_path,
+        f"oss://{bucket}/{prefix}/latest.json",
+        "application/json",
+        "no-cache, max-age=0",
+    )
+    legacy_latest_url = f"{public_base}/{prefix}/latest.json"
+    if not public_asset_is_exact(legacy_latest_url, legacy_manifest_path):
+        raise RuntimeError("legacy latest manifest public read-back verification failed")
+
+    manifest_path = work_dir / "manifest-v4.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     # OSS replaces one object atomically. Publishing this pointer last prevents
     # customers from observing a manifest that references unavailable objects.
     oss_cp(
         manifest_path,
-        f"oss://{bucket}/{prefix}/latest.json",
+        f"oss://{bucket}/{prefix}/v4/latest.json",
         "application/json",
         "no-cache, max-age=0",
     )
-    latest_url = f"{public_base}/{prefix}/latest.json"
+    latest_url = f"{public_base}/{prefix}/v4/latest.json"
     if not public_asset_is_exact(latest_url, manifest_path):
         raise RuntimeError("latest manifest public read-back verification failed")
     current_keys = {asset["object_key"] for asset in manifest["assets"]}
@@ -499,18 +555,29 @@ def run(args: argparse.Namespace) -> int:
         completed_assets.append(download_asset(asset, downloads / asset["name"]))
     prefix = os.environ.get("OSS_PREFIX", DEFAULT_PREFIX).strip("/")
     public_base = os.environ.get("OSS_PUBLIC_BASE_URL", DEFAULT_PUBLIC_BASE)
-    manifest = manifest_for(release, completed_assets, public_base, prefix)
+    legacy_manifest = manifest_for(release, completed_assets, public_base, prefix)
+    manifest = manifest_v4_for(release, completed_assets, public_base, prefix)
+    validate_manifest(legacy_manifest)
     validate_manifest(manifest)
     generated = work_dir / "generated-manifest.json"
     generated.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"prepared snapshot {manifest['snapshot_id']} at {generated}")
     if args.prepare_only:
         return 0
-    current = fetch_existing_manifest(f"{public_base.rstrip('/')}/{prefix}/latest.json")
-    if current and current.get("snapshot_id") == manifest["snapshot_id"]:
+    legacy_current = fetch_existing_manifest(f"{public_base.rstrip('/')}/{prefix}/latest.json")
+    current = fetch_existing_manifest(f"{public_base.rstrip('/')}/{prefix}/v4/latest.json")
+    if (
+        current
+        and legacy_current
+        and current.get("schema_version") == 4
+        and legacy_current.get("schema_version") == 3
+        and current.get("snapshot_id") == manifest["snapshot_id"]
+        and legacy_current.get("snapshot_id") == legacy_manifest["snapshot_id"]
+    ):
         # Keep the current fetched_at/immutable manifest stable, but fully verify
         # every content-addressed customer object before declaring a no-op.
         validate_manifest(current)
+        validate_manifest(legacy_current)
         if all(
             public_asset_is_exact(asset["mirror_url"], downloads / asset["name"])
             for asset in current["assets"]
@@ -518,10 +585,11 @@ def run(args: argparse.Namespace) -> int:
             print(f"no changes; verified published snapshot {manifest['snapshot_id']}")
             return 0
     publish(
+        legacy_manifest,
         manifest,
         {asset["name"]: asset["path"] for asset in completed_assets},
         work_dir,
-        current,
+        legacy_current,
     )
     return 0
 

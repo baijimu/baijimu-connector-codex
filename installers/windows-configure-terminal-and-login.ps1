@@ -239,6 +239,40 @@ function Get-CodexInstalledPackage {
     Select-Object -First 1
 }
 
+function Assert-CurrentWindowsVersion([string]$minimumVersion) {
+  if ([string]::IsNullOrWhiteSpace($minimumVersion)) {
+    throw "ChatGPT/Codex 制品未声明最低 Windows 版本"
+  }
+  try {
+    $minimum = [version]$minimumVersion
+    $current = [System.Environment]::OSVersion.Version
+  } catch {
+    throw "ChatGPT/Codex 系统版本要求格式无效：$minimumVersion"
+  }
+  if ($current -lt $minimum) {
+    throw "UNSUPPORTED_OS_VERSION: 当前 Windows $current 低于 ChatGPT/Codex 要求的最低系统版本 $minimum，请先升级操作系统"
+  }
+}
+
+function Assert-InstalledCodexPackageCompatibility($package) {
+  if (-not $package -or -not $package.InstallLocation) {
+    throw "无法读取已安装 ChatGPT/Codex 应用包目录"
+  }
+  $manifestPath = Join-Path $package.InstallLocation "AppxManifest.xml"
+  if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+    throw "已安装 ChatGPT/Codex 应用包缺少 AppxManifest.xml"
+  }
+  [xml]$manifest = Get-Content -LiteralPath $manifestPath
+  $minimum = @(
+    $manifest.Package.Dependencies.TargetDeviceFamily |
+      ForEach-Object { [version]([string]$_.MinVersion) } |
+      Sort-Object -Descending |
+      Select-Object -First 1
+  )[0]
+  if (-not $minimum) { throw "已安装 ChatGPT/Codex 应用包未声明最低 Windows 版本" }
+  Assert-CurrentWindowsVersion $minimum.ToString()
+}
+
 function Get-CodexWindowsAppAssetName {
   $arch = (Get-CimInstance Win32_Processor | Select-Object -First 1).Architecture
   if ($arch -eq 12 -or $env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
@@ -271,6 +305,9 @@ function Get-CodexCacheAsset([string]$assetName) {
   if (-not $asset.mirror_url -or -not $asset.sha256) {
     throw "百积木缓存中的制品不完整：$assetName"
   }
+  if ($asset.component -eq "codex_desktop_app") {
+    Assert-CurrentWindowsVersion ([string]$asset.host_requirements.minimum_os_version)
+  }
   Set-InstallStep 2 "completed" "已找到制品 $assetName"
   return $asset
 }
@@ -302,6 +339,7 @@ function Ensure-CodexApp {
   Set-InstallStep 1 "running" "正在检查是否已安装 ChatGPT 桌面应用"
   $app = Get-CodexStartApp
   if ($app) {
+    Assert-InstalledCodexPackageCompatibility (Get-CodexInstalledPackage)
     $script:result.appInstalled = $true
     $script:result.appInstallMethod = "already-installed"
     $script:result.appId = $app.AppID
@@ -315,6 +353,7 @@ function Ensure-CodexApp {
 
   $package = Get-CodexInstalledPackage
   if ($package) {
+    Assert-InstalledCodexPackageCompatibility $package
     $script:result.appInstalled = $true
     $script:result.appInstallMethod = "already-installed"
     $app = Wait-CodexStartApp 20
@@ -331,6 +370,7 @@ function Ensure-CodexApp {
   try {
     Install-CodexAppFromBaijimuCache
   } catch {
+    if ($_.Exception.Message -like "*UNSUPPORTED_OS_VERSION*") { throw }
     Add-Warning "使用百积木缓存安装失败：$($_.Exception.Message)"
     if ($env:CODEX_ALLOW_OFFICIAL_WINDOWS_INSTALLER_FALLBACK -eq "1") {
       $script:result.appInstallMethod = "official-installer"

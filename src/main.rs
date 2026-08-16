@@ -7,6 +7,7 @@ mod events;
 mod json_compat;
 mod project_checkout;
 mod setup;
+mod system_compatibility;
 mod thread_state;
 mod user_environment;
 
@@ -1325,6 +1326,10 @@ fn handle_management(
                 ),
                 _ => return Err(HttpError::new(400, "mode 必须是 chatgpt 或 baijimu")),
             };
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            if !test_control_enabled() {
+                desktop::verify_system_compatibility().map_err(desktop_compatibility_http_error)?;
+            }
             let prepared_workspace = workspace_id
                 .map(credential::prepare_workspace_profile)
                 .transpose()
@@ -1447,6 +1452,24 @@ fn handle_management(
         }
         _ => Err(HttpError::new(404, format!("未知的管理接口路径：{path}"))),
     }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn desktop_compatibility_http_error(error: anyhow::Error) -> HttpError {
+    if let Some(unsupported) = system_compatibility::unsupported_os_version(&error) {
+        return HttpError::coded(
+            409,
+            unsupported.to_string(),
+            system_compatibility::ERROR_CODE_UNSUPPORTED_OS_VERSION,
+            json!({
+                "platform": unsupported.platform(),
+                "currentVersion": unsupported.current_version(),
+                "minimumVersion": unsupported.minimum_version(),
+                "application": unsupported.application(),
+            }),
+        );
+    }
+    HttpError::new(409, error.to_string())
 }
 
 fn usable_codex_cli_for_setup(client: &mut CodexClient) -> Result<Option<PathBuf>, HttpError> {

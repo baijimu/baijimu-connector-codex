@@ -146,9 +146,12 @@ which intentionally have independent cadences:
 - `sync-codex-upstream-artifacts.yml` runs on a schedule or by explicit manual
   dispatch. It downloads the complete customer installer contract (the official
   Codex CLI packages for every installer platform plus desktop App packages), verifies upstream integrity,
-  publishes every object under its SHA256, verifies anonymous OSS reads, and
-  replaces `codex-artifacts/latest.json` only after every referenced object is
-  available.
+  publishes every object under its SHA256, verifies anonymous OSS reads, keeps
+  the schema-3 `codex-artifacts/latest.json` projection for installed legacy
+  Connectors, and publishes schema-4 `codex-artifacts/v4/latest.json` with the
+  minimum OS version extracted from each native desktop package. Connector
+  1.2.62 and later fail before download or profile mutation when the host OS is
+  unsupported.
 
 Windows installation consumes OpenAI's canonical
 `codex-package-<target>.tar.gz` layout and preserves its declared entrypoint,

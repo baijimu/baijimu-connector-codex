@@ -73,6 +73,31 @@ enum SetupOutcome {
     PersonalProfilePreserved,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SetupFailureClassification {
+    message: &'static str,
+    error_code: &'static str,
+    retryable: bool,
+}
+
+fn classify_setup_failure(error: &anyhow::Error) -> SetupFailureClassification {
+    let unsupported_os = crate::system_compatibility::unsupported_os_version(error).is_some()
+        || crate::system_compatibility::message_is_unsupported_os_version(&error.to_string());
+    if unsupported_os {
+        SetupFailureClassification {
+            message: "当前系统版本不支持 ChatGPT/Codex 桌面应用",
+            error_code: crate::system_compatibility::ERROR_CODE_UNSUPPORTED_OS_VERSION,
+            retryable: false,
+        }
+    } else {
+        SetupFailureClassification {
+            message: "Codex 应用初始化失败",
+            error_code: ERROR_CODE_FAILED,
+            retryable: true,
+        }
+    }
+}
+
 impl SetupOutcome {
     fn completed_without_desktop_launch() -> Self {
         Self::PersonalProfilePreserved
@@ -254,6 +279,7 @@ impl SetupManager {
                     installer_status: None,
                 },
                 Err(error) => {
+                    let classification = classify_setup_failure(&error);
                     let error = compact_error(&error.to_string());
                     SetupStatus {
                         schema_version: SETUP_STATUS_SCHEMA_VERSION,
@@ -261,11 +287,11 @@ impl SetupManager {
                         connector_version: Some(CONNECTOR_VERSION.to_string()),
                         status: "failed".to_string(),
                         workspace_id: Some(workspace_id),
-                        message: "Codex 应用初始化失败".to_string(),
+                        message: classification.message.to_string(),
                         error: Some(error.clone()),
                         last_error: Some(error),
-                        error_code: Some(ERROR_CODE_FAILED.to_string()),
-                        retryable: true,
+                        error_code: Some(classification.error_code.to_string()),
+                        retryable: classification.retryable,
                         automatic_retry_count: background.automatic_retry_count,
                         started_at_epoch_seconds: background.started_at_epoch_seconds,
                         completed_at_epoch_seconds: Some(now_epoch_seconds()),
@@ -674,6 +700,39 @@ mod tests {
         assert!(outcome
             .warning()
             .is_some_and(|warning| warning.contains("operating system rejected automatic launch")));
+    }
+
+    #[test]
+    fn unsupported_os_setup_failure_has_a_stable_non_retryable_code() {
+        let error = crate::system_compatibility::ensure_supported(
+            "macOS",
+            "12.2.1",
+            "14.0",
+            "ChatGPT/Codex",
+        )
+        .unwrap_err();
+        let classification = classify_setup_failure(&error);
+
+        assert_eq!(
+            classification.error_code,
+            crate::system_compatibility::ERROR_CODE_UNSUPPORTED_OS_VERSION
+        );
+        assert!(!classification.retryable);
+        assert!(classification.message.contains("系统版本不支持"));
+    }
+
+    #[test]
+    fn windows_installer_marker_maps_to_the_same_unsupported_os_code() {
+        let error = anyhow::anyhow!(
+            "官方安装脚本执行失败: UNSUPPORTED_OS_VERSION: current Windows is too old"
+        );
+        let classification = classify_setup_failure(&error);
+
+        assert_eq!(
+            classification.error_code,
+            crate::system_compatibility::ERROR_CODE_UNSUPPORTED_OS_VERSION
+        );
+        assert!(!classification.retryable);
     }
 
     #[test]

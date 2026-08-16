@@ -15,7 +15,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const MANIFEST_SCHEMA_VERSION: u32 = 3;
+const MANIFEST_SCHEMA_VERSION: u32 = 4;
 const MANIFEST_KIND: &str = "baijimu.codex.customer-install-artifacts";
 const TARGET_APP_PATH: &str = "/Applications/ChatGPT.app";
 const LEGACY_APP_PATH: &str = "/Applications/Codex.app";
@@ -75,7 +75,7 @@ struct MacosInstaller<'a> {
     work_dir: &'a Path,
     progress: ProgressStore,
     result_path: PathBuf,
-    manifest: Option<UpstreamManifestV3>,
+    manifest: Option<UpstreamManifestV4>,
     cli_path: Option<PathBuf>,
     result: MacosInstallerResult,
 }
@@ -211,6 +211,8 @@ impl<'a> MacosInstaller<'a> {
             None,
         )?;
         if let Some(path) = installed_app_path() {
+            #[cfg(target_os = "macos")]
+            crate::desktop::verify_system_compatibility()?;
             self.capture_app(&path, "already-installed")?;
             self.progress.set_step(
                 1,
@@ -252,6 +254,8 @@ impl<'a> MacosInstaller<'a> {
         )?;
         self.ensure_manifest(2)?;
         let asset = self.select_asset("codex_desktop_app")?.clone();
+        #[cfg(target_os = "macos")]
+        asset.ensure_current_macos_supported()?;
         self.progress.set_step(
             2,
             InstallerStepState::Completed,
@@ -283,6 +287,8 @@ impl<'a> MacosInstaller<'a> {
         {
             anyhow::bail!("macOS 原生安装适配器返回了无效应用路径");
         }
+        #[cfg(target_os = "macos")]
+        crate::desktop::verify_system_compatibility()?;
         self.capture_app(&app_path, "baijimu-cache-dmg")?;
         self.progress.set_step(
             4,
@@ -362,14 +368,14 @@ impl<'a> MacosInstaller<'a> {
         let manifest_url = super::source::manifest_url()?;
         self.download_to_path(&manifest_url, &path, step, "正在读取百积木安装包清单", None)?;
         let bytes = fs::read(&path).context("读取百积木安装包清单失败")?;
-        let manifest = crate::json_compat::from_slice::<UpstreamManifestV3>(&bytes)
+        let manifest = crate::json_compat::from_slice::<UpstreamManifestV4>(&bytes)
             .context("解析百积木安装包清单失败")?;
         manifest.validate()?;
         self.manifest = Some(manifest);
         Ok(())
     }
 
-    fn select_asset(&self, component: &str) -> Result<&UpstreamAssetV3> {
+    fn select_asset(&self, component: &str) -> Result<&UpstreamAssetV4> {
         let arch = env::consts::ARCH;
         let matches = self
             .manifest
@@ -663,19 +669,19 @@ impl ProgressStore {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct UpstreamManifestV3 {
+struct UpstreamManifestV4 {
     schema_version: u32,
     manifest_kind: String,
     source: String,
     snapshot_id: String,
     fetched_at: String,
-    components: UpstreamComponentsV3,
-    upstream_release: UpstreamReleaseV3,
+    components: UpstreamComponentsV4,
+    upstream_release: UpstreamReleaseV4,
     required_assets: Vec<String>,
-    assets: Vec<UpstreamAssetV3>,
+    assets: Vec<UpstreamAssetV4>,
 }
 
-impl UpstreamManifestV3 {
+impl UpstreamManifestV4 {
     fn validate(&self) -> Result<()> {
         if self.schema_version != MANIFEST_SCHEMA_VERSION {
             anyhow::bail!("不支持的百积木安装包清单版本：{}", self.schema_version);
@@ -729,14 +735,14 @@ impl UpstreamManifestV3 {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct UpstreamComponentsV3 {
-    codex_cli: CodexCliComponentV3,
-    codex_desktop_app: CodexDesktopComponentV3,
+struct UpstreamComponentsV4 {
+    codex_cli: CodexCliComponentV4,
+    codex_desktop_app: CodexDesktopComponentV4,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CodexCliComponentV3 {
+struct CodexCliComponentV4 {
     source: String,
     tag_name: String,
     published_at: String,
@@ -747,14 +753,14 @@ struct CodexCliComponentV3 {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CodexDesktopComponentV3 {
+struct CodexDesktopComponentV4 {
     source: String,
     version_identity: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct UpstreamReleaseV3 {
+struct UpstreamReleaseV4 {
     tag_name: String,
     name: String,
     published_at: String,
@@ -763,7 +769,7 @@ struct UpstreamReleaseV3 {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct UpstreamAssetV3 {
+struct UpstreamAssetV4 {
     name: String,
     component: String,
     platform: String,
@@ -774,6 +780,7 @@ struct UpstreamAssetV3 {
     upstream_sha256: String,
     signature_verification: Option<String>,
     install_layout: Option<String>,
+    host_requirements: Option<ArtifactHostRequirementsV4>,
     deprecated: bool,
     mirror_url: String,
     object_key: String,
@@ -783,7 +790,13 @@ struct UpstreamAssetV3 {
     content_type: String,
 }
 
-impl UpstreamAssetV3 {
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArtifactHostRequirementsV4 {
+    minimum_os_version: String,
+}
+
+impl UpstreamAssetV4 {
     fn validate(&self) -> Result<()> {
         validate_asset_file_name(&self.name)?;
         let required = [
@@ -799,9 +812,18 @@ impl UpstreamAssetV3 {
             self.sha256.as_str(),
             self.content_type.as_str(),
         ];
+        let host_requirements_valid = match self.component.as_str() {
+            "codex_desktop_app" => self.host_requirements.as_ref().is_some_and(|requirements| {
+                crate::system_compatibility::validate_version(&requirements.minimum_os_version)
+                    .is_ok()
+            }),
+            "codex_cli" => self.host_requirements.is_none(),
+            _ => false,
+        };
         if required.iter().any(|value| value.trim().is_empty())
             || self.size == 0
             || self.size != self.size_bytes
+            || !host_requirements_valid
             || self
                 .signature_verification
                 .as_deref()
@@ -814,6 +836,18 @@ impl UpstreamAssetV3 {
             anyhow::bail!("百积木安装包清单包含无效制品记录：{}", self.name);
         }
         Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn ensure_current_macos_supported(&self) -> Result<()> {
+        let minimum = self
+            .host_requirements
+            .as_ref()
+            .context("ChatGPT/Codex macOS 制品缺少最低系统版本要求")?
+            .minimum_os_version
+            .as_str();
+        let current = crate::system_compatibility::current_macos_version()?;
+        crate::system_compatibility::ensure_supported("macOS", &current, minimum, "ChatGPT/Codex")
     }
 }
 
@@ -912,8 +946,8 @@ mod tests {
 
     #[test]
     fn customer_manifest_is_deserialized_into_a_closed_contract() {
-        let manifest = crate::json_compat::from_slice::<UpstreamManifestV3>(include_bytes!(
-            "../../test/fixtures/codex-artifacts-manifest-v3.json"
+        let manifest = crate::json_compat::from_slice::<UpstreamManifestV4>(include_bytes!(
+            "../../test/fixtures/codex-artifacts-manifest-v4.json"
         ))
         .unwrap();
         manifest.validate().unwrap();
@@ -925,14 +959,29 @@ mod tests {
     #[test]
     fn customer_manifest_rejects_unknown_fields() {
         let mut payload = serde_json::from_slice::<serde_json::Value>(include_bytes!(
-            "../../test/fixtures/codex-artifacts-manifest-v3.json"
+            "../../test/fixtures/codex-artifacts-manifest-v4.json"
         ))
         .unwrap();
         payload
             .as_object_mut()
             .unwrap()
             .insert("unexpected".to_string(), serde_json::Value::Bool(true));
-        assert!(serde_json::from_value::<UpstreamManifestV3>(payload).is_err());
+        assert!(serde_json::from_value::<UpstreamManifestV4>(payload).is_err());
+    }
+
+    #[test]
+    fn desktop_assets_require_a_numeric_minimum_os_version() {
+        let mut manifest = crate::json_compat::from_slice::<UpstreamManifestV4>(include_bytes!(
+            "../../test/fixtures/codex-artifacts-manifest-v4.json"
+        ))
+        .unwrap();
+        manifest.assets[0].host_requirements = None;
+        assert!(manifest.validate().is_err());
+
+        manifest.assets[0].host_requirements = Some(ArtifactHostRequirementsV4 {
+            minimum_os_version: "14 beta".to_string(),
+        });
+        assert!(manifest.validate().is_err());
     }
 
     #[test]

@@ -192,6 +192,9 @@ test("connector compiles platform installers instead of downloading executable s
   assert.ok(macosInstaller.length > 1_000);
   assert.ok(windowsInstaller.length > 1_000);
   assert.match(windowsInstaller, /desktop\.localeOverride/);
+  assert.match(windowsInstaller, /Assert-CurrentWindowsVersion/);
+  assert.match(windowsInstaller, /host_requirements\.minimum_os_version/);
+  assert.match(windowsInstaller, /UNSUPPORTED_OS_VERSION/);
   assert.doesNotMatch(windowsInstaller, /windowsSandbox\//);
 });
 
@@ -220,11 +223,16 @@ test("upstream sync is release-side, complete, latest-only, and independently sc
   assert.match(workflow, /signtool\.exe/);
   assert.match(workflow, /verify \/pa \/all \/v/);
   assert.match(workflow, /AppxManifest\.xml/);
+  assert.match(workflow, /LSMinimumSystemVersion/);
+  assert.match(workflow, /minimum_os_version/);
   assert.match(workflow, /OpenAI\\\.\(ChatGPT\|Codex\)/);
   assert.match(workflow, /needs: \[verify-macos-apps, verify-windows-apps\]/);
   assert.match(workflow, /sync-codex-artifacts\.sh/);
   assert.match(wrapper, /Customer installers read the published/);
   assert.match(synchronizer, /schema_version": 3/);
+  assert.match(synchronizer, /manifest_v4_for/);
+  assert.match(synchronizer, /host_requirements/);
+  assert.match(synchronizer, /minimum_os_version/);
   assert.match(synchronizer, /assets\/sha256/);
   assert.match(synchronizer, /latest\.json/);
   assert.match(synchronizer, /Publishing this pointer last/);
@@ -290,15 +298,29 @@ for source in module.APP_ASSETS:
         "sha256": "b" * 64,
         "size": 20,
         "signature_verification": "native-platform",
+        "host_requirements": {"minimum_os_version": "14.0" if source["platform"] == "macos" else "10.0.19041.0"},
     })
 release = {"tag_name": "rust-v-test", "published_at": "2026-01-01T00:00:00Z"}
-manifest = module.manifest_for(release, sources, "https://oss.example", "codex-artifacts")
+legacy_manifest = module.manifest_for(release, sources, "https://oss.example", "codex-artifacts")
+manifest = module.manifest_v4_for(release, sources, "https://oss.example", "codex-artifacts")
+module.validate_manifest(legacy_manifest)
 module.validate_manifest(manifest)
-assert manifest["schema_version"] == 3
+assert legacy_manifest["schema_version"] == 3
+assert manifest["schema_version"] == 4
 assert len(manifest["assets"]) == 10
 assert len([item for item in manifest["assets"] if item["install_layout"] == "codex_package_v1"]) == 2
 assert all("/assets/sha256/" in item["mirror_url"] for item in manifest["assets"])
+assert all(item["host_requirements"]["minimum_os_version"] for item in manifest["assets"] if item["component"] == "codex_desktop_app")
+assert all(item["host_requirements"] is None for item in manifest["assets"] if item["component"] == "codex_cli")
 assert not any("preserved_from_manifest" in item for item in manifest["assets"])
+desktop = next(item for item in manifest["assets"] if item["component"] == "codex_desktop_app")
+desktop["host_requirements"]["minimum_os_version"] = "14 beta"
+try:
+    module.validate_manifest(manifest)
+except RuntimeError:
+    pass
+else:
+    raise AssertionError("malformed minimum OS versions must fail closed")
 `;
   const result = spawnSync("python3", ["-c", script], {
     cwd: root,
@@ -331,10 +353,19 @@ test("setup treats desktop launch as a post-configuration convenience", async ()
   const userEnvironment = await readFile(join(root, "src", "user_environment.rs"), "utf8");
   const activationIndex = setup.indexOf("credential::finalize_workspace_setup");
   const launchIndex = setup.indexOf("crate::desktop::launch_and_verify(profile_home)");
+  const compatibilityModule = await readFile(
+    join(root, "src", "system_compatibility.rs"),
+    "utf8",
+  );
+  const macosSetup = await readFile(join(root, "src", "setup", "macos.rs"), "utf8");
 
   assert.ok(activationIndex >= 0, "setup must finalize the selected profile");
   assert.ok(launchIndex > activationIndex, "desktop launch must follow profile finalization");
   assert.match(setup, /SetupOutcome::from_desktop_launch/);
+  assert.match(setup, /UNSUPPORTED_OS_VERSION/);
+  assert.match(setup, /retryable: false/);
+  assert.match(compatibilityModule, /pub const ERROR_CODE_UNSUPPORTED_OS_VERSION/);
+  assert.match(macosSetup, /ensure_current_macos_supported\(\)\?/);
   assert.match(setup, /手动找到并打开 ChatGPT/);
   assert.doesNotMatch(setup, /launch_desktop_after_setup\(&profile_home\)\?/);
   assert.match(setup, /active_workspace_id == Some\(workspace_id\)/);

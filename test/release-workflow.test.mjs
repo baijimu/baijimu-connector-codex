@@ -243,7 +243,7 @@ test("upstream sync is release-side, complete, latest-only, and independently sc
     /def public_asset_is_exact[\s\S]*?"--retry-all-errors"[\s\S]*?"--connect-timeout"[\s\S]*?"--max-time"/,
   );
   assert.match(workflow, /--connect-timeout 15 --max-time 900/);
-  assert.match(synchronizer, /previous_keys - current_keys/);
+  assert.doesNotMatch(synchronizer, /oss_rm|previous_keys - current_keys/);
   assert.doesNotMatch(synchronizer, /manifests\/sha256/);
   assert.doesNotMatch(synchronizer, /PRESERVE_EXISTING_MANIFEST/);
   for (const name of [

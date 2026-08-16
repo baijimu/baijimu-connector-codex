@@ -151,7 +151,8 @@ which intentionally have independent cadences:
   Connectors, and publishes schema-4 `codex-artifacts/v4/latest.json` with the
   minimum OS version extracted from each native desktop package. Connector
   1.2.62 and later fail before download or profile mutation when the host OS is
-  unsupported.
+  unsupported. Content-addressed objects are permanent; synchronization only
+  replaces the two `latest.json` pointers after all current objects are public.
 
 Windows installation consumes OpenAI's canonical
 `codex-package-<target>.tar.gz` layout and preserves its declared entrypoint,

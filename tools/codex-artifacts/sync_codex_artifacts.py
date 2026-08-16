@@ -323,36 +323,6 @@ def oss_cp(source: Path, target: str, content_type: str, cache_control: str) -> 
     )
 
 
-def oss_rm(target: str) -> None:
-    ossutil = os.environ.get("OSSUTIL") or shutil.which("ossutil")
-    access_key_id = os.environ.get("OSS_ACCESS_KEY_ID")
-    access_key_secret = os.environ.get("OSS_ACCESS_KEY_SECRET")
-    if not ossutil:
-        raise RuntimeError("ossutil not found; set OSSUTIL to the pinned executable")
-    if not access_key_id or not access_key_secret:
-        raise RuntimeError("OSS_ACCESS_KEY_ID and OSS_ACCESS_KEY_SECRET are required")
-    endpoint = os.environ.get("OSS_ENDPOINT", "oss-cn-beijing.aliyuncs.com")
-    region = os.environ.get("OSS_REGION", "cn-beijing")
-    subprocess.run(
-        [
-            ossutil,
-            "rm",
-            target,
-            "--access-key-id",
-            access_key_id,
-            "--access-key-secret",
-            access_key_secret,
-            "--endpoint",
-            endpoint,
-            "--region",
-            region,
-            "--force",
-            "--no-progress",
-        ],
-        check=True,
-    )
-
-
 def manifest_for(
     release: dict[str, Any], assets: list[dict[str, Any]], public_base: str, prefix: str
 ) -> dict[str, Any]:
@@ -481,7 +451,6 @@ def publish(
     manifest: dict[str, Any],
     files: dict[str, Path],
     work_dir: Path,
-    previous: dict[str, Any] | None,
 ) -> None:
     bucket = os.environ.get("OSS_BUCKET", DEFAULT_BUCKET)
     prefix = os.environ.get("OSS_PREFIX", DEFAULT_PREFIX).strip("/")
@@ -525,14 +494,6 @@ def publish(
     latest_url = f"{public_base}/{prefix}/v4/latest.json"
     if not public_asset_is_exact(latest_url, manifest_path):
         raise RuntimeError("latest manifest public read-back verification failed")
-    current_keys = {asset["object_key"] for asset in manifest["assets"]}
-    previous_keys = {
-        asset.get("object_key")
-        for asset in (previous or {}).get("assets", [])
-        if isinstance(asset, dict) and isinstance(asset.get("object_key"), str)
-    }
-    for obsolete_key in sorted(previous_keys - current_keys):
-        oss_rm(f"oss://{bucket}/{obsolete_key}")
     print(f"published snapshot {manifest['snapshot_id']}")
     print(latest_url)
 
@@ -589,7 +550,6 @@ def run(args: argparse.Namespace) -> int:
         manifest,
         {asset["name"]: asset["path"] for asset in completed_assets},
         work_dir,
-        legacy_current,
     )
     return 0
 

@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::sync::OnceLock;
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -10,6 +10,8 @@ pub(crate) struct ProductConfig {
     pub(crate) default_model: String,
     pub(crate) router_provider: String,
     pub(crate) router_base_url: String,
+    pub(crate) windows_desktop_protocol: String,
+    pub(crate) windows_desktop_trusted_publishers: Vec<String>,
 }
 
 pub(crate) fn get() -> &'static ProductConfig {
@@ -32,6 +34,18 @@ pub(crate) fn get() -> &'static ProductConfig {
             config.router_base_url.starts_with("https://"),
             "路由地址必须使用 HTTPS"
         );
+        assert!(
+            !config.windows_desktop_protocol.trim().is_empty(),
+            "Windows 桌面协议不能为空"
+        );
+        assert!(
+            !config.windows_desktop_trusted_publishers.is_empty()
+                && config
+                    .windows_desktop_trusted_publishers
+                    .iter()
+                    .all(|publisher| !publisher.trim().is_empty()),
+            "Windows 桌面可信 Publisher 不能为空"
+        );
         config
     })
 }
@@ -45,5 +59,7 @@ mod tests {
         let config = get();
         assert_eq!(config.schema_version, SCHEMA_VERSION);
         assert!(config.router_base_url.starts_with("https://"));
+        assert_eq!(config.windows_desktop_protocol, "codex");
+        assert_eq!(config.windows_desktop_trusted_publishers.len(), 1);
     }
 }

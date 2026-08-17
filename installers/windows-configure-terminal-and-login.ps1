@@ -209,34 +209,68 @@ Write-InstallConsole "请保持此窗口打开。"
 Write-InstallConsole ""
 Write-InstallStatus
 
-function Get-CodexStartApp {
-  $apps = @(Get-StartApps)
-  $package = Get-CodexInstalledPackage
-  if ($package -and $package.PackageFamilyName) {
-    $matched = $apps | Where-Object { $_.AppID -like "$($package.PackageFamilyName)*" } | Select-Object -First 1
-    if ($matched) { return $matched }
+function Get-CodexDesktopEntries {
+  $codexDesktopProtocol = $env:CODEX_DESKTOP_PROTOCOL
+  if ([string]::IsNullOrWhiteSpace($codexDesktopProtocol)) { throw "缺少 Windows 桌面协议配置" }
+  try {
+    $codexDesktopTrustedPublishers = @($env:CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON | ConvertFrom-Json -ErrorAction Stop)
+  } catch {
+    throw "Windows 桌面可信 Publisher 配置无效"
   }
-  $apps |
-    Where-Object {
-      $_.Name -like "*Codex*" -or
-      $_.AppID -like "OpenAI.Codex*" -or
-      $_.AppID -like "OpenAI.ChatGPT_*"
-    } |
-    Select-Object -First 1
+  if ($codexDesktopTrustedPublishers.Count -eq 0) { throw "Windows 桌面可信 Publisher 配置为空" }
+  $startApps = @(Get-StartApps -ErrorAction SilentlyContinue)
+  $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.InstallLocation })
+  $entries = @($packages | ForEach-Object {
+    $package = $_
+    try {
+      $manifestPath = Join-Path $package.InstallLocation "AppxManifest.xml"
+      if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return }
+      [xml]$manifest = Get-Content -Raw -LiteralPath $manifestPath
+      $publisher = [string]$manifest.Package.Identity.Publisher
+      if ($codexDesktopTrustedPublishers -notcontains $publisher) { return }
+      $startApp = @($startApps | Where-Object { $_.AppID -like "$($package.PackageFamilyName)!*" } | Select-Object -First 1)
+      $applicationId = if ($startApp.Count -gt 0) {
+        ([string]$startApp[0].AppID).Substring(([string]$startApp[0].AppID).LastIndexOf("!") + 1)
+      } else {
+        $null
+      }
+      $applications = @($manifest.Package.Applications.Application | Where-Object {
+        if (-not $_.Executable) { return $false }
+        $entryPoint = [string]$_.EntryPoint
+        $isFullTrust = [string]::IsNullOrWhiteSpace($entryPoint) -or $entryPoint -eq "Windows.FullTrustApplication"
+        $declaresCodexProtocol = @($_.SelectNodes(".//*[local-name()='Protocol']") | Where-Object { ([string]$_.Name) -eq $codexDesktopProtocol }).Count -gt 0
+        return $isFullTrust -and $declaresCodexProtocol -and (-not $applicationId -or ([string]$_.Id) -eq $applicationId)
+      })
+      if ($applications.Count -eq 0 -and $applicationId) { return }
+      @($applications | Select-Object -First 1) | ForEach-Object {
+        $relativeExecutable = [string]$_.Executable
+        if ([System.IO.Path]::IsPathRooted($relativeExecutable)) { return }
+        $packageRoot = [System.IO.Path]::GetFullPath($package.InstallLocation).TrimEnd("\") + "\"
+        $executable = [System.IO.Path]::GetFullPath((Join-Path $packageRoot $relativeExecutable))
+        if (-not $executable.StartsWith($packageRoot, [System.StringComparison]::OrdinalIgnoreCase)) { return }
+        if ([System.IO.Path]::GetExtension($executable) -ne ".exe" -or -not (Test-Path -LiteralPath $executable -PathType Leaf)) { return }
+        [pscustomobject]@{
+          package = $package
+          startApp = if ($startApp.Count -gt 0) { $startApp[0] } else { $null }
+        }
+      }
+    } catch {
+      return
+    }
+  })
+  @($entries | Sort-Object @{ Expression = { if ($_.startApp) { 0 } else { 1 } } }, @{ Expression = { if ($_.startApp) { [string]$_.startApp.AppID } else { "" } } }, @{ Expression = { [string]$_.package.PackageFullName } })
+}
+
+function Get-CodexStartApp {
+  $entry = @(Get-CodexDesktopEntries | Where-Object { $_.startApp } | Select-Object -First 1)
+  if ($entry.Count -gt 0) { return $entry[0].startApp }
+  return $null
 }
 
 function Get-CodexInstalledPackage {
-  $packageNames = @("OpenAI.Codex", "OpenAI.ChatGPT")
-  foreach ($packageName in $packageNames) {
-    $package = Get-AppxPackage -Name $packageName -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($package) { return $package }
-  }
-  Get-AppxPackage -ErrorAction SilentlyContinue |
-    Where-Object {
-      $_.Name -like "OpenAI.Codex*" -or
-      ($_.Name -like "OpenAI.ChatGPT*" -and $_.Name -notlike "OpenAI.ChatGPT-Desktop*")
-    } |
-    Select-Object -First 1
+  $entry = @(Get-CodexDesktopEntries | Select-Object -First 1)
+  if ($entry.Count -gt 0) { return $entry[0].package }
+  return $null
 }
 
 function Assert-CurrentWindowsVersion([string]$minimumVersion) {

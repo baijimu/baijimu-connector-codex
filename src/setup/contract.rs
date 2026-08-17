@@ -5,15 +5,13 @@ use std::error::Error;
 use std::fmt;
 
 #[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
-pub const MACOS_STEP_NAMES: [&str; 9] = [
+pub const MACOS_STEP_NAMES: [&str; 7] = [
     "检查 ChatGPT 桌面应用",
     "读取应用安装包清单",
     "下载 ChatGPT 桌面应用",
     "校验并安装应用",
-    "安装 Codex CLI",
     "创建百积木 LLM 凭证和配置",
     "验证百积木路由",
-    "验证 Codex CLI",
     "完成安装配置",
 ];
 
@@ -56,7 +54,7 @@ pub struct InstallerStatus {
 impl InstallerStatus {
     pub fn macos(started_at: String, status_path: String, result_path: String) -> Self {
         Self {
-            title: "百积木正在安装 ChatGPT 桌面应用和 Codex".to_string(),
+            title: "百积木正在安装 ChatGPT 桌面应用".to_string(),
             locale: "zh-CN".to_string(),
             platform: "macos".to_string(),
             updated_at: started_at.clone(),
@@ -163,18 +161,12 @@ pub struct MacosInstallerResult {
     pub app_path: String,
     pub version: String,
     pub bundle_id: String,
-    pub cli_installed: bool,
-    pub cli_install_method: String,
-    pub cli_path: String,
     pub workspace_id: u64,
     pub project_id: Option<u64>,
-    pub shared_cli_token_read: bool,
     pub llm_credential_created: bool,
     pub config_written: bool,
     pub auth_written: bool,
     pub router_http_status: Option<u16>,
-    pub cli_version: String,
-    pub cli_smoke: bool,
     pub model: String,
     pub elapsed_ms: u128,
     pub warnings: Vec<String>,
@@ -199,18 +191,12 @@ impl MacosInstallerResult {
             app_path: String::new(),
             version: String::new(),
             bundle_id: String::new(),
-            cli_installed: false,
-            cli_install_method: String::new(),
-            cli_path: String::new(),
             workspace_id,
             project_id: None,
-            shared_cli_token_read: false,
             llm_credential_created: false,
             config_written: false,
             auth_written: false,
             router_http_status: None,
-            cli_version: String::new(),
-            cli_smoke: false,
             model,
             elapsed_ms: 0,
             warnings: Vec::new(),
@@ -245,8 +231,8 @@ mod tests {
         assert_eq!(status.steps[2].detail, "正在下载");
         assert_eq!(status.steps[2].downloaded_bytes, Some(123));
         assert_eq!(status.steps[2].total_bytes, Some(1_000));
-        assert_eq!(status.steps[8].detail, "");
-        assert_eq!(status.steps[8].state, InstallerStepState::Pending);
+        assert_eq!(status.steps[6].detail, "");
+        assert_eq!(status.steps[6].state, InstallerStepState::Pending);
     }
 
     #[test]
@@ -258,7 +244,7 @@ mod tests {
         );
         let error = status
             .update_step(
-                10,
+                8,
                 InstallerStepState::Running,
                 "invalid",
                 None,
@@ -266,8 +252,8 @@ mod tests {
                 "2026-08-14T00:00:01Z".to_string(),
             )
             .unwrap_err();
-        assert_eq!(error.index, 10);
-        assert_eq!(error.step_count, 9);
+        assert_eq!(error.index, 8);
+        assert_eq!(error.step_count, 7);
     }
 
     #[test]

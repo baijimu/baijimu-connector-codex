@@ -112,7 +112,7 @@ impl<'a> MacosInstaller<'a> {
         self.ensure_desktop_app()?;
 
         self.progress.set_step(
-            6,
+            5,
             InstallerStepState::Running,
             "正在创建百积木 LLM 凭证并写入 Codex 配置",
             None,
@@ -122,12 +122,11 @@ impl<'a> MacosInstaller<'a> {
         let prepared = credential::prepare_workspace_profile(self.workspace_id)?;
         let profile_home = PathBuf::from(&prepared.profile.codex_home);
         self.result.codex_home = profile_home.display().to_string();
-        self.result.shared_cli_token_read = true;
         self.result.llm_credential_created = true;
         self.result.config_written = true;
         self.result.auth_written = true;
         self.progress.set_step(
-            6,
+            5,
             InstallerStepState::Completed,
             "已使用百积木 LLM 凭证写入 Codex 配置",
             None,
@@ -137,7 +136,7 @@ impl<'a> MacosInstaller<'a> {
         self.verify_router(&prepared.credential)?;
 
         self.progress.set_step(
-            9,
+            7,
             InstallerStepState::Running,
             "正在提交工作区档案并启动桌面应用",
             None,
@@ -161,7 +160,7 @@ impl<'a> MacosInstaller<'a> {
             self.result.warnings.push(warning.to_string());
         }
         self.progress.set_step(
-            9,
+            7,
             InstallerStepState::Completed,
             outcome.message(),
             None,
@@ -409,7 +408,7 @@ impl<'a> MacosInstaller<'a> {
 
     fn verify_router(&mut self, credential_value: &str) -> Result<()> {
         self.progress.set_step(
-            7,
+            6,
             InstallerStepState::Running,
             "正在验证百积木路由",
             None,
@@ -435,7 +434,7 @@ impl<'a> MacosInstaller<'a> {
             anyhow::bail!("路由 /responses 健康检查失败：HTTP {status}");
         }
         self.progress.set_step(
-            7,
+            6,
             InstallerStepState::Completed,
             "百积木路由验证通过",
             None,
@@ -547,15 +546,6 @@ impl UpstreamManifestV4 {
             self.source.as_str(),
             self.snapshot_id.as_str(),
             self.fetched_at.as_str(),
-            self.components.codex_cli.source.as_str(),
-            self.components.codex_cli.tag_name.as_str(),
-            self.components.codex_cli.published_at.as_str(),
-            self.components.codex_cli.html_url.as_str(),
-            self.components.codex_cli.windows_install_layout.as_str(),
-            self.components
-                .codex_cli
-                .legacy_windows_archives_retained_for
-                .as_str(),
             self.components.codex_desktop_app.source.as_str(),
             self.components.codex_desktop_app.version_identity.as_str(),
             self.upstream_release.tag_name.as_str(),
@@ -578,6 +568,13 @@ impl UpstreamManifestV4 {
                 anyhow::bail!("百积木安装包清单包含重复制品：{}", asset.name);
             }
         }
+        if self
+            .assets
+            .iter()
+            .any(|asset| asset.component != "codex_desktop_app")
+        {
+            anyhow::bail!("桌面安装包清单不得包含 Codex CLI 制品");
+        }
         for required in &self.required_assets {
             if required.trim().is_empty() || !names.contains(required.as_str()) {
                 anyhow::bail!("百积木安装包清单缺少必需制品：{required}");
@@ -590,19 +587,7 @@ impl UpstreamManifestV4 {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UpstreamComponentsV4 {
-    codex_cli: CodexCliComponentV4,
     codex_desktop_app: CodexDesktopComponentV4,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CodexCliComponentV4 {
-    source: String,
-    tag_name: String,
-    published_at: String,
-    html_url: String,
-    windows_install_layout: String,
-    legacy_windows_archives_retained_for: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -671,7 +656,6 @@ impl UpstreamAssetV4 {
                 crate::system_compatibility::validate_version(&requirements.minimum_os_version)
                     .is_ok()
             }),
-            "codex_cli" => self.host_requirements.is_none(),
             _ => false,
         };
         if required.iter().any(|value| value.trim().is_empty())
@@ -800,32 +784,22 @@ mod tests {
 
     #[test]
     fn desktop_manifest_is_deserialized_into_a_closed_contract() {
-        let mut manifest = crate::json_compat::from_slice::<UpstreamManifestV4>(include_bytes!(
-            "../../test/fixtures/codex-artifacts-manifest-v4.json"
+        let manifest = crate::json_compat::from_slice::<UpstreamManifestV4>(include_bytes!(
+            "../../test/fixtures/codex-desktop-artifacts-manifest-v4.json"
         ))
         .unwrap();
-        manifest
-            .assets
-            .retain(|asset| asset.component == "codex_desktop_app");
-        manifest.required_assets = manifest
-            .assets
-            .iter()
-            .map(|asset| asset.name.clone())
-            .collect();
         manifest.validate().unwrap();
         assert_eq!(manifest.assets.len(), 1);
         assert_eq!(manifest.assets[0].component, "codex_desktop_app");
     }
 
     #[test]
-    fn complete_customer_manifest_accepts_desktop_and_cli_assets() {
-        let manifest = crate::json_compat::from_slice::<UpstreamManifestV4>(include_bytes!(
+    fn desktop_manifest_rejects_cli_assets() {
+        let result = crate::json_compat::from_slice::<UpstreamManifestV4>(include_bytes!(
             "../../test/fixtures/codex-artifacts-manifest-v4.json"
-        ))
-        .unwrap();
+        ));
 
-        manifest.validate().unwrap();
-        assert_eq!(manifest.assets.len(), 2);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -844,7 +818,7 @@ mod tests {
     #[test]
     fn desktop_assets_require_a_numeric_minimum_os_version() {
         let mut manifest = crate::json_compat::from_slice::<UpstreamManifestV4>(include_bytes!(
-            "../../test/fixtures/codex-artifacts-manifest-v4.json"
+            "../../test/fixtures/codex-desktop-artifacts-manifest-v4.json"
         ))
         .unwrap();
         manifest.assets.truncate(1);
@@ -859,27 +833,9 @@ mod tests {
     }
 
     #[test]
-    fn cli_assets_reject_desktop_host_requirements() {
+    fn desktop_manifest_rejects_unknown_asset_components() {
         let mut manifest = crate::json_compat::from_slice::<UpstreamManifestV4>(include_bytes!(
-            "../../test/fixtures/codex-artifacts-manifest-v4.json"
-        ))
-        .unwrap();
-        let cli_asset = manifest
-            .assets
-            .iter_mut()
-            .find(|asset| asset.component == "codex_cli")
-            .unwrap();
-        cli_asset.host_requirements = Some(ArtifactHostRequirementsV4 {
-            minimum_os_version: "14.0".to_string(),
-        });
-
-        assert!(manifest.validate().is_err());
-    }
-
-    #[test]
-    fn manifest_rejects_unknown_asset_components() {
-        let mut manifest = crate::json_compat::from_slice::<UpstreamManifestV4>(include_bytes!(
-            "../../test/fixtures/codex-artifacts-manifest-v4.json"
+            "../../test/fixtures/codex-desktop-artifacts-manifest-v4.json"
         ))
         .unwrap();
         manifest.assets[0].component = "unknown".to_string();

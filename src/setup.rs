@@ -405,7 +405,6 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupCompletion> {
             .env("CODEX_LLM_CREDENTIAL_FILE", &secret_path)
             .env("CODEX_INSTALL_STATE_DIR", &state_dir)
             .env("CODEX_INSTALL_QUIET", "1")
-            .env("CODEX_DESKTOP_ONLY", "1")
             .env(
                 "CODEX_DESKTOP_PROTOCOL",
                 &product_config.windows_desktop_protocol,
@@ -415,7 +414,6 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupCompletion> {
             .env_remove("CODEX_PROJECT_ID")
             .env_remove("BAIJIMU_PROJECT_ID")
             .env_remove("PROJECT_ID");
-        command.env_remove("CODEX_CLI_BIN");
         let output = command.output().context("启动 Codex 官方安装脚本失败")?;
         let installer_result_path = state_dir.join("result.json");
         let installer_result = read_json::<InstallerResultEnvelope>(&installer_result_path)

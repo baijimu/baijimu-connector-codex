@@ -51,52 +51,11 @@ install_app() {
   printf '%s\n' "$app_path"
 }
 
-install_cli() {
-  local archive="$1"
-  local expected_sha256="$2"
-  local work_dir bin install_target install_temp profile line
-  verify_sha256 "$archive" "$expected_sha256"
-
-  work_dir="$(mktemp -d "${TMPDIR:-/tmp}/codex-cli.XXXXXX")"
-  cleanup_cli() { rm -rf "$work_dir"; }
-  trap cleanup_cli EXIT
-  tar -xzf "$archive" -C "$work_dir"
-  bin="$(find "$work_dir" -maxdepth 4 -type f \( -name codex -o -name 'codex-*' \) ! -name '*.tar.gz' -perm -111 2>/dev/null | head -n 1)"
-  if [ -z "${bin:-}" ]; then
-    bin="$(find "$work_dir" -maxdepth 4 -type f \( -name codex -o -name 'codex-*' \) ! -name '*.tar.gz' 2>/dev/null | head -n 1)"
-  fi
-  if [ -z "${bin:-}" ]; then
-    echo "解压 Codex CLI 安装包后未找到可执行文件" >&2
-    return 1
-  fi
-
-  mkdir -p "$HOME/.local/bin"
-  install_target="$HOME/.local/bin/codex"
-  install_temp="$HOME/.local/bin/.codex.install.$$"
-  rm -f "$install_temp"
-  install -m 755 "$bin" "$install_temp"
-  mv -f "$install_temp" "$install_target"
-  xattr -d com.apple.quarantine "$install_target" 2>/dev/null || true
-
-  profile="$HOME/.zshrc"
-  line='export PATH="$HOME/.local/bin:$PATH"'
-  if [ ! -f "$profile" ] || ! grep -Fq '.local/bin' "$profile"; then
-    printf '\n# Added by Baijimu Codex installer\n%s\n' "$line" >> "$profile"
-  fi
-  rm -rf "$work_dir"
-  trap - EXIT
-  printf '%s\n' "$install_target"
-}
-
 action="${1:-}"
 case "$action" in
   install-app)
     [ "$#" -eq 3 ] || { echo "install-app 参数无效" >&2; exit 2; }
     install_app "$2" "$3"
-    ;;
-  install-cli)
-    [ "$#" -eq 3 ] || { echo "install-cli 参数无效" >&2; exit 2; }
-    install_cli "$2" "$3"
     ;;
   *)
     echo "不支持的 macOS 原生安装动作：${action:-<empty>}" >&2

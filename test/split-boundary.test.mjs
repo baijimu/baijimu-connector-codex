@@ -30,10 +30,13 @@ test("desktop manager exposes only its required read-only status method", async 
 });
 
 test("desktop manager neither installs CLI nor exposes invoke routes", async () => {
-  const [main, setup, macos, source] = await Promise.all([
+  const [main, setup, macos, contract, windows, macosScript, source] = await Promise.all([
     read("src/main.rs"),
     read("src/setup.rs"),
     read("src/setup/macos.rs"),
+    read("src/setup/contract.rs"),
+    read("installers/windows-configure-terminal-and-login.ps1"),
+    read("installers/macos-configure-terminal-and-login.sh"),
     read("installers/upstream-artifact-source.json"),
   ]);
   assert.doesNotMatch(main, /mod app_server/);
@@ -42,7 +45,10 @@ test("desktop manager neither installs CLI nor exposes invoke routes", async () 
   const execute = macos.slice(macos.indexOf("fn execute"), macos.indexOf("fn ensure_desktop_app"));
   assert.match(execute, /ensure_desktop_app/);
   assert.doesNotMatch(execute, /ensure_codex_cli/);
-  assert.match(source, /codex-artifacts\/v4/);
+  assert.match(source, /codex-artifacts\/v4\/desktop\/latest\.json/);
+  assert.doesNotMatch(contract, /cli_installed|cli_install_method|cli_path|cli_version|cli_smoke/);
+  assert.doesNotMatch(windows, /Resolve-CodexCli|Invoke-AppServerProfileSetup|Test-CodexCli|CODEX_DESKTOP_ONLY|CODEX_CLI_BIN|cliInstallMethod|cliArtifact|codexExe/);
+  assert.doesNotMatch(macosScript, /install_cli|install-cli/);
 });
 
 test("desktop manager upgrades its inherited metadata in place and omits redundant cards", async () => {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish the complete Codex customer-install artifact set to Baijimu OSS."""
+"""Publish shared Codex artifacts and their desktop-only installation manifest."""
 
 from __future__ import annotations
 
@@ -394,37 +394,61 @@ def manifest_v4_for(
     return manifest
 
 
-def validate_manifest(manifest: dict[str, Any]) -> None:
+def desktop_manifest_v4_for(manifest: dict[str, Any]) -> dict[str, Any]:
+    desktop_assets = [
+        asset for asset in manifest["assets"] if asset["component"] == "codex_desktop_app"
+    ]
+    desktop_manifest = {
+        **manifest,
+        "snapshot_id": snapshot_id(desktop_assets),
+        "components": {"codex_desktop_app": manifest["components"]["codex_desktop_app"]},
+        "required_assets": [asset["name"] for asset in desktop_assets],
+        "assets": desktop_assets,
+    }
+    return desktop_manifest
+
+
+def validate_manifest(manifest: dict[str, Any], kind: str = "full") -> None:
     schema_version = manifest.get("schema_version")
-    if schema_version not in (3, 4):
+    if kind not in ("full", "desktop"):
+        raise RuntimeError(f"unknown manifest kind: {kind}")
+    if schema_version not in ((4,) if kind == "desktop" else (3, 4)):
         raise RuntimeError("unexpected manifest schema")
     assets = manifest.get("assets")
-    if not isinstance(assets, list) or len(assets) != len(CLI_ASSET_NAMES) + len(APP_ASSETS):
-        raise RuntimeError("manifest does not contain the complete customer install contract")
-    required = set(CLI_ASSET_NAMES) | {asset["name"] for asset in APP_ASSETS}
+    required = {asset["name"] for asset in APP_ASSETS}
+    if kind == "full":
+        required |= set(CLI_ASSET_NAMES)
+    if not isinstance(assets, list) or len(assets) != len(required):
+        raise RuntimeError("manifest does not contain the expected customer install contract")
     actual = {asset.get("name") for asset in assets}
     if actual != required or set(manifest.get("required_assets", [])) != required:
         raise RuntimeError(f"manifest asset set mismatch: expected {sorted(required)}, got {sorted(actual)}")
-    package_assets = [
-        asset
-        for asset in assets
-        if asset.get("platform") == "windows" and asset.get("install_layout") == "codex_package_v1"
-    ]
-    if {(asset.get("arch"), asset.get("deprecated")) for asset in package_assets} != {
-        ("aarch64", False),
-        ("x86_64", False),
-    }:
-        raise RuntimeError("manifest does not contain the canonical Windows Codex packages")
-    legacy_windows_assets = [
-        asset
-        for asset in assets
-        if asset.get("platform") == "windows"
-        and asset.get("install_layout") == "legacy_flat_windows_archive"
-    ]
-    if len(legacy_windows_assets) != 2 or not all(
-        asset.get("deprecated") is True for asset in legacy_windows_assets
-    ):
-        raise RuntimeError("legacy Windows Codex archives must be explicitly deprecated")
+    if kind == "desktop":
+        if set(manifest.get("components", {})) != {"codex_desktop_app"}:
+            raise RuntimeError("desktop manifest contains non-desktop component metadata")
+        if any(asset.get("component") != "codex_desktop_app" for asset in assets):
+            raise RuntimeError("desktop manifest contains non-desktop assets")
+    else:
+        package_assets = [
+            asset
+            for asset in assets
+            if asset.get("platform") == "windows" and asset.get("install_layout") == "codex_package_v1"
+        ]
+        if {(asset.get("arch"), asset.get("deprecated")) for asset in package_assets} != {
+            ("aarch64", False),
+            ("x86_64", False),
+        }:
+            raise RuntimeError("manifest does not contain the canonical Windows Codex packages")
+        legacy_windows_assets = [
+            asset
+            for asset in assets
+            if asset.get("platform") == "windows"
+            and asset.get("install_layout") == "legacy_flat_windows_archive"
+        ]
+        if len(legacy_windows_assets) != 2 or not all(
+            asset.get("deprecated") is True for asset in legacy_windows_assets
+        ):
+            raise RuntimeError("legacy Windows Codex archives must be explicitly deprecated")
     for asset in assets:
         if not asset.get("mirror_url", "").startswith("https://"):
             raise RuntimeError(f"asset has invalid mirror URL: {asset.get('name')}")
@@ -449,6 +473,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
 def publish(
     legacy_manifest: dict[str, Any],
     manifest: dict[str, Any],
+    desktop_manifest: dict[str, Any],
     files: dict[str, Path],
     work_dir: Path,
 ) -> None:
@@ -494,8 +519,22 @@ def publish(
     latest_url = f"{public_base}/{prefix}/v4/latest.json"
     if not public_asset_is_exact(latest_url, manifest_path):
         raise RuntimeError("latest manifest public read-back verification failed")
+    desktop_manifest_path = work_dir / "desktop-manifest-v4.json"
+    desktop_manifest_path.write_text(
+        json.dumps(desktop_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    oss_cp(
+        desktop_manifest_path,
+        f"oss://{bucket}/{prefix}/v4/desktop/latest.json",
+        "application/json",
+        "no-cache, max-age=0",
+    )
+    desktop_latest_url = f"{public_base}/{prefix}/v4/desktop/latest.json"
+    if not public_asset_is_exact(desktop_latest_url, desktop_manifest_path):
+        raise RuntimeError("desktop latest manifest public read-back verification failed")
     print(f"published snapshot {manifest['snapshot_id']}")
     print(latest_url)
+    print(desktop_latest_url)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -518,36 +557,52 @@ def run(args: argparse.Namespace) -> int:
     public_base = os.environ.get("OSS_PUBLIC_BASE_URL", DEFAULT_PUBLIC_BASE)
     legacy_manifest = manifest_for(release, completed_assets, public_base, prefix)
     manifest = manifest_v4_for(release, completed_assets, public_base, prefix)
+    desktop_manifest = desktop_manifest_v4_for(manifest)
     validate_manifest(legacy_manifest)
     validate_manifest(manifest)
+    validate_manifest(desktop_manifest, "desktop")
     generated = work_dir / "generated-manifest.json"
     generated.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    generated_desktop = work_dir / "generated-desktop-manifest.json"
+    generated_desktop.write_text(
+        json.dumps(desktop_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     print(f"prepared snapshot {manifest['snapshot_id']} at {generated}")
     if args.prepare_only:
         return 0
     legacy_current = fetch_existing_manifest(f"{public_base.rstrip('/')}/{prefix}/latest.json")
     current = fetch_existing_manifest(f"{public_base.rstrip('/')}/{prefix}/v4/latest.json")
+    desktop_current = fetch_existing_manifest(
+        f"{public_base.rstrip('/')}/{prefix}/v4/desktop/latest.json"
+    )
     if (
         current
         and legacy_current
+        and desktop_current
         and current.get("schema_version") == 4
         and legacy_current.get("schema_version") == 3
         and current.get("snapshot_id") == manifest["snapshot_id"]
         and legacy_current.get("snapshot_id") == legacy_manifest["snapshot_id"]
+        and desktop_current.get("snapshot_id") == desktop_manifest["snapshot_id"]
     ):
         # Keep the current fetched_at/immutable manifest stable, but fully verify
         # every content-addressed customer object before declaring a no-op.
         validate_manifest(current)
         validate_manifest(legacy_current)
+        validate_manifest(desktop_current, "desktop")
         if all(
             public_asset_is_exact(asset["mirror_url"], downloads / asset["name"])
             for asset in current["assets"]
+        ) and all(
+            public_asset_is_exact(asset["mirror_url"], downloads / asset["name"])
+            for asset in desktop_current["assets"]
         ):
             print(f"no changes; verified published snapshot {manifest['snapshot_id']}")
             return 0
     publish(
         legacy_manifest,
         manifest,
+        desktop_manifest,
         {asset["name"]: asset["path"] for asset in completed_assets},
         work_dir,
     )

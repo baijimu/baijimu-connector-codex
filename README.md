@@ -8,7 +8,7 @@
 - 保留原有 ChatGPT 登录和所有工作区目录，切换失败时恢复原选择；
 - 在原 Connector 数据目录中原位升级并继续使用既有桌面档案元数据。
 
-本应用不安装 Codex CLI，不启动 `codex app-server`，也不声明 Relay 远程能力。CLI、session/thread/turn/event 接口由独立的 `com.baijimu.connector.codex-connector`（Codex 外部连接器）负责；OpenAI 兼容补全接口继续由 `com.baijimu.connector.codex-completion`（Codex 补全服务）负责。
+本应用不安装 Codex CLI，不启动 `codex app-server`，也不声明 Relay 远程能力。CLI、session/thread/turn/event 接口由独立的 `com.baijimu.connector.codex-connector`（Codex 远程连接器）负责；OpenAI 兼容模型接口继续由 `com.baijimu.connector.codex-completion`（Codex 模型接口服务）负责。
 
 ## 状态所有权
 

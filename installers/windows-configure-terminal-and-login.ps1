@@ -212,11 +212,7 @@ Write-InstallStatus
 function Get-CodexDesktopEntries {
   $codexDesktopProtocol = $env:CODEX_DESKTOP_PROTOCOL
   if ([string]::IsNullOrWhiteSpace($codexDesktopProtocol)) { throw "缺少 Windows 桌面协议配置" }
-  try {
-    $codexDesktopTrustedPublishers = @($env:CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON | ConvertFrom-Json -ErrorAction Stop)
-  } catch {
-    throw "Windows 桌面可信 Publisher 配置无效"
-  }
+  $codexDesktopTrustedPublishers = @($env:CODEX_DESKTOP_TRUSTED_PUBLISHERS -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
   if ($codexDesktopTrustedPublishers.Count -eq 0) { throw "Windows 桌面可信 Publisher 配置为空" }
   $startApps = @(Get-StartApps -ErrorAction SilentlyContinue)
   $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.InstallLocation })
@@ -256,10 +252,7 @@ function Get-CodexDesktopEntries {
           startApp = if ($startApp.Count -gt 0) { $startApp[0] } else { $null }
         }
       }
-    } catch {
-      if ($env:CODEX_DESKTOP_DISCOVERY_FAIL_FAST -eq "1") { throw }
-      return
-    }
+    } catch { return }
   })
   @($entries | Sort-Object @{ Expression = { if ($_.startApp) { 0 } else { 1 } } }, @{ Expression = { if ($_.startApp) { [string]$_.startApp.AppID } else { "" } } }, @{ Expression = { [string]$_.package.PackageFullName } })
 }

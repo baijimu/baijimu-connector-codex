@@ -53,11 +53,7 @@ $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding
 $codexDesktopProtocol = $env:CODEX_DESKTOP_PROTOCOL
 if ([string]::IsNullOrWhiteSpace($codexDesktopProtocol)) { throw '缺少 Windows 桌面协议配置' }
-try {
-  $codexDesktopTrustedPublishers = @($env:CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON | ConvertFrom-Json -ErrorAction Stop)
-} catch {
-  throw 'Windows 桌面可信 Publisher 配置无效'
-}
+$codexDesktopTrustedPublishers = @($env:CODEX_DESKTOP_TRUSTED_PUBLISHERS -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($codexDesktopTrustedPublishers.Count -eq 0) { throw 'Windows 桌面可信 Publisher 配置为空' }
 
 function Get-CodexDesktopEntries {
@@ -102,10 +98,7 @@ function Get-CodexDesktopEntries {
           executable = $executable
         }
       }
-    } catch {
-      if ($env:CODEX_DESKTOP_DISCOVERY_FAIL_FAST -eq '1') { throw }
-      return
-    }
+    } catch { return }
   })
   @($entries | Sort-Object @{ Expression = { if ($_.appUserModelId) { 0 } else { 1 } } }, @{ Expression = { [string]$_.appUserModelId } }, @{ Expression = { [string]$_.package.PackageFullName } })
 }
@@ -285,15 +278,13 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
             command.env("CODEX_HOME", codex_home);
         }
         let product_config = crate::product_config::get();
-        let trusted_publishers =
-            serde_json::to_string(&product_config.windows_desktop_trusted_publishers)
-                .context("序列化 Windows 桌面可信 Publisher 配置失败")?;
+        let trusted_publishers = product_config.windows_desktop_trusted_publishers.join("\n");
         command
             .env(
                 "CODEX_DESKTOP_PROTOCOL",
                 &product_config.windows_desktop_protocol,
             )
-            .env("CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON", trusted_publishers);
+            .env("CODEX_DESKTOP_TRUSTED_PUBLISHERS", trusted_publishers);
         let complete_script = format!("{POWERSHELL_PREAMBLE}\n{script}");
         command.args([
             "-NoLogo",
@@ -364,7 +355,8 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
         #[test]
         fn package_discovery_is_capability_based_and_errors_are_utf8() {
             assert!(POWERSHELL_PREAMBLE.contains("CODEX_DESKTOP_PROTOCOL"));
-            assert!(POWERSHELL_PREAMBLE.contains("CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON"));
+            assert!(POWERSHELL_PREAMBLE.contains("CODEX_DESKTOP_TRUSTED_PUBLISHERS"));
+            assert!(!POWERSHELL_PREAMBLE.contains("CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON"));
             assert!(POWERSHELL_PREAMBLE.contains("Windows.FullTrustApplication"));
             assert!(!POWERSHELL_PREAMBLE.contains("OpenAI.ChatGPT-Desktop"));
             assert!(!POWERSHELL_PREAMBLE.contains("Get-AppxPackage -Name"));
@@ -408,31 +400,8 @@ function Get-AppxPackage {
 function Get-StartApps {
   [pscustomobject]@{ Name = 'Renamed desktop'; AppID = 'Example.RenamedDesktop_family!Desktop' }
 }
-$env:CODEX_DESKTOP_DISCOVERY_FAIL_FAST = '1'
 $entry = @(Get-CodexDesktopEntries)
-if ($entry.Count -ne 1) {
-  $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.InstallLocation })
-  $startApps = @(Get-StartApps -ErrorAction SilentlyContinue)
-  $manifestPath = if ($packages.Count -gt 0) { Join-Path $packages[0].InstallLocation 'AppxManifest.xml' } else { $null }
-  [xml]$manifest = if ($manifestPath) { Get-Content -Raw -LiteralPath $manifestPath } else { '<Package />' }
-  $identities = @($manifest.SelectNodes("/*[local-name()='Package']/*[local-name()='Identity']"))
-  $applications = @($manifest.SelectNodes("/*[local-name()='Package']/*[local-name()='Applications']/*[local-name()='Application']"))
-  $protocols = @($manifest.SelectNodes("//*[local-name()='Protocol']"))
-  throw ([pscustomobject]@{
-    entryCount = $entry.Count
-    packageCount = $packages.Count
-    startAppCount = $startApps.Count
-    manifestExists = if ($manifestPath) { Test-Path -LiteralPath $manifestPath -PathType Leaf } else { $false }
-    identityCount = $identities.Count
-    publisher = if ($identities.Count -gt 0) { [string]$identities[0].Publisher } else { $null }
-    trustedPublishers = @($codexDesktopTrustedPublishers)
-    applicationCount = $applications.Count
-    applicationId = if ($applications.Count -gt 0) { [string]$applications[0].Id } else { $null }
-    executable = if ($applications.Count -gt 0) { [string]$applications[0].Executable } else { $null }
-    protocolNames = @($protocols | ForEach-Object { [string]$_.Name })
-    expectedProtocol = $codexDesktopProtocol
-  } | ConvertTo-Json -Compress)
-}
+if ($entry.Count -ne 1) { throw "expected one entry, got $($entry.Count)" }
 [pscustomobject]@{
   packageFullName = [string]$entry[0].package.PackageFullName
   applicationId = [string]$entry[0].applicationId

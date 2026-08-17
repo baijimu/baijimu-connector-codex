@@ -2,10 +2,10 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex 桌面管理器",
-  "version": "1.3.6",
+  "version": "1.3.7",
   "description": "安装 Codex 桌面应用，并管理相互隔离的百积木工作区桌面档案。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "momoplan/baijimu-connector-codex", "revision": "v1.3.6"},
+  "source": {"type": "github", "repo": "momoplan/baijimu-connector-codex", "revision": "v1.3.7"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
@@ -51,7 +51,7 @@
     }
   ],
   "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex 桌面管理器", "defaultView": true},
-  "releaseNotes": ["Codex 桌面管理器只负责桌面应用安装、工作区档案与用户显式切换，并保留 Windows 通过 AUMID 激活受保护应用包与隔离工作区档案的能力。CLI 线程与任务接口由 Codex 远程连接器提供，OpenAI 兼容模型接口由 Codex 模型接口服务提供。"],
+  "releaseNotes": ["修复制品清单校验：桌面应用必须声明最低系统版本，Codex CLI 制品保持无桌面系统要求，避免初始化时误报无效制品记录。", "Codex 桌面管理器只负责桌面应用安装、工作区档案与用户显式切换，并保留 Windows 通过 AUMID 激活受保护应用包与隔离工作区档案的能力。CLI 线程与任务接口由 Codex 远程连接器提供，OpenAI 兼容模型接口由 Codex 模型接口服务提供。"],
   "configSchema": {
     "type": "object",
     "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},

@@ -8,9 +8,13 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (path) => readFile(join(root, path), "utf8");
 
 test("desktop manager exposes only its required read-only status method", async () => {
-  const manifest = JSON.parse(await read("connector.json"));
+  const [manifest, packageManifest] = await Promise.all([
+    read("connector.json").then(JSON.parse),
+    read("package.json").then(JSON.parse),
+  ]);
   assert.equal(manifest.id, "com.baijimu.connector.codex");
-  assert.equal(manifest.version, "1.3.2");
+  assert.equal(manifest.version, packageManifest.version);
+  assert.equal(manifest.source.revision, `v${packageManifest.version}`);
   assert.equal(manifest.source.repo, "momoplan/baijimu-connector-codex");
   assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18110/healthz");
   assert.equal(manifest.transport.baseUrl, "http://127.0.0.1:18110");

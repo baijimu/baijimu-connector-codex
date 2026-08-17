@@ -2,10 +2,10 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex Desktop Manager",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "安装 Codex 桌面应用，并管理相互隔离的百积木工作区桌面档案。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "momoplan/baijimu-connector-codex", "revision": "v1.3.2"},
+  "source": {"type": "github", "repo": "momoplan/baijimu-connector-codex", "revision": "v1.3.3"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",

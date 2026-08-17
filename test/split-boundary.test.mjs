@@ -10,10 +10,11 @@ const read = (path) => readFile(join(root, path), "utf8");
 test("desktop manager manifest has no Relay capability surface", async () => {
   const manifest = JSON.parse(await read("connector.json"));
   assert.equal(manifest.id, "com.baijimu.connector.codex");
-  assert.equal(manifest.version, "1.3.0");
+  assert.equal(manifest.version, "1.3.1");
   assert.equal(manifest.source.repo, "momoplan/baijimu-connector-codex");
   assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18110/healthz");
-  for (const field of ["remoteCapabilities", "transport", "methods", "events"]) {
+  assert.equal(manifest.transport.baseUrl, "http://127.0.0.1:18110");
+  for (const field of ["remoteCapabilities", "methods", "events"]) {
     assert.equal(manifest[field], undefined);
   }
   assert.ok(manifest.management.operations.launchCodex);

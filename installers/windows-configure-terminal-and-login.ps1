@@ -5,6 +5,10 @@ $CodexModel = if ($env:CODEX_MODEL) { $env:CODEX_MODEL } else { "gpt-5.6-sol" }
 if ($CodexModel -notmatch '^[A-Za-z0-9._-]+$') {
   throw "CODEX_MODEL 无效：$CodexModel"
 }
+$CodexUiLocale = if ($env:CODEX_UI_LOCALE) { $env:CODEX_UI_LOCALE } else { "zh-CN" }
+if ($CodexUiLocale -notmatch '^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$') {
+  throw "CODEX_UI_LOCALE 无效：$CodexUiLocale"
+}
 $WorkspaceId = if ($env:CODEX_WORKSPACE_ID) { $env:CODEX_WORKSPACE_ID } elseif ($env:BAIJIMU_WORKSPACE_ID) { $env:BAIJIMU_WORKSPACE_ID } else { $env:WORKSPACE_ID }
 $ProjectId = if ($env:CODEX_PROJECT_ID) { $env:CODEX_PROJECT_ID } elseif ($env:BAIJIMU_PROJECT_ID) { $env:BAIJIMU_PROJECT_ID } else { $env:PROJECT_ID }
 $AgentConfigId = if ($env:CODEX_AGENT_CONFIG_ID) { $env:CODEX_AGENT_CONFIG_ID } else { $env:BAIJIMU_AGENT_CONFIG_ID }
@@ -578,6 +582,37 @@ function ConvertTo-CodexConfigContent([string]$existing) {
   return "$managed`n"
 }
 
+function Set-CodexUiLocale([string]$content) {
+  $lines = [System.Collections.Generic.List[string]]::new()
+  $content -split "`r?`n" | ForEach-Object { $lines.Add($_) }
+  $desktopStart = -1
+  for ($index = 0; $index -lt $lines.Count; $index++) {
+    if ($lines[$index].Trim() -eq "[desktop]") {
+      $desktopStart = $index
+      break
+    }
+  }
+  if ($desktopStart -lt 0) {
+    $suffix = if ($content.Trim()) { "`n`n" } else { "" }
+    return ($content.TrimEnd() + $suffix + "[desktop]`nlocaleOverride = `"$CodexUiLocale`"`n")
+  }
+  $desktopEnd = $lines.Count
+  for ($index = $desktopStart + 1; $index -lt $lines.Count; $index++) {
+    if ($lines[$index].Trim() -match '^\[.+\]$') {
+      $desktopEnd = $index
+      break
+    }
+  }
+  for ($index = $desktopStart + 1; $index -lt $desktopEnd; $index++) {
+    if ($lines[$index].Trim() -match '^localeOverride\s*=') {
+      $lines[$index] = ('localeOverride = "{0}"' -f $CodexUiLocale)
+      return ($lines -join "`n")
+    }
+  }
+  $lines.Insert($desktopStart + 1, ('localeOverride = "{0}"' -f $CodexUiLocale))
+  return ($lines -join "`n")
+}
+
 function Backup-IfExists([string]$path) {
   if (Test-Path $path) {
     $suffix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -598,7 +633,8 @@ function Write-CodexConfig {
   } | ConvertTo-Json -Depth 4
   Write-Utf8NoBomFile $authPath ($authContent + "`n")
   $existingConfig = if (Test-Path $configPath) { Get-Content -Raw -Path $configPath } else { "" }
-  Write-Utf8NoBomFile $configPath (ConvertTo-CodexConfigContent $existingConfig)
+  $configContent = ConvertTo-CodexConfigContent $existingConfig
+  Write-Utf8NoBomFile $configPath (Set-CodexUiLocale $configContent)
   Remove-Variable cliToken -ErrorAction SilentlyContinue
   $script:result.codexAuthWritten = $true
   $script:result.configWritten = $true

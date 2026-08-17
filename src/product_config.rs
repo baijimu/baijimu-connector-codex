@@ -8,6 +8,7 @@ const SCHEMA_VERSION: u32 = 2;
 pub(crate) struct ProductConfig {
     schema_version: u32,
     pub(crate) default_model: String,
+    pub(crate) default_ui_locale: String,
     pub(crate) router_provider: String,
     pub(crate) router_base_url: String,
     pub(crate) windows_desktop_protocol: String,
@@ -26,6 +27,13 @@ pub(crate) fn get() -> &'static ProductConfig {
             "Codex 桌面工作区配置版本无效"
         );
         assert!(!config.default_model.trim().is_empty(), "默认模型不能为空");
+        assert!(
+            config
+                .default_ui_locale
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '-'),
+            "默认界面语言必须是有效的语言标签"
+        );
         assert!(
             !config.router_provider.trim().is_empty(),
             "路由 provider 不能为空"
@@ -59,6 +67,7 @@ mod tests {
     fn embedded_product_config_is_valid() {
         let config = get();
         assert_eq!(config.schema_version, SCHEMA_VERSION);
+        assert_eq!(config.default_ui_locale, "zh-CN");
         assert!(config.router_base_url.starts_with("https://"));
         assert_eq!(config.windows_desktop_protocol, "codex");
         assert_eq!(config.windows_desktop_trusted_publishers.len(), 1);

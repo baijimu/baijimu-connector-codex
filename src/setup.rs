@@ -405,6 +405,7 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupCompletion> {
             .env("CODEX_LLM_CREDENTIAL_FILE", &secret_path)
             .env("CODEX_INSTALL_STATE_DIR", &state_dir)
             .env("CODEX_INSTALL_QUIET", "1")
+            .env("CODEX_UI_LOCALE", &product_config.default_ui_locale)
             .env(
                 "CODEX_DESKTOP_PROTOCOL",
                 &product_config.windows_desktop_protocol,

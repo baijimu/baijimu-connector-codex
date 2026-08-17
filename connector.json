@@ -2,10 +2,10 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex 桌面管理器",
-  "version": "1.3.8",
+  "version": "1.3.9",
   "description": "安装 Codex 桌面应用，并管理相互隔离的百积木工作区桌面档案。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "momoplan/baijimu-connector-codex", "revision": "v1.3.8"},
+  "source": {"type": "github", "repo": "momoplan/baijimu-connector-codex", "revision": "v1.3.9"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
@@ -51,7 +51,7 @@
     }
   ],
   "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex 桌面管理器", "defaultView": true},
-  "releaseNotes": ["桌面安装流程彻底移除 Codex CLI 下载、安装、app-server 初始化和 CLI 冒烟验证，改为读取仅包含桌面应用的制品清单。", "默认中文桌面管理器主线同步升级到 1.3.8；CLI 线程与任务接口由 Codex 远程连接器提供，OpenAI 兼容模型接口由 Codex 模型接口服务提供。"],
+  "releaseNotes": ["工作区初始化时默认将 Codex 桌面界面设置为中文（zh-CN），并保留其它用户配置。", "桌面安装流程彻底移除 Codex CLI 下载、安装、app-server 初始化和 CLI 冒烟验证，改为读取仅包含桌面应用的制品清单。"],
   "configSchema": {
     "type": "object",
     "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},

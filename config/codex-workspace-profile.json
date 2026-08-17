@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "defaultModel": "gpt-5.6-sol",
+  "defaultUiLocale": "zh-CN",
   "routerProvider": "baijimu-router",
   "routerBaseUrl": "https://router.baijimu.com/api/claudecode/v1",
   "windowsDesktopProtocol": "codex",

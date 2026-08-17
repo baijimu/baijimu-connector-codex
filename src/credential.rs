@@ -444,6 +444,10 @@ fn write_workspace_config(path: &Path) -> Result<()> {
     document["approval_policy"] = value("on-request");
     document["cli_auth_credentials_store"] = value("file");
     document["forced_login_method"] = value("api");
+    if document.get("desktop").and_then(Item::as_table).is_none() {
+        document["desktop"] = Item::Table(Table::new());
+    }
+    document["desktop"]["localeOverride"] = value(product.default_ui_locale.as_str());
     if document
         .get("model_providers")
         .and_then(Item::as_table)

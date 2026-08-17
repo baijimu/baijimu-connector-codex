@@ -2,10 +2,10 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex Desktop Manager",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "description": "安装 Codex 桌面应用，并管理相互隔离的百积木工作区桌面档案。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "momoplan/baijimu-connector-codex", "revision": "v1.3.1"},
+  "source": {"type": "github", "repo": "momoplan/baijimu-connector-codex", "revision": "v1.3.2"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
@@ -15,6 +15,16 @@
     "healthCheck": {"type": "http", "url": "http://127.0.0.1:18110/healthz", "timeoutSecs": 2, "expectStatus": 200}
   },
   "transport": {"type": "http", "baseUrl": "http://127.0.0.1:18110"},
+  "methods": [
+    {
+      "name": "status",
+      "description": "读取 Codex Desktop Manager 自身的启动与健康状态；不访问 Codex CLI、任务、轮次或事件。",
+      "path": "/healthz",
+      "httpMethod": "GET",
+      "timeoutSecs": 5,
+      "input_schema": {"type": "object", "additionalProperties": false}
+    }
+  ],
   "management": {
     "type": "http",
     "baseUrl": "http://127.0.0.1:18110",
@@ -41,7 +51,7 @@
     }
   ],
   "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex Desktop Manager", "defaultView": true},
-  "releaseNotes": ["Codex 线上应用继承为 Desktop Manager，只负责桌面应用安装、工作区档案与用户显式切换；CLI 和外部接口迁移到独立的 codex-connector 应用。"],
+  "releaseNotes": ["Codex 线上应用继承为 Desktop Manager，只负责桌面应用安装、工作区档案与用户显式切换；唯一公开方法仅返回管理器自身健康状态，CLI 和外部 Codex 接口迁移到独立的 codex-connector 应用。"],
   "configSchema": {
     "type": "object",
     "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},

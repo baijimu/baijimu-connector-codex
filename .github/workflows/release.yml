@@ -299,7 +299,8 @@ jobs:
           if (manifest.version !== expectedVersion) throw new Error("connector package version mismatch");
           if (manifest.id !== "com.baijimu.connector.codex") throw new Error("desktop connector identity mismatch");
           if (manifest.source?.type !== "github" || manifest.source?.repo !== "momoplan/baijimu-connector-codex" || manifest.source?.revision !== `v${expectedVersion}`) throw new Error("connector source identity mismatch");
-          if (manifest.schemaVersion !== "2.0" || manifest.runtime?.type !== "process" || manifest.runtime?.processOwnership !== "host" || manifest.transport?.type !== "http" || manifest.methods !== undefined || manifest.events !== undefined || manifest.ui?.type !== "embedded") throw new Error("desktop manager package contract is invalid");
+          const methods = manifest.methods?.map(({ name, path, httpMethod }) => ({ name, path, httpMethod }));
+          if (manifest.schemaVersion !== "2.0" || manifest.runtime?.type !== "process" || manifest.runtime?.processOwnership !== "host" || manifest.transport?.type !== "http" || JSON.stringify(methods) !== JSON.stringify([{ name: "status", path: "/healthz", httpMethod: "GET" }]) || manifest.remoteCapabilities !== undefined || manifest.events !== undefined || manifest.ui?.type !== "embedded") throw new Error("desktop manager package contract is invalid");
           const entry = path.resolve(packageDir, manifest.ui.entry);
           const uiRoot = path.resolve(packageDir, "ui");
           if (!entry.startsWith(uiRoot + path.sep) || !fs.statSync(entry).isFile()) throw new Error("connector UI entry is missing");

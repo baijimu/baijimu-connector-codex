@@ -44,3 +44,24 @@ test("desktop manager upgrades its inherited metadata in place and omits redunda
   assert.doesNotMatch(html, /百积木接入/);
   assert.doesNotMatch(html, /当前生效/);
 });
+
+test("Windows desktop discovery follows the codex protocol instead of package names", async () => {
+  const [desktop, installer] = await Promise.all([
+    read("src/desktop.rs"),
+    read("installers/windows-configure-terminal-and-login.ps1"),
+  ]);
+  const desktopPreamble = desktop.slice(
+    desktop.indexOf("const POWERSHELL_PREAMBLE"),
+    desktop.indexOf("const STOP_SCRIPT"),
+  );
+  for (const source of [desktopPreamble, installer]) {
+    assert.match(source, /local-name\(\)='Protocol'/);
+    assert.match(source, /CODEX_DESKTOP_PROTOCOL/);
+    assert.match(source, /CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON/);
+    assert.match(source, /Identity\.Publisher/);
+    assert.match(source, /Windows\.FullTrustApplication/);
+    assert.doesNotMatch(source, /OpenAI\.ChatGPT-Desktop/);
+    assert.doesNotMatch(source, /Get-AppxPackage -Name/);
+  }
+  assert.match(desktopPreamble, /System\.Text\.UTF8Encoding\(\$false\)/);
+});

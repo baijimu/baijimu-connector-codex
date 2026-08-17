@@ -47,13 +47,76 @@ mod platform {
         minimum_version: String,
     }
 
-    const STOP_SCRIPT: &str = r#"
+    const POWERSHELL_PREAMBLE: &str = r#"
 $ErrorActionPreference = 'Stop'
-$packages = @('OpenAI.Codex', 'OpenAI.ChatGPT') | ForEach-Object { Get-AppxPackage -Name $_ -ErrorAction SilentlyContinue } | Where-Object { $_ }
-if (-not $packages) {
-  $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'OpenAI.Codex*' -or ($_.Name -like 'OpenAI.ChatGPT*' -and $_.Name -notlike 'OpenAI.ChatGPT-Desktop*') })
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = [Console]::OutputEncoding
+$codexDesktopProtocol = $env:CODEX_DESKTOP_PROTOCOL
+if ([string]::IsNullOrWhiteSpace($codexDesktopProtocol)) { throw '缺少 Windows 桌面协议配置' }
+try {
+  $codexDesktopTrustedPublishers = @($env:CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON | ConvertFrom-Json -ErrorAction Stop)
+} catch {
+  throw 'Windows 桌面可信 Publisher 配置无效'
 }
-$roots = @($packages | ForEach-Object { $_.InstallLocation } | Where-Object { $_ })
+if ($codexDesktopTrustedPublishers.Count -eq 0) { throw 'Windows 桌面可信 Publisher 配置为空' }
+
+function Get-CodexDesktopEntries {
+  $startApps = @(Get-StartApps -ErrorAction SilentlyContinue)
+  $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.InstallLocation })
+  $entries = @($packages | ForEach-Object {
+    $package = $_
+    try {
+      $manifestPath = Join-Path $package.InstallLocation 'AppxManifest.xml'
+      if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return }
+      [xml]$manifest = Get-Content -Raw -LiteralPath $manifestPath
+      $publisher = [string]$manifest.Package.Identity.Publisher
+      if ($codexDesktopTrustedPublishers -notcontains $publisher) { return }
+      $startApp = @($startApps | Where-Object { $_.AppID -like "$($package.PackageFamilyName)!*" } | Select-Object -First 1)
+      $applicationId = if ($startApp.Count -gt 0) {
+        ([string]$startApp[0].AppID).Substring(([string]$startApp[0].AppID).LastIndexOf('!') + 1)
+      } else {
+        $null
+      }
+      $applications = @($manifest.Package.Applications.Application | Where-Object {
+        if (-not $_.Executable) { return $false }
+        $entryPoint = [string]$_.EntryPoint
+        $isFullTrust = [string]::IsNullOrWhiteSpace($entryPoint) -or $entryPoint -eq 'Windows.FullTrustApplication'
+        $declaresCodexProtocol = @($_.SelectNodes(".//*[local-name()='Protocol']") | Where-Object { ([string]$_.Name) -eq $codexDesktopProtocol }).Count -gt 0
+        return $isFullTrust -and $declaresCodexProtocol -and (-not $applicationId -or ([string]$_.Id) -eq $applicationId)
+      })
+      if ($applications.Count -eq 0 -and $applicationId) { return }
+      @($applications | Select-Object -First 1) | ForEach-Object {
+        $relativeExecutable = [string]$_.Executable
+        if ([System.IO.Path]::IsPathRooted($relativeExecutable)) { return }
+        $packageRoot = [System.IO.Path]::GetFullPath($package.InstallLocation).TrimEnd('\') + '\'
+        $executable = [System.IO.Path]::GetFullPath((Join-Path $packageRoot $relativeExecutable))
+        if (-not $executable.StartsWith($packageRoot, [System.StringComparison]::OrdinalIgnoreCase)) { return }
+        if ([System.IO.Path]::GetExtension($executable) -ne '.exe' -or -not (Test-Path -LiteralPath $executable -PathType Leaf)) { return }
+        [pscustomobject]@{
+          package = $package
+          packageRoot = $packageRoot
+          applicationId = [string]$_.Id
+          appUserModelId = if ($startApp.Count -gt 0) { [string]$startApp[0].AppID } else { $null }
+          executable = $executable
+        }
+      }
+    } catch {
+      return
+    }
+  })
+  @($entries | Sort-Object @{ Expression = { if ($_.appUserModelId) { 0 } else { 1 } } }, @{ Expression = { [string]$_.appUserModelId } }, @{ Expression = { [string]$_.package.PackageFullName } })
+}
+
+function New-CodexDesktopPackageNotFoundMessage {
+  $visiblePackageCount = @(Get-AppxPackage -ErrorAction SilentlyContinue).Count
+  $startAppCount = @(Get-StartApps -ErrorAction SilentlyContinue).Count
+  return "当前 Windows 账户未发现可信 Publisher 签名、声明 $codexDesktopProtocol 协议且具有 FullTrust 可执行入口的桌面应用包（可见 AppX 包：$visiblePackageCount，开始菜单应用：$startAppCount）。请确认百积木与 ChatGPT/Codex 在同一 Windows 账户下运行，然后重试安装"
+}
+"#;
+
+    const STOP_SCRIPT: &str = r#"
+$entries = @(Get-CodexDesktopEntries)
+$roots = @($entries | ForEach-Object { $_.packageRoot } | Where-Object { $_ })
 $targets = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
   try {
     $path = $_.Path
@@ -75,58 +138,10 @@ if ($wasRunning) {
 "#;
 
     const LAUNCH_AND_VERIFY_SCRIPT: &str = r#"
-$ErrorActionPreference = 'Stop'
 $codexHome = $env:CODEX_HOME
 if (-not $codexHome) { throw '隔离启动桌面应用时必须显式提供 CODEX_HOME' }
-$packages = @('OpenAI.Codex', 'OpenAI.ChatGPT') | ForEach-Object { Get-AppxPackage -Name $_ -ErrorAction SilentlyContinue } | Where-Object { $_ }
-if (-not $packages) {
-  $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'OpenAI.Codex*' -or ($_.Name -like 'OpenAI.ChatGPT*' -and $_.Name -notlike 'OpenAI.ChatGPT-Desktop*') })
-}
-if (-not $packages) { throw '当前用户尚未安装 ChatGPT/Codex 桌面应用包' }
-
-$startApps = @(Get-StartApps -ErrorAction SilentlyContinue)
-$entry = @($packages | ForEach-Object {
-  $package = $_
-  if (-not $package.InstallLocation) { return }
-  $manifestPath = Join-Path $package.InstallLocation 'AppxManifest.xml'
-  if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return }
-  [xml]$manifest = Get-Content -LiteralPath $manifestPath
-  $startApp = @($startApps | Where-Object { $_.AppID -like "$($package.PackageFamilyName)!*" } | Select-Object -First 1)
-  $applicationId = if ($startApp.Count -gt 0) {
-    ([string]$startApp[0].AppID).Substring(([string]$startApp[0].AppID).LastIndexOf('!') + 1)
-  } else {
-    $null
-  }
-  $applications = @($manifest.Package.Applications.Application | Where-Object {
-    if (-not $_.Executable) { return $false }
-    $entryPoint = [string]$_.EntryPoint
-    $isFullTrust = [string]::IsNullOrWhiteSpace($entryPoint) -or $entryPoint -eq 'Windows.FullTrustApplication'
-    return $isFullTrust -and (-not $applicationId -or ([string]$_.Id) -eq $applicationId)
-  })
-  if ($applications.Count -eq 0 -and $applicationId) { return }
-  @($applications | Select-Object -First 1) | ForEach-Object {
-    $relativeExecutable = [string]$_.Executable
-    if ([System.IO.Path]::IsPathRooted($relativeExecutable)) {
-      throw "ChatGPT/Codex 应用清单包含绝对可执行文件路径：$relativeExecutable"
-    }
-    $packageRoot = [System.IO.Path]::GetFullPath($package.InstallLocation).TrimEnd('\') + '\'
-    $executable = [System.IO.Path]::GetFullPath((Join-Path $packageRoot $relativeExecutable))
-    if (-not $executable.StartsWith($packageRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-      throw "ChatGPT/Codex 应用清单入口超出包目录：$relativeExecutable"
-    }
-    if ([System.IO.Path]::GetExtension($executable) -ne '.exe' -or -not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-      throw "ChatGPT/Codex 应用清单入口不可用：$executable"
-    }
-    [pscustomobject]@{
-      package = $package
-      packageRoot = $packageRoot
-      applicationId = [string]$_.Id
-      appUserModelId = if ($startApp.Count -gt 0) { [string]$startApp[0].AppID } else { $null }
-      executable = $executable
-    }
-  }
-} | Select-Object -First 1)
-if (-not $entry) { throw 'ChatGPT/Codex 桌面应用包中没有与开始菜单匹配的 FullTrust 可执行入口' }
+$entry = @(Get-CodexDesktopEntries | Select-Object -First 1)
+if ($entry.Count -eq 0) { throw (New-CodexDesktopPackageNotFoundMessage) }
 
 $selectedRoot = $entry[0].packageRoot
 $existing = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
@@ -210,14 +225,10 @@ if ($visible.Count -eq 0) { throw 'ChatGPT/Codex 桌面应用已启动进程，�
 "#;
 
     const COMPATIBILITY_SCRIPT: &str = r#"
-$ErrorActionPreference = 'Stop'
-$packages = @('OpenAI.Codex', 'OpenAI.ChatGPT') | ForEach-Object { Get-AppxPackage -Name $_ -ErrorAction SilentlyContinue } | Where-Object { $_ }
-if (-not $packages) {
-  $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'OpenAI.Codex*' -or ($_.Name -like 'OpenAI.ChatGPT*' -and $_.Name -notlike 'OpenAI.ChatGPT-Desktop*') })
-}
-$package = @($packages | Where-Object { $_.InstallLocation } | Select-Object -First 1)
-if ($package.Count -eq 0) { throw '当前用户尚未安装 ChatGPT/Codex 桌面应用包' }
-$manifestPath = Join-Path $package[0].InstallLocation 'AppxManifest.xml'
+$entry = @(Get-CodexDesktopEntries | Select-Object -First 1)
+if ($entry.Count -eq 0) { throw (New-CodexDesktopPackageNotFoundMessage) }
+$package = $entry[0].package
+$manifestPath = Join-Path $package.InstallLocation 'AppxManifest.xml'
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'ChatGPT/Codex 应用包缺少 AppxManifest.xml' }
 [xml]$manifest = Get-Content -LiteralPath $manifestPath
 $minimumVersions = @($manifest.Package.Dependencies.TargetDeviceFamily | ForEach-Object { [string]$_.MinVersion } | Where-Object { $_ })
@@ -267,6 +278,20 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
     fn run_powershell(script: &str, codex_home: Option<&Path>) -> Result<Vec<u8>> {
         let mut command = Command::new("powershell.exe");
         crate::child_process::isolate_from_connector_environment(&mut command);
+        if let Some(codex_home) = codex_home {
+            command.env("CODEX_HOME", codex_home);
+        }
+        let product_config = crate::product_config::get();
+        let trusted_publishers =
+            serde_json::to_string(&product_config.windows_desktop_trusted_publishers)
+                .context("序列化 Windows 桌面可信 Publisher 配置失败")?;
+        command
+            .env(
+                "CODEX_DESKTOP_PROTOCOL",
+                &product_config.windows_desktop_protocol,
+            )
+            .env("CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON", trusted_publishers);
+        let complete_script = format!("{POWERSHELL_PREAMBLE}\n{script}");
         command.args([
             "-NoLogo",
             "-NoProfile",
@@ -274,11 +299,8 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
-            script,
+            &complete_script,
         ]);
-        if let Some(codex_home) = codex_home {
-            command.env("CODEX_HOME", codex_home);
-        }
         let output = command
             .output()
             .context("启动 PowerShell 管理 ChatGPT/Codex 桌面进程失败")?;
@@ -300,6 +322,7 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
         #[test]
         fn desktop_management_scripts_parse_in_windows_powershell() {
             for script in [STOP_SCRIPT, COMPATIBILITY_SCRIPT, LAUNCH_AND_VERIFY_SCRIPT] {
+                let complete_script = format!("{POWERSHELL_PREAMBLE}\n{script}");
                 let mut child = Command::new("powershell.exe")
                     .args([
                         "-NoLogo",
@@ -317,7 +340,7 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
                     .stdin
                     .take()
                     .unwrap()
-                    .write_all(script.as_bytes())
+                    .write_all(complete_script.as_bytes())
                     .unwrap();
                 let output = child.wait_with_output().unwrap();
                 assert!(
@@ -333,6 +356,76 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
             assert!(LAUNCH_AND_VERIFY_SCRIPT
                 .contains("Start-Process -FilePath $entry[0].executable -ErrorAction Stop"));
             assert!(!LAUNCH_AND_VERIFY_SCRIPT.contains("-WorkingDirectory"));
+        }
+
+        #[test]
+        fn package_discovery_is_capability_based_and_errors_are_utf8() {
+            assert!(POWERSHELL_PREAMBLE.contains("CODEX_DESKTOP_PROTOCOL"));
+            assert!(POWERSHELL_PREAMBLE.contains("CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON"));
+            assert!(POWERSHELL_PREAMBLE.contains("Windows.FullTrustApplication"));
+            assert!(!POWERSHELL_PREAMBLE.contains("OpenAI.ChatGPT-Desktop"));
+            assert!(!POWERSHELL_PREAMBLE.contains("Get-AppxPackage -Name"));
+
+            let error = run_powershell("throw '当前账户未发现桌面应用包'", None).unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("当前账户未发现桌面应用包"), "{message}");
+            assert!(!message.contains('\u{fffd}'), "{message}");
+        }
+
+        #[test]
+        fn package_discovery_accepts_a_renamed_package_with_the_codex_protocol() {
+            let root = std::env::temp_dir().join(format!(
+                "codex-desktop-package-discovery-{}",
+                std::process::id()
+            ));
+            let app_dir = root.join("app");
+            std::fs::create_dir_all(&app_dir).unwrap();
+            std::fs::write(app_dir.join("Desktop.exe"), []).unwrap();
+            std::fs::write(
+                root.join("AppxManifest.xml"),
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10">
+  <Identity Name="Example.RenamedDesktop" Version="1.0.0.0" Publisher="CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B" />
+  <Applications>
+    <Application Id="Desktop" Executable="app\Desktop.exe" EntryPoint="Windows.FullTrustApplication">
+      <Extensions><uap:Extension Category="windows.protocol"><uap:Protocol Name="codex" /></uap:Extension></Extensions>
+    </Application>
+  </Applications>
+</Package>"#,
+            )
+            .unwrap();
+            let script = r#"
+function Get-AppxPackage {
+  [pscustomobject]@{
+    InstallLocation = $env:CODEX_HOME
+    PackageFamilyName = 'Example.RenamedDesktop_family'
+    PackageFullName = 'Example.RenamedDesktop_1.0.0.0_x64__family'
+  }
+}
+function Get-StartApps {
+  [pscustomobject]@{ Name = 'Renamed desktop'; AppID = 'Example.RenamedDesktop_family!Desktop' }
+}
+$entry = @(Get-CodexDesktopEntries)
+if ($entry.Count -ne 1) { throw "expected one entry, got $($entry.Count)" }
+[pscustomobject]@{
+  packageFullName = [string]$entry[0].package.PackageFullName
+  applicationId = [string]$entry[0].applicationId
+  appUserModelId = [string]$entry[0].appUserModelId
+} | ConvertTo-Json -Compress
+"#;
+
+            let output = run_powershell(script, Some(&root)).unwrap();
+            let value: serde_json::Value = crate::json_compat::from_slice(&output).unwrap();
+            assert_eq!(
+                value["packageFullName"],
+                "Example.RenamedDesktop_1.0.0.0_x64__family"
+            );
+            assert_eq!(value["applicationId"], "Desktop");
+            assert_eq!(
+                value["appUserModelId"],
+                "Example.RenamedDesktop_family!Desktop"
+            );
+            std::fs::remove_dir_all(root).unwrap();
         }
     }
 }

@@ -1,6 +1,10 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "defaultModel": "gpt-5.6-sol",
   "routerProvider": "baijimu-router",
-  "routerBaseUrl": "https://router.baijimu.com/api/claudecode/v1"
+  "routerBaseUrl": "https://router.baijimu.com/api/claudecode/v1",
+  "windowsDesktopProtocol": "codex",
+  "windowsDesktopTrustedPublishers": [
+    "CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B"
+  ]
 }

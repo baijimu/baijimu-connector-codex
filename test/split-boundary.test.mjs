@@ -64,6 +64,10 @@ test("Windows desktop discovery follows the codex protocol instead of package na
     desktop.indexOf("const POWERSHELL_PREAMBLE"),
     desktop.indexOf("const STOP_SCRIPT"),
   );
+  const desktopLaunch = desktop.slice(
+    desktop.indexOf("const LAUNCH_AND_VERIFY_SCRIPT"),
+    desktop.indexOf("const COMPATIBILITY_SCRIPT"),
+  );
   for (const source of [desktopPreamble, installer]) {
     assert.match(source, /local-name\(\)='Protocol'/);
     assert.match(source, /CODEX_DESKTOP_PROTOCOL/);
@@ -75,4 +79,12 @@ test("Windows desktop discovery follows the codex protocol instead of package na
     assert.doesNotMatch(source, /Get-AppxPackage -Name/);
   }
   assert.match(desktopPreamble, /System\.Text\.UTF8Encoding\(\$false\)/);
+  assert.match(desktopPreamble, /IApplicationActivationManager/);
+  assert.match(desktopPreamble, /ActivateApplication/);
+  assert.match(desktopPreamble, /DoNotExpandEnvironmentNames/);
+  assert.match(desktopPreamble, /GetValueKind\('CODEX_HOME'\)/);
+  assert.match(desktopPreamble, /DeleteValue\('CODEX_HOME', \$false\)/);
+  assert.match(desktopPreamble, /BroadcastEnvironmentChange/);
+  assert.match(desktopLaunch, /Invoke-CodexDesktopActivation/);
+  assert.doesNotMatch(desktopLaunch, /Start-Process/);
 });

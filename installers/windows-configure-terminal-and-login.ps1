@@ -1173,10 +1173,12 @@ try {
   Ensure-CodexApp
   Write-CodexConfig
   Test-Router
-  $codexExe = Resolve-CodexCli
-  Invoke-AppServerProfileSetup $codexExe
-  Test-CodexCli $codexExe
-  Set-InstallStep 10 "completed" "安装配置已完成，桌面启动由 Connector 按档案状态处理"
+  if ($env:CODEX_DESKTOP_ONLY -ne "1") {
+    $codexExe = Resolve-CodexCli
+    Invoke-AppServerProfileSetup $codexExe
+    Test-CodexCli $codexExe
+  }
+  Set-InstallStep 10 "completed" "安装配置已完成，桌面启动由桌面管理器按档案状态处理"
 } catch {
   Add-Error $_.Exception.Message
   if ($script:CurrentStepIndex -gt 0) {

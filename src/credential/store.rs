@@ -2,12 +2,12 @@ use super::*;
 
 pub(super) fn load_metadata() -> Result<CredentialMetadata> {
     let path = metadata_path();
-    let source = if path.exists() {
-        Some(path.clone())
+    let (source, remove_after_import) = if path.exists() {
+        (Some(path.clone()), false)
     } else if legacy_metadata_path().exists() {
-        Some(legacy_metadata_path())
+        (Some(legacy_metadata_path()), true)
     } else {
-        None
+        (None, false)
     };
     let mut metadata = if let Some(source) = source.as_ref() {
         let content = fs::read(source)
@@ -53,7 +53,8 @@ pub(super) fn load_metadata() -> Result<CredentialMetadata> {
             commit_default_home_ownership(profile)?;
         }
     }
-    if let Some(source) = source.filter(|source| source != &path) {
+    if remove_after_import {
+        let source = source.expect("legacy source exists when cleanup is requested");
         fs::remove_file(&source)
             .with_context(|| format!("清理旧版元数据失败: {}", source.display()))?;
     }
@@ -78,7 +79,7 @@ pub(super) fn legacy_metadata_path() -> PathBuf {
 }
 pub(super) fn connector_data_dir() -> PathBuf {
     std::env::var_os("BAIJIMU_CONNECTOR_DATA_DIR")
-        .or_else(|| std::env::var_os("CODEX_CONNECTOR_HOME"))
+        .or_else(|| std::env::var_os("CODEX_DESKTOP_HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| home_dir().join(".baijimu-connector-codex"))
 }

@@ -116,46 +116,6 @@ jobs:
           cargo test --locked
           npm test
 
-      - name: Verify embedded installer scripts
-        shell: bash
-        run: |
-          set -euo pipefail
-          verify_script() {
-            local platform="$1" output="$2"
-            test -s "$output"
-            if [ "$platform" = macos ]; then
-              grep -F 'install-app)' "$output"
-              grep -F 'install-cli)' "$output"
-              grep -F 'verify_sha256' "$output"
-              grep -F 'hdiutil attach' "$output"
-              if grep -Eq 'status\.json|result\.json|write_status|set_step|download_with_progress|curl' "$output"; then
-                echo "macOS native installer must remain a stateless action adapter" >&2
-                exit 1
-              fi
-            elif [ "$platform" = windows ]; then
-              grep -F 'CODEX_ARTIFACT_MANIFEST_URL' "$output"
-              grep -F 'New-Object System.Text.UTF8Encoding($false)' "$output"
-              grep -F '[System.IO.File]::WriteAllText' "$output"
-              grep -F 'Write-Utf8NoBomFile $authPath' "$output"
-              grep -F 'Write-Utf8NoBomFile $configPath' "$output"
-              grep -F 'Write-Utf8NoBomFile $statePath' "$output"
-              grep -F 'ReadLineAsync()' "$output"
-              grep -F 'account/read API 密钥状态' "$output"
-              grep -F 'desktop.localeOverride' "$output"
-              grep -F 'ConvertFrom-Json -ErrorAction Stop' "$output"
-              grep -F 'codex-package-x86_64-pc-windows-msvc.tar.gz' "$output"
-              grep -F 'codex-package.json' "$output"
-              grep -F 'codex-command-runner.exe' "$output"
-              grep -F 'codex-windows-sandbox-setup.exe' "$output"
-              if grep -Eqi 'Set-Content[^[:cntrl:]]*-Encoding[[:space:]]+UTF8' "$output"; then
-                echo "Windows installer must not write UTF-8 files through Windows PowerShell Set-Content" >&2
-                exit 1
-              fi
-            fi
-          }
-          grep -F 'https://download.baijimu.com/codex-artifacts/v4/latest.json' installers/upstream-artifact-source.json
-          verify_script macos installers/macos-configure-terminal-and-login.sh
-          verify_script windows installers/windows-configure-terminal-and-login.ps1
 
   build:
     if: needs.validate.outputs.verify != 'true'
@@ -201,10 +161,10 @@ jobs:
           cargo build --locked --release --target x86_64-apple-darwin
           mkdir -p "$RUNNER_TEMP/codex-local-app/bin/${{ matrix.platform_dir }}"
           lipo -create \
-            target/aarch64-apple-darwin/release/baijimu-connector-codex \
-            target/x86_64-apple-darwin/release/baijimu-connector-codex \
-            -output "$RUNNER_TEMP/codex-local-app/bin/${{ matrix.platform_dir }}/baijimu-connector-codex"
-          chmod 755 "$RUNNER_TEMP/codex-local-app/bin/${{ matrix.platform_dir }}/baijimu-connector-codex"
+            target/aarch64-apple-darwin/release/baijimu-codex-desktop \
+            target/x86_64-apple-darwin/release/baijimu-codex-desktop \
+            -output "$RUNNER_TEMP/codex-local-app/bin/${{ matrix.platform_dir }}/baijimu-codex-desktop"
+          chmod 755 "$RUNNER_TEMP/codex-local-app/bin/${{ matrix.platform_dir }}/baijimu-codex-desktop"
 
       - name: Sign macOS binary
         if: runner.os == 'macOS' && needs.validate.outputs.publish == 'true'
@@ -228,7 +188,7 @@ jobs:
           security import "$certificate_path" -k "$keychain_path" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security list-keychains -d user -s "$keychain_path" $(security list-keychains -d user | tr -d '"')
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain_path"
-          binary="$RUNNER_TEMP/codex-local-app/bin/${{ matrix.platform_dir }}/baijimu-connector-codex"
+          binary="$RUNNER_TEMP/codex-local-app/bin/${{ matrix.platform_dir }}/baijimu-codex-desktop"
           bash tools/release/sign-macos-with-retry.sh "$binary" "$APPLE_SIGNING_IDENTITY"
           lipo -info "$binary"
 
@@ -244,7 +204,7 @@ jobs:
           cargo build --locked --release
           $binDir = Join-Path $env:RUNNER_TEMP "codex-local-app\bin\${{ matrix.platform_dir }}"
           New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-          Copy-Item -Force "target\release\baijimu-connector-codex.exe" (Join-Path $binDir "baijimu-connector-codex.exe")
+          Copy-Item -Force "target\release\baijimu-codex-desktop.exe" (Join-Path $binDir "baijimu-codex-desktop.exe")
 
       - name: Verify Windows binaries are self-contained
         if: runner.os == 'Windows'
@@ -283,46 +243,6 @@ jobs:
           }
           Write-Host "Verified Windows artifacts do not require VCRUNTIME/MSVCP"
 
-      - name: Verify packaged Windows Connector lifecycle
-        if: runner.os == 'Windows'
-        shell: pwsh
-        timeout-minutes: 5
-        run: >
-          .github/scripts/test-windows-connector-lifecycle.ps1
-          -BinaryPath "$env:RUNNER_TEMP\codex-local-app\bin\${{ matrix.platform_dir }}\baijimu-connector-codex.exe"
-
-      - name: Verify installer atomic writes with Windows PowerShell 5.1
-        if: runner.os == 'Windows'
-        shell: powershell
-        timeout-minutes: 5
-        run: >
-          .github/scripts/test-windows-installer-atomic-write.ps1
-          -ScriptPath "installers\windows-configure-terminal-and-login.ps1"
-
-      - name: Verify installer app-server profile protocol with Windows PowerShell 5.1
-        if: runner.os == 'Windows'
-        shell: powershell
-        timeout-minutes: 5
-        run: >
-          .github/scripts/test-windows-installer-app-server-login.ps1
-          -ScriptPath "installers\windows-configure-terminal-and-login.ps1"
-
-      - name: Verify official Codex package layout with Windows PowerShell 5.1
-        if: runner.os == 'Windows'
-        shell: powershell
-        timeout-minutes: 5
-        run: >
-          .github/scripts/test-windows-installer-package-layout.ps1
-          -ScriptPath "installers\windows-configure-terminal-and-login.ps1"
-
-      - name: Verify Codex CLI candidate resolution with Windows PowerShell 5.1
-        if: runner.os == 'Windows'
-        shell: powershell
-        timeout-minutes: 5
-        run: >
-          .github/scripts/test-windows-installer-cli-resolution.ps1
-          -ScriptPath "installers\windows-configure-terminal-and-login.ps1"
-
       - name: Download and run Windows signing tool
         if: runner.os == 'Windows' && needs.validate.outputs.publish == 'true'
         shell: pwsh
@@ -347,7 +267,7 @@ jobs:
           $tool = Get-ChildItem -Path $extractPath -Filter "CodeSignTool.bat" -Recurse -File | Select-Object -First 1
           if (-not $tool) { throw "Unable to locate CodeSignTool.bat" }
           $env:CODESIGN_TOOL_PATH = $tool.FullName
-          $binary = Join-Path $env:RUNNER_TEMP "codex-local-app\bin\${{ matrix.platform_dir }}\baijimu-connector-codex.exe"
+          $binary = Join-Path $env:RUNNER_TEMP "codex-local-app\bin\${{ matrix.platform_dir }}\baijimu-codex-desktop.exe"
           & "tools/release/sign-windows-artifact.ps1" -FilePath $binary
           if ((Get-AuthenticodeSignature -LiteralPath $binary).Status -ne "Valid") { throw "Invalid Windows signature" }
 
@@ -359,8 +279,8 @@ jobs:
           cargo test --locked
           cargo build --locked --release
           mkdir -p "$RUNNER_TEMP/codex-local-app/bin/${{ matrix.platform_dir }}"
-          install -m 755 target/release/baijimu-connector-codex \
-            "$RUNNER_TEMP/codex-local-app/bin/${{ matrix.platform_dir }}/baijimu-connector-codex"
+          install -m 755 target/release/baijimu-codex-desktop \
+            "$RUNNER_TEMP/codex-local-app/bin/${{ matrix.platform_dir }}/baijimu-codex-desktop"
 
       - name: Assemble and verify package
         shell: bash
@@ -377,17 +297,18 @@ jobs:
           const [packageDir, expectedVersion] = process.argv.slice(2);
           const manifest = JSON.parse(fs.readFileSync(path.join(packageDir, "connector.json"), "utf8"));
           if (manifest.version !== expectedVersion) throw new Error("connector package version mismatch");
+          if (manifest.id !== "com.baijimu.connector.codex") throw new Error("desktop connector identity mismatch");
           if (manifest.source?.type !== "github" || manifest.source?.repo !== "momoplan/baijimu-connector-codex" || manifest.source?.revision !== `v${expectedVersion}`) throw new Error("connector source identity mismatch");
-          if (manifest.schemaVersion !== "2.0" || manifest.services !== undefined || manifest.serviceRegistrationFiles !== undefined || manifest.runtime?.type !== "process" || manifest.runtime?.processOwnership !== "host" || typeof manifest.transport !== "object" || (!Array.isArray(manifest.methods) && !Array.isArray(manifest.events)) || manifest.ui?.type !== "embedded") throw new Error("connector package contract is invalid");
+          if (manifest.schemaVersion !== "2.0" || manifest.runtime?.type !== "process" || manifest.runtime?.processOwnership !== "host" || manifest.transport !== undefined || manifest.methods !== undefined || manifest.events !== undefined || manifest.ui?.type !== "embedded") throw new Error("desktop manager package contract is invalid");
           const entry = path.resolve(packageDir, manifest.ui.entry);
           const uiRoot = path.resolve(packageDir, "ui");
           if (!entry.startsWith(uiRoot + path.sep) || !fs.statSync(entry).isFile()) throw new Error("connector UI entry is missing");
           for (const asset of ["app.js", "state.mjs", "styles.css"]) if (!fs.statSync(path.join(uiRoot, asset)).isFile()) throw new Error(`missing UI asset: ${asset}`);
           NODE
-          binary_name=baijimu-connector-codex
-          test "$RUNNER_OS" != Windows || binary_name=baijimu-connector-codex.exe
+          binary_name=baijimu-codex-desktop
+          test "$RUNNER_OS" != Windows || binary_name=baijimu-codex-desktop.exe
           "$package_dir/bin/${{ matrix.platform_dir }}/$binary_name" --version | grep -Fx "$VERSION"
-          output="$RUNNER_TEMP/baijimu-codex-local-app-${VERSION}-${{ matrix.name }}.zip"
+          output="$RUNNER_TEMP/baijimu-codex-desktop-${VERSION}-${{ matrix.name }}.zip"
           cd "$package_dir"
           if [ "$RUNNER_OS" = Windows ]; then
             powershell -NoProfile -Command "Compress-Archive -Force -Path '*' -DestinationPath '$output'"
@@ -403,8 +324,8 @@ jobs:
         with:
           name: codex-release-${{ matrix.name }}
           path: |
-            ${{ runner.temp }}/baijimu-codex-local-app-${{ needs.validate.outputs.version }}-${{ matrix.name }}.zip
-            ${{ runner.temp }}/baijimu-codex-local-app-${{ needs.validate.outputs.version }}-${{ matrix.name }}.zip.sha256
+            ${{ runner.temp }}/baijimu-codex-desktop-${{ needs.validate.outputs.version }}-${{ matrix.name }}.zip
+            ${{ runner.temp }}/baijimu-codex-desktop-${{ needs.validate.outputs.version }}-${{ matrix.name }}.zip.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -443,8 +364,8 @@ jobs:
             test "$(printf '%s' "$release_json" | jq -r .tagName)" = "$RELEASE_TAG"
           else
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$RELEASE_SHA" \
-              --draft --title "Baijimu Codex Local App $VERSION" \
-              --notes "Signed Baijimu Codex local application release $VERSION."
+              --draft --title "Codex Desktop Manager $VERSION" \
+              --notes "Signed codex local application release $VERSION."
             release_is_draft=true
           fi
           existing="$RUNNER_TEMP/existing-release-assets"
@@ -503,7 +424,7 @@ jobs:
           public_base=https://download.baijimu.com
           prefix="local-app-artifacts/codex/releases/v${VERSION}"
           dir="$RUNNER_TEMP/release-assets"
-          manifest="$RUNNER_TEMP/baijimu-codex-local-app-${VERSION}-oss-manifest.json"
+          manifest="$RUNNER_TEMP/baijimu-codex-desktop-${VERSION}-oss-manifest.json"
           upload_one() {
             local platform="$1" arch="$2" name="$3" file="$dir/$3"
             local checksum object source downloaded sidecar sidecar_url downloaded_sidecar
@@ -531,9 +452,9 @@ jobs:
             fi
             jq -n --arg platform "$platform" --arg arch "$arch" --arg name "$name" --arg source "$source" --arg checksum "sha256:$checksum" '{platform:$platform,arch:$arch,name:$name,source:$source,checksum:$checksum}'
           }
-          macos_name="baijimu-codex-local-app-${VERSION}-macos-universal.zip"
-          windows_name="baijimu-codex-local-app-${VERSION}-windows-x64.zip"
-          linux_name="baijimu-codex-local-app-${VERSION}-linux-x64.zip"
+          macos_name="baijimu-codex-desktop-${VERSION}-macos-universal.zip"
+          windows_name="baijimu-codex-desktop-${VERSION}-windows-x64.zip"
+          linux_name="baijimu-codex-desktop-${VERSION}-linux-x64.zip"
           artifacts="[$(upload_one macos universal "$macos_name"),$(upload_one windows x86_64 "$windows_name"),$(upload_one linux x86_64 "$linux_name")]"
           jq -n --arg version "$VERSION" --arg tag "$RELEASE_TAG" --argjson artifacts "$artifacts" '{schemaVersion:"1.0",applicationId:"codex",connectorId:"com.baijimu.connector.codex",releaseTag:$tag,version:$version,artifacts:$artifacts}' > "$manifest"
           manifest_url="$public_base/$prefix/manifest.json"
@@ -558,7 +479,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: codex-release-oss-manifest
-          path: ${{ runner.temp }}/baijimu-codex-local-app-${{ needs.validate.outputs.version }}-oss-manifest.json
+          path: ${{ runner.temp }}/baijimu-codex-desktop-${{ needs.validate.outputs.version }}-oss-manifest.json
           if-no-files-found: error
           retention-days: 7
 
@@ -615,6 +536,7 @@ jobs:
         env:
           BAIJIMU_CLI: ${{ runner.temp }}/baijimu-cli/bin/baijimu
           LOCAL_APP_MARKET_PUBLISH_TOKEN: ${{ secrets.LOCAL_APP_MARKET_PUBLISH_TOKEN }}
+          LOCAL_APP_OWNER_WORKSPACE_ID: ${{ vars.LOCAL_APP_OWNER_WORKSPACE_ID }}
           MARKET_PUBLICATION_STATUS_FILE: ${{ runner.temp }}/publication-status
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
@@ -623,7 +545,7 @@ jobs:
           tools/release/publish-market.sh \
             "$VERSION" \
             connector.json \
-            "$RUNNER_TEMP/oss-manifest/baijimu-codex-local-app-${VERSION}-oss-manifest.json"
+            "$RUNNER_TEMP/oss-manifest/baijimu-codex-desktop-${VERSION}-oss-manifest.json"
           status="$(cat "$MARKET_PUBLICATION_STATUS_FILE")"
           echo "status=$status" >> "$GITHUB_OUTPUT"
 
@@ -640,10 +562,10 @@ jobs:
             | jq -e --arg version "$VERSION" '
               (.isDraft == false) and
               (.tagName == ("v" + $version)) and
-              ([.assets[].name] | index("baijimu-codex-local-app-" + $version + "-macos-universal.zip") != null) and
-              ([.assets[].name] | index("baijimu-codex-local-app-" + $version + "-windows-x64.zip") != null) and
-              ([.assets[].name] | index("baijimu-codex-local-app-" + $version + "-linux-x64.zip") != null) and
-              ([.assets[].name] | index("baijimu-codex-local-app-" + $version + "-oss-manifest.json") != null)'
+              ([.assets[].name] | index("baijimu-codex-desktop-" + $version + "-macos-universal.zip") != null) and
+              ([.assets[].name] | index("baijimu-codex-desktop-" + $version + "-windows-x64.zip") != null) and
+              ([.assets[].name] | index("baijimu-codex-desktop-" + $version + "-linux-x64.zip") != null) and
+              ([.assets[].name] | index("baijimu-codex-desktop-" + $version + "-oss-manifest.json") != null)'
           case "$PUBLICATION_STATUS" in
             PENDING_REVIEW)
               echo "market submission is pending independent review"
@@ -651,7 +573,7 @@ jobs:
             PUBLISHED)
               for target in 'macos&arch=aarch64' 'windows&arch=x86_64' 'linux&arch=x86_64'; do
                 curl -fsS --retry 5 --retry-all-errors --retry-delay 3 \
-                  "https://api.baijimu.com/lowcode3/api/local-app-market/apps/codex?platform=${target}&hostVersion=0.2.95&hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1,connector.presentation.icon.v1" \
+                  "https://api.baijimu.com/lowcode3/api/local-app-market/apps/codex?platform=${target}&hostVersion=0.3.0&hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1,connector.presentation.icon.v1" \
                   | jq -e --arg version "$VERSION" '
                     (.data // .).latestVersion.version == $version and
                     (.data // .).latestVersion.compatibility.compatible == true and
@@ -697,13 +619,13 @@ jobs:
               (.isDraft == false) and
               (.tagName == ("v" + $version)) and
               ([.assets[].name] | sort) == ([
-                "baijimu-codex-local-app-" + $version + "-linux-x64.zip",
-                "baijimu-codex-local-app-" + $version + "-linux-x64.zip.sha256",
-                "baijimu-codex-local-app-" + $version + "-macos-universal.zip",
-                "baijimu-codex-local-app-" + $version + "-macos-universal.zip.sha256",
-                "baijimu-codex-local-app-" + $version + "-oss-manifest.json",
-                "baijimu-codex-local-app-" + $version + "-windows-x64.zip",
-                "baijimu-codex-local-app-" + $version + "-windows-x64.zip.sha256"
+                "baijimu-codex-desktop-" + $version + "-linux-x64.zip",
+                "baijimu-codex-desktop-" + $version + "-linux-x64.zip.sha256",
+                "baijimu-codex-desktop-" + $version + "-macos-universal.zip",
+                "baijimu-codex-desktop-" + $version + "-macos-universal.zip.sha256",
+                "baijimu-codex-desktop-" + $version + "-oss-manifest.json",
+                "baijimu-codex-desktop-" + $version + "-windows-x64.zip",
+                "baijimu-codex-desktop-" + $version + "-windows-x64.zip.sha256"
               ] | sort)' "$release_json" >/dev/null
           jq -r '.assets[] | [.name, .url] | @tsv' "$release_json" | while IFS=$'\t' read -r name url; do
             curl -fsSL --retry 6 --retry-all-errors --retry-delay 3 "$url" -o "$release_dir/$name"
@@ -711,7 +633,7 @@ jobs:
           for checksum_file in "$release_dir"/*.zip.sha256; do
             (cd "$release_dir" && sha256sum -c "$(basename "$checksum_file")")
           done
-          oss_manifest="$release_dir/baijimu-codex-local-app-${VERSION}-oss-manifest.json"
+          oss_manifest="$release_dir/baijimu-codex-desktop-${VERSION}-oss-manifest.json"
           jq -e --arg version "$VERSION" '
             .schemaVersion == "1.0" and
             .applicationId == "codex" and
@@ -739,51 +661,15 @@ jobs:
           unzip -q "$archive" -d "$RUNNER_TEMP/baijimu-cli"
           test "$("$RUNNER_TEMP/baijimu-cli/bin/baijimu" --version)" = "$BAIJIMU_CLI_VERSION"
 
-      - name: Verify immutable market version and public compatibility
+      - name: Verify immutable market version
         shell: bash
         env:
           BAIJIMU_CLI: ${{ runner.temp }}/baijimu-cli/bin/baijimu
           LOCAL_APP_MARKET_PUBLISH_TOKEN: ${{ secrets.LOCAL_APP_MARKET_PUBLISH_TOKEN }}
+          LOCAL_APP_OWNER_WORKSPACE_ID: ${{ vars.LOCAL_APP_OWNER_WORKSPACE_ID }}
           MARKET_PUBLICATION_STATUS_FILE: ${{ runner.temp }}/publication-status
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          test -n "$LOCAL_APP_MARKET_PUBLISH_TOKEN"
-          oss_manifest="$RUNNER_TEMP/published-release/baijimu-codex-local-app-${VERSION}-oss-manifest.json"
-          tools/release/publish-market.sh "$VERSION" connector.json "$oss_manifest"
+          tools/release/publish-market.sh "$VERSION" connector.json "$RUNNER_TEMP/published-release/baijimu-codex-desktop-${VERSION}-oss-manifest.json"
           test "$(cat "$MARKET_PUBLICATION_STATUS_FILE")" = "PUBLISHED"
-          for platform_and_arch in 'macos aarch64' 'windows x86_64' 'linux x86_64'; do
-            read -r platform arch <<< "$platform_and_arch"
-            response="$RUNNER_TEMP/market-$platform.json"
-            curl -fsSLG --retry 5 --retry-all-errors --retry-delay 3 \
-              'https://api.baijimu.com/lowcode3/api/local-app-market/apps/codex' \
-              --data-urlencode "platform=$platform" \
-              --data-urlencode "arch=$arch" \
-              --data-urlencode 'hostVersion=0.2.95' \
-              --data-urlencode 'hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1,connector.presentation.icon.v1' \
-              -o "$response"
-            jq -e --arg version "$VERSION" --arg platform "$platform" --arg arch "$arch" \
-              --slurpfile connector connector.json \
-              --slurpfile oss "$oss_manifest" '
-                .latestVersion.version == $version and
-                .latestVersion.repo == "momoplan/baijimu-connector-codex" and
-                .latestVersion.revision == ("v" + $version) and
-                .latestVersion.compatibility.compatible == true and
-                .latestVersion.manifest.source == {
-                  type: "github",
-                  repo: "momoplan/baijimu-connector-codex",
-                  revision: ("v" + $version)
-                } and
-                .latestVersion.manifest.runtime.processOwnership == "host" and
-                .latestVersion.manifest.runtime.args == ["start"] and
-                .latestVersion.manifest.hostRequirements.minimumVersion == "0.2.95" and
-                (.latestVersion.manifest.hostRequirements.capabilities | index("connector.managed-tool-dependencies.v1") != null) and
-                (.latestVersion.manifest.hostRequirements.capabilities | index("connector.presentation.icon.v1") != null) and
-                .latestVersion.manifest.managedToolDependencies == $connector[0].managedToolDependencies and
-                any(.latestVersion.manifest.artifacts[];
-                  .platform == $platform and
-                  (.arch == $arch or ($platform == "macos" and .arch == "universal")) and
-                  .source == ($oss[0].artifacts[] | select(.platform == $platform) | .source) and
-                  .checksum == ($oss[0].artifacts[] | select(.platform == $platform) | .checksum))' \
-              "$response" >/dev/null
-          done

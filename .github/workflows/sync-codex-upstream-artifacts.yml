@@ -199,3 +199,4 @@ jobs:
                 ) and
                 all(.assets[] | select(.component == "codex_cli"); .host_requirements == null)
               ' >/dev/null
+

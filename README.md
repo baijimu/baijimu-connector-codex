@@ -1,178 +1,34 @@
-# Baijimu Codex Local App
+# Baijimu Codex Desktop
 
-Baijimu Codex is an independent Rust local application that initializes and configures Codex on the current computer, manages workspace-scoped Codex environments, and exposes local Codex capabilities through one loopback service. Initialization uses the workspace currently authorized in Baijimu Local; it does not ask for a device or unrelated Baijimu project.
+`com.baijimu.connector.codex` 是线上 `codex` 应用的后继版本，产品名称为 Codex Desktop Manager，负责：
 
-The state-directory ownership, first-user initialization, Baijimu-launched process, external Codex behavior, and environment-selection contract is documented in [`docs/codex-home-ownership-and-launch.md`](docs/codex-home-ownership-and-launch.md).
+- 安装和验证 ChatGPT/Codex 官方桌面应用；
+- 为已授权的百积木工作区创建桌面专用 LLM credential 和 `CODEX_HOME`；
+- 展示可用工作区，并由用户显式选择后启动桌面应用；
+- 保留原有 ChatGPT 登录和所有工作区目录，切换失败时恢复原选择；
+- 在原 Connector 数据目录中原位升级并继续使用既有桌面档案元数据。
 
-It is installed and supervised by `bridge-agent`. Bridge Agent finishes Connector installation, startup, and capability registration without waiting for Codex initialization. After the successful background task opens the embedded application, the application immediately invokes its idempotent readiness operation for the currently authorized workspace; the user does not click a second install action. The single management page scrolls to the runtime section while initialization is running and shows the official installer's step and download progress. A new user binds that first workspace to the normal `.codex` directory; if `.codex` already exists without matching Baijimu ownership, it is preserved and the workspace uses `.baijimu/codex/p/<profile-key>`. The default directory can belong to only one workspace, while later workspaces remain isolated. After configuration and capability checks succeed, the Connector attempts to open the official desktop and verifies the desktop process, selected `CODEX_HOME`, and a real visible window when the new workspace profile was activated. A desktop auto-launch verification failure does not invalidate the completed installation: setup remains successful and tells the user to open ChatGPT (or Codex on versions using that name) from the system application list. Later profile switches remain explicit management-page actions; they require the same launch verification and restore the previous profile when it fails. Switching back to the bound workspace restores `.codex`. The selected `CODEX_HOME` is injected into each launch only; Connector startup and internal profile switches never change the user environment. Desktop launch never creates or opens a synthetic project. A current-version failed initialization stops without looping and exposes an explicit repair action. An interrupted attempt or a failure left by an older Connector is marked as requiring fresh verification and may be resumed once by the readiness flow instead of being replayed as a current error. Credential issuance, exact workspace validation, the official Codex installer, configuration, smoke tests, and process/state-directory verification run inside this application. Bridge Agent never receives the LLM key.
+本应用不安装 Codex CLI，不启动 `codex app-server`，也不声明 Relay 远程能力。CLI、session/thread/turn/event 接口由独立的 `com.baijimu.connector.codex-connector` 负责；OpenAI 兼容补全接口继续由 `com.baijimu.connector.codex-completion` 负责。
 
-## Requirements
+## 状态所有权
 
-- Baijimu Local / `bridge-agent` 0.2.21 or newer with the `connector.setup.v1` host capability.
-- A Baijimu workspace already authorized in the client.
+Bridge Agent 继续按 `com.baijimu.connector.codex` 注入原有 `BAIJIMU_CONNECTOR_DATA_DIR`。桌面档案、当前桌面工作区、安装状态和管理令牌在同一目录内原位升级；应用不会读取新的外部 Connector 工作区运行档案。
 
-The official market package ships a Rust/native `baijimu-connector-codex`
-binary under `bin/<platform>-<arch>/`. The legacy Node.js implementation is
-kept for reference and compatibility, but the platform-managed entrypoint is
-the native binary.
-
-The package includes `ui/`, a static interface loaded inside the local-app detail panel. It has two product views under one local application. **Baijimu integration** reports Connector registration independently from Codex runtime availability; before initialization succeeds it marks session capabilities unavailable instead of treating the application as failed. **Codex runtime** owns automatic first-use initialization, explicit failure repair, and official installer progress. After initialization succeeds, the integration view shows the active Codex identity and state directory, lists authorized Baijimu workspaces and the original Codex environment, and launches Codex with the selected profile. Session and turn operations remain available through the Connector API but are intentionally not duplicated in this interface.
-
-## Install
-
-From a checkout:
+## 本地运行
 
 ```bash
-cargo build --release
-bridge-agent connector install /path/to/baijimu-connector-codex --replace
-bridge-agent connector start com.baijimu.connector.codex
+cargo run -- start
+cargo run -- status
+cargo run -- stop
 ```
 
-Or install the tagged package from a Git remote first:
+默认监听 `127.0.0.1:18110`，继承旧版本端口以保证升级连续性。Bridge Agent 0.3.0 及以上会注入平台管理的 Baijimu CLI 路径到 `CODEX_DESKTOP_BAIJIMU_BINARY`。
 
-```bash
-git clone https://github.com/momoplan/baijimu-connector-codex.git
-bridge-agent connector install /path/to/baijimu-connector-codex --replace
-```
-
-The connector listens on `127.0.0.1:18110` by default. Market installation only installs and starts the Connector, so the host task remains short and generic. The embedded application then invokes the idempotent readiness operation automatically: when the current workspace is authorized and setup is incomplete, it runs the installer compiled into the Connector, creates a workspace-scoped LLM credential, passes it through a private temporary file, and removes the file after setup. The installer receives the selected workspace directory through `CODEX_HOME`. Each setup attempt records its Connector version and attempt identity. Restart only rewrites persisted state when an actual recovery or schema migration is required; unchanged terminal states keep their original timestamps. A failure produced by the current Connector requires an explicit repair retry, so repeated process restarts cannot create an unbounded install loop.
-
-On macOS, Rust exclusively owns the setup workflow, typed progress/result contracts, artifact-manifest parsing, downloads, credential configuration, and verification. The embedded shell is a stateless native-action adapter: it can only verify and install a supplied desktop or CLI artifact and never reads or writes setup state. The artifact manifest location comes from the versioned `installers/upstream-artifact-source.json` catalog embedded in the Connector rather than a platform-specific runtime branch.
-
-Codex CLI discovery belongs entirely to this Connector; Bridge Agent neither selects nor injects a Codex executable. On every app-server start, the Connector searches standard official CLI install locations first, then the process `PATH`, and finally the user's login environment. Windows also supports the Connector-managed content-addressed official CLI installation. Desktop-app-internal Codex binaries are always rejected, even if inherited through `PATH`. The `status` response exposes the resolved path, source, version, `app-server` capability check, checked paths, and actionable errors. There is no persistent CLI-path override or related user setting.
-
-On Windows, discovery only accepts launchers supported by the native process API (`.exe`, `.com`, `.bat`, or `.cmd`) and follows `PATHEXT`; it never executes the extensionless POSIX shim created beside an npm command. If no supported launcher exists, startup fails with `CODEX_BINARY_NOT_FOUND` instead of reaching Windows `ERROR_BAD_EXE_FORMAT` (`os error 193`).
-
-Windows initialization verifies the isolated profile through the documented Codex app-server JSON-RPC sequence. It waits for the initialize response, API-key login response, `account/login/completed`, and `account/updated` before issuing the final `account/read`; it does not infer success from output text or a fixed sleep. It then persists and reads back the desktop locale (default `zh-CN`). Windows sandbox setup, retry, and fallback remain owned by the official ChatGPT/Codex app and are not part of Connector initialization. Protocol errors, early process exit, timeout, a locale read-back mismatch, and a non-`apiKey` final account are reported separately with credentials masked.
-
-Bridge Agent assigns a private application data directory through `BAIJIMU_CONNECTOR_DATA_DIR`. After exclusively binding its loopback port but before reporting startup success or serving health checks, the application synchronously loads or atomically creates `management-token` and verifies it by reading the persisted value back. Credential metadata and the original user `CODEX_HOME` recovery value live in that private directory. Workspace state lives either in the uniquely bound default `.codex` or in a deterministic private `.baijimu/codex/p/<profile-key>` directory. Internal switching atomically updates only Connector metadata and restarts the Connector-managed app-server with an explicit child-process `CODEX_HOME`. Initial setup launches the desktop after committing and validating a newly activated workspace profile; an existing personal profile is preserved until the user explicitly selects another profile. Later desktop profile switches require a management-page action. Connector-private `BAIJIMU_*` and `CODEX_CONNECTOR_*` variables are removed from Codex child environments. Versions that previously wrote a managed path into the user environment expose an explicit, ownership-checked restore action; normal startup never writes or broadcasts user environment changes. No workspace directory is deleted. Existing workspace credentials are validated and reused; a replacement is issued only when the stored credential is no longer valid. Metadata before v6 is migrated on first use. Every `/management/v1/*` request requires the management token. These management routes are local-only and are never registered as relay capabilities.
-
-## CLI
-
-```bash
-baijimu-connector-codex start
-baijimu-connector-codex start --daemon
-baijimu-connector-codex status
-baijimu-connector-codex stop
-baijimu-connector-codex credential-state
-baijimu-connector-codex checkout-project --workspace-id 642 --project-id 7405
-```
-
-Configuration can be provided with flags or environment variables:
-
-```bash
-CODEX_CONNECTOR_PORT=18110
-CODEX_CONNECTOR_PROJECTS_DIR=/absolute/path/to/Baijimu/Projects
-CODEX_CONNECTOR_CODEX_ARGS='["app-server","--listen","stdio://"]'
-```
-
-`CODEX_CONNECTOR_BAIJIMU_BINARY` 由支持 `connector.managed-tool-dependencies.v1` 的 Bridge Agent 在每次启动时注入，值为已安装并验证的 Baijimu CLI launcher 绝对路径。Connector 不从 `PATH` 查找该命令，也不提供持久化覆盖项。
-
-## Local App Capabilities
-
-The `schemaVersion: "2.0"` manifest declares these methods directly on
-`connectorId=com.baijimu.connector.codex`; installation does not create a runtime service or
-businessId:
-
-- `status`
-- `listThreads`
-- `searchThreads`
-- `readThread`
-- `setThreadReadState`
-- `listApps`
-- `startThread`
-- `resumeThread`
-- `startTurn`
-- `steerTurn`
-- `interruptTurn`
-- `recentEvents`
-- `request`
-
-`request` is an advanced raw JSON-RPC forwarder and should be treated as high risk in remote authorization policies.
-
-The Connector publishes the raw `codexNotification` stream for diagnostics and
-four versioned domain events for stable automation contracts:
-
-- `codexTurnCompleted` identifies the completed, interrupted, or failed turn by
-  `threadId` and `turnId` without copying turn items or assistant output.
-- `codexThreadClosed`, `codexThreadArchived`, and `codexThreadDeleted` represent
-  distinct thread lifecycle transitions and must not be interpreted as turn completion.
-
-Domain-event delivery uses an idempotent event ID and retries temporary local
-delivery failures. After Bridge Agent accepts an event, its durable outbox owns
-delivery to the platform.
-
-## Local management API
-
-The application exposes authenticated setup and status operations for Bridge Agent:
-
-- `GET /management/v1/setup/state`
-- `POST /management/v1/setup/retry`
-- `GET /management/v1/credential-state`
-- `POST /management/v1/codex/launch` with `{ "mode": "chatgpt" }` or `{ "mode": "baijimu", "workspaceId": 123 }`
-- `POST /management/v1/codex/restore-external-home` for an explicit, ownership-checked legacy environment restoration
-- `POST /management/v1/projects/checkout`
-
-The local management token is not a Baijimu workspace token or an LLM credential. It only authenticates the loopback call between Bridge Agent and this application.
-
-Thread list responses include the Codex `cwd`, source, git metadata, title, preview, and pagination cursors so callers can choose the right workspace before starting or resuming work.
-They also normalize `threadRuntimeStatus`, `activeFlags`, `isInProgress`, `latestTurnStatus`, and `hasUnreadTurn`. Unread state is seeded from the Codex desktop host state and advanced by Connector-observed thread updates; callers clear or restore it explicitly with `setThreadReadState`.
-
-The project checkout operation delegates to the managed `baijimu project checkout`
-command. It creates or validates a stable local checkout under
-`CODEX_CONNECTOR_PROJECTS_DIR`, uses the platform Git credential helper, and
-returns the canonical directory and current `codex/<userId>/...` branch for a
-new Codex session. Existing directories are reused only after their Baijimu
-workspace/project metadata, origin URL, and Codex branch namespace all match.
-
-## Development
+## 验证
 
 ```bash
 cargo test
-npm run test:rust
+npm test
 ```
 
-The integration tests use a fake app-server process and do not require Codex
-credentials.
-
-### Rust architecture
-
-- `main.rs` is the composition root and loopback HTTP/management boundary.
-- `cli.rs` parses commands; `process_runtime.rs` owns daemon, PID, health, and process-control behavior.
-- `app_server.rs` owns the Codex child-process session. One dedicated reader continuously drains stdout, routes responses by request ID to an in-memory pending-request table, and records notifications even when no request is active. Request timeouts use waiter deadlines rather than a blocking stdout read. Profile switches, shutdown, and child exit fail all pending requests and clear the process-owned session state.
-- `app_server/event_store.rs` owns the bounded in-memory notification history and one bounded event-delivery worker. Neither pending requests nor event queues are persisted.
-- `invoke.rs` owns the Codex RPC projection and project/session aggregation use cases.
-- `credential/contract.rs` defines credential-management DTOs, while `credential/store.rs` owns metadata paths, migration loading, private permissions, and atomic persistence. `credential.rs` remains the profile lifecycle service.
-- `setup/contract.rs` defines the closed setup/progress contract; platform installers remain adapters under `setup/`.
-
-Raw `serde_json::Value` is intentionally retained at the opaque Codex JSON-RPC
-boundary. Connector-owned credential and setup state uses typed contracts.
-
-## Release
-
-This repository is the source of truth for both Codex local-app delivery paths,
-which intentionally have independent cadences:
-
-- `release.yml` builds a tagged Connector commit, signs the native binaries,
-  publishes immutable platform archives, and creates the local-app market
-  version. Formal application releases use one tag only: `v<version>`.
-- `sync-codex-upstream-artifacts.yml` runs on a schedule or by explicit manual
-  dispatch. It downloads the complete customer installer contract (the official
-  Codex CLI packages for every installer platform plus desktop App packages), verifies upstream integrity,
-  publishes every object under its SHA256, verifies anonymous OSS reads, keeps
-  the schema-3 `codex-artifacts/latest.json` projection for installed legacy
-  Connectors, and publishes schema-4 `codex-artifacts/v4/latest.json` with the
-  minimum OS version extracted from each native desktop package. Connector
-  1.2.62 and later fail before download or profile mutation when the host OS is
-  unsupported. Content-addressed objects are permanent; synchronization only
-  replaces the two `latest.json` pointers after all current objects are public.
-
-Windows installation consumes OpenAI's canonical
-`codex-package-<target>.tar.gz` layout and preserves its declared entrypoint,
-code-mode host, `rg`, command runner, and sandbox setup resources. The older
-flat `.exe.zip` release assets remain in the public snapshot only while older
-Connector versions are still in use; new installers never select them.
-
-The synchronizer is a release-side operation. Bridge Agent and customer devices
-never execute it. First-use installers only read the already published manifest,
-download the platform asset named by that contract, and verify its SHA256.
+本仓库是 `codex` 客户端本地应用的唯一发布单元，继续使用 `momoplan/baijimu-connector-codex` 的 `main`、`v<version>` 标签、签名制品和既有 `local-app-market` 记录。

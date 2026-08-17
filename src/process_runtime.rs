@@ -25,19 +25,13 @@ pub(crate) fn daemonize(options: &ServerOptions) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let log_err = log.try_clone().map_err(|error| error.to_string())?;
     let exe = env::current_exe().map_err(|error| error.to_string())?;
-    let mut args = vec![
+    let args = vec![
         "start".to_string(),
         "--host".to_string(),
         options.host.clone(),
         "--port".to_string(),
         options.port.to_string(),
-        "--listen".to_string(),
-        options.listen.clone(),
     ];
-    if !options.extra_args.is_empty() {
-        args.push("--codex-args".to_string());
-        args.push(serde_json::to_string(&options.extra_args).map_err(|error| error.to_string())?);
-    }
     let mut command = Command::new(exe);
     command
         .args(args)
@@ -137,9 +131,9 @@ pub(crate) fn verified_connector_pid(health: &Value) -> Result<u32, String> {
     if health
         .pointer("/status/connector/name")
         .and_then(Value::as_str)
-        != Some("@baijimu/connector-codex")
+        != Some("@baijimu/codex-desktop")
     {
-        return Err("health endpoint does not belong to the Codex connector".to_string());
+        return Err("health endpoint does not belong to the Codex desktop manager".to_string());
     }
     health
         .pointer("/status/connector/pid")
@@ -175,7 +169,7 @@ pub(crate) fn wait_for_connector_health(
 
 pub(crate) fn connector_home() -> PathBuf {
     env::var_os("BAIJIMU_CONNECTOR_DATA_DIR")
-        .or_else(|| env::var_os("CODEX_CONNECTOR_HOME"))
+        .or_else(|| env::var_os("CODEX_DESKTOP_HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| home_dir().join(".baijimu-connector-codex"))
 }
@@ -245,16 +239,6 @@ pub(crate) fn timestamp() -> String {
     format!("{secs}")
 }
 
-pub(crate) fn random_event_id() -> String {
-    let mut bytes = [0_u8; 16];
-    OsRng.fill_bytes(&mut bytes);
-    let suffix = bytes
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    format!("codex_evt_{suffix}")
-}
-
 pub(crate) fn to_camel_case(value: &str) -> String {
     let mut out = String::new();
     let mut upper = false;
@@ -289,17 +273,4 @@ pub(crate) fn terminate_process(pid: u32) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-pub(crate) fn to_kebab_case(value: &str) -> String {
-    let mut out = String::new();
-    for character in value.chars() {
-        if character.is_ascii_uppercase() {
-            out.push('-');
-            out.push(character.to_ascii_lowercase());
-        } else {
-            out.push(character);
-        }
-    }
-    out
 }

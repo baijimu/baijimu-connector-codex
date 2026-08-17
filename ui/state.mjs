@@ -145,7 +145,7 @@ export function codexCapabilityMeta(value) {
       available: false,
       label: "安装中",
       tone: "warning",
-      message: "Connector 已在线；Codex 正在安装，完成前会话能力暂不可用。",
+      message: "Codex 桌面环境正在安装，完成前暂时不能启动工作区环境。",
     };
   }
   if (["failed", "interrupted", "needs_retry"].includes(status)) {
@@ -153,14 +153,14 @@ export function codexCapabilityMeta(value) {
       available: false,
       label: status === "failed" ? "安装失败" : "需要处理",
       tone: "danger",
-      message: "Connector 已在线；Codex 运行环境需要修复，会话能力暂不可用。",
+      message: "Codex 桌面环境需要修复，完成前暂时不能启动工作区环境。",
     };
   }
   return {
     available: false,
     label: "准备中",
     tone: "neutral",
-    message: "Connector 已在线；正在准备自动初始化 Codex 运行环境。",
+    message: "正在准备自动初始化 Codex 桌面环境。",
   };
 }
 

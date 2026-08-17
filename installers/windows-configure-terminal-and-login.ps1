@@ -226,7 +226,9 @@ function Get-CodexDesktopEntries {
       $manifestPath = Join-Path $package.InstallLocation "AppxManifest.xml"
       if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return }
       [xml]$manifest = Get-Content -Raw -LiteralPath $manifestPath
-      $publisher = [string]$manifest.Package.Identity.Publisher
+      $identity = @($manifest.SelectNodes("/*[local-name()='Package']/*[local-name()='Identity']") | Select-Object -First 1)
+      if ($identity.Count -eq 0) { return }
+      $publisher = [string]$identity[0].Publisher
       if ($codexDesktopTrustedPublishers -notcontains $publisher) { return }
       $startApp = @($startApps | Where-Object { $_.AppID -like "$($package.PackageFamilyName)!*" } | Select-Object -First 1)
       $applicationId = if ($startApp.Count -gt 0) {
@@ -234,7 +236,7 @@ function Get-CodexDesktopEntries {
       } else {
         $null
       }
-      $applications = @($manifest.Package.Applications.Application | Where-Object {
+      $applications = @($manifest.SelectNodes("/*[local-name()='Package']/*[local-name()='Applications']/*[local-name()='Application']") | Where-Object {
         if (-not $_.Executable) { return $false }
         $entryPoint = [string]$_.EntryPoint
         $isFullTrust = [string]::IsNullOrWhiteSpace($entryPoint) -or $entryPoint -eq "Windows.FullTrustApplication"

@@ -297,7 +297,7 @@ jobs:
           const [packageDir, expectedVersion] = process.argv.slice(2);
           const manifest = JSON.parse(fs.readFileSync(path.join(packageDir, "connector.json"), "utf8"));
           if (manifest.version !== expectedVersion) throw new Error("connector package version mismatch");
-          if (manifest.id !== "com.baijimu.connector.codex") throw new Error("desktop connector identity mismatch");
+          if (manifest.id !== "com.baijimu.connector.codex" || manifest.name !== "Codex 桌面管理器") throw new Error("desktop connector identity mismatch");
           if (manifest.source?.type !== "github" || manifest.source?.repo !== "momoplan/baijimu-connector-codex" || manifest.source?.revision !== `v${expectedVersion}`) throw new Error("connector source identity mismatch");
           const methods = manifest.methods?.map(({ name, path, httpMethod }) => ({ name, path, httpMethod }));
           if (manifest.schemaVersion !== "2.0" || manifest.runtime?.type !== "process" || manifest.runtime?.processOwnership !== "host" || manifest.transport?.type !== "http" || JSON.stringify(methods) !== JSON.stringify([{ name: "status", path: "/healthz", httpMethod: "GET" }]) || manifest.remoteCapabilities !== undefined || manifest.events !== undefined || manifest.ui?.type !== "embedded") throw new Error("desktop manager package contract is invalid");
@@ -365,7 +365,7 @@ jobs:
             test "$(printf '%s' "$release_json" | jq -r .tagName)" = "$RELEASE_TAG"
           else
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$RELEASE_SHA" \
-              --draft --title "Codex Desktop Manager $VERSION" \
+              --draft --title "Codex 桌面管理器 $VERSION" \
               --notes "Signed codex local application release $VERSION."
             release_is_draft=true
           fi

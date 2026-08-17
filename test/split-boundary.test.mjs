@@ -13,6 +13,7 @@ test("desktop manager exposes only its required read-only status method", async 
     read("package.json").then(JSON.parse),
   ]);
   assert.equal(manifest.id, "com.baijimu.connector.codex");
+  assert.equal(manifest.name, "Codex 桌面管理器");
   assert.equal(manifest.version, packageManifest.version);
   assert.equal(manifest.source.revision, `v${packageManifest.version}`);
   assert.equal(manifest.source.repo, "momoplan/baijimu-connector-codex");

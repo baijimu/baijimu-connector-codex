@@ -7,16 +7,20 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (path) => readFile(join(root, path), "utf8");
 
-test("desktop manager manifest has no Relay capability surface", async () => {
+test("desktop manager exposes only its required read-only status method", async () => {
   const manifest = JSON.parse(await read("connector.json"));
   assert.equal(manifest.id, "com.baijimu.connector.codex");
-  assert.equal(manifest.version, "1.3.1");
+  assert.equal(manifest.version, "1.3.2");
   assert.equal(manifest.source.repo, "momoplan/baijimu-connector-codex");
   assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18110/healthz");
   assert.equal(manifest.transport.baseUrl, "http://127.0.0.1:18110");
-  for (const field of ["remoteCapabilities", "methods", "events"]) {
+  for (const field of ["remoteCapabilities", "events"]) {
     assert.equal(manifest[field], undefined);
   }
+  assert.deepEqual(
+    manifest.methods.map(({ name, path, httpMethod }) => ({ name, path, httpMethod })),
+    [{ name: "status", path: "/healthz", httpMethod: "GET" }],
+  );
   assert.ok(manifest.management.operations.launchCodex);
 });
 

@@ -28,7 +28,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_HOST: &str = "127.0.0.1";
-const DEFAULT_PORT: u16 = 18111;
+const DEFAULT_PORT: u16 = 18110;
 const MANAGEMENT_TOKEN_FILE: &str = "management-token";
 const CONNECTOR_HEALTH_IO_TIMEOUT: Duration = Duration::from_secs(1);
 const CONNECTOR_HEALTH_MAX_RESPONSE_BYTES: u64 = 64 * 1024;
@@ -747,7 +747,7 @@ fn parse_content_length(headers: &[u8]) -> Option<usize> {
 
 fn print_help() {
     println!(
-        "baijimu-codex-desktop {VERSION}\n\nUsage:\n  baijimu-codex-desktop start [--host 127.0.0.1] [--port 18111] [--daemon]\n  baijimu-codex-desktop status\n  baijimu-codex-desktop stop\n  baijimu-codex-desktop credential-state\n  baijimu-codex-desktop --version"
+        "baijimu-codex-desktop {VERSION}\n\nUsage:\n  baijimu-codex-desktop start [--host 127.0.0.1] [--port 18110] [--daemon]\n  baijimu-codex-desktop status\n  baijimu-codex-desktop stop\n  baijimu-codex-desktop credential-state\n  baijimu-codex-desktop --version"
     );
 }
 

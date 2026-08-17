@@ -6,8 +6,6 @@ pub(super) fn load_metadata() -> Result<CredentialMetadata> {
         (Some(path.clone()), false)
     } else if legacy_metadata_path().exists() {
         (Some(legacy_metadata_path()), true)
-    } else if legacy_connector_metadata_path().is_some_and(|candidate| candidate.exists()) {
-        (legacy_connector_metadata_path(), false)
     } else {
         (None, false)
     };
@@ -79,17 +77,11 @@ pub(super) fn metadata_path() -> PathBuf {
 pub(super) fn legacy_metadata_path() -> PathBuf {
     legacy_config_dir().join(METADATA_FILE)
 }
-pub(super) fn legacy_connector_metadata_path() -> Option<PathBuf> {
-    std::env::var_os("BAIJIMU_CONNECTOR_DATA_DIR")
-        .map(PathBuf::from)
-        .and_then(|current| current.parent().map(Path::to_path_buf))
-        .map(|root| root.join("com.baijimu.connector.codex").join(METADATA_FILE))
-}
 pub(super) fn connector_data_dir() -> PathBuf {
     std::env::var_os("BAIJIMU_CONNECTOR_DATA_DIR")
         .or_else(|| std::env::var_os("CODEX_DESKTOP_HOME"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".baijimu-codex-desktop"))
+        .unwrap_or_else(|| home_dir().join(".baijimu-connector-codex"))
 }
 pub(super) fn home_dir() -> PathBuf {
     #[cfg(windows)]

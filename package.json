@@ -1,6 +1,6 @@
 {
   "name": "@baijimu/codex-desktop",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "description": "Baijimu local app for Codex desktop installation and workspace switching.",
   "type": "module",
   "bin": {

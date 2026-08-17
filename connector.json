@@ -1,22 +1,22 @@
 {
   "schemaVersion": "2.0",
-  "id": "com.baijimu.connector.codex-desktop",
-  "name": "Codex 桌面环境",
-  "version": "1.0.0",
+  "id": "com.baijimu.connector.codex",
+  "name": "Codex Desktop Manager",
+  "version": "1.3.0",
   "description": "安装 Codex 桌面应用，并管理相互隔离的百积木工作区桌面档案。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "momoplan/baijimu-codex-desktop", "revision": "v1.0.0"},
+  "source": {"type": "github", "repo": "momoplan/baijimu-connector-codex", "revision": "v1.3.0"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
     "args": ["start"],
     "stopArgs": ["stop"],
     "processOwnership": "host",
-    "healthCheck": {"type": "http", "url": "http://127.0.0.1:18111/healthz", "timeoutSecs": 2, "expectStatus": 200}
+    "healthCheck": {"type": "http", "url": "http://127.0.0.1:18110/healthz", "timeoutSecs": 2, "expectStatus": 200}
   },
   "management": {
     "type": "http",
-    "baseUrl": "http://127.0.0.1:18111",
+    "baseUrl": "http://127.0.0.1:18110",
     "auth": {"type": "connector_token"},
     "operations": {
       "setupState": {"method": "GET", "path": "/management/v1/setup/state"},
@@ -39,11 +39,11 @@
       "executablePathEnv": "CODEX_DESKTOP_BAIJIMU_BINARY"
     }
   ],
-  "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex 桌面环境", "defaultView": true},
-  "releaseNotes": ["从 Codex Connector 拆分桌面应用安装、工作区档案与桌面启动能力；不再安装或调用 Codex CLI。"],
+  "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex Desktop Manager", "defaultView": true},
+  "releaseNotes": ["Codex 线上应用继承为 Desktop Manager，只负责桌面应用安装、工作区档案与用户显式切换；CLI 和外部接口迁移到独立的 codex-connector 应用。"],
   "configSchema": {
     "type": "object",
-    "properties": {"port": {"type": "integer", "default": 18111, "minimum": 1024, "maximum": 65535}},
+    "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},
     "additionalProperties": false
   }
 }

@@ -33,7 +33,7 @@ mod tests {
     fn embedded_source_is_a_closed_versioned_contract() {
         assert_eq!(
             manifest_url().unwrap(),
-            "https://download.baijimu.com/codex-desktop-artifacts/v1/latest.json"
+            "https://download.baijimu.com/codex-artifacts/v4/latest.json"
         );
         assert!(serde_json::from_str::<UpstreamArtifactSourceV2>(
             r#"{"schemaVersion":2,"manifestUrl":"https://example.com/latest.json","extra":true}"#

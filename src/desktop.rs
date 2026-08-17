@@ -69,7 +69,9 @@ function Get-CodexDesktopEntries {
       $manifestPath = Join-Path $package.InstallLocation 'AppxManifest.xml'
       if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return }
       [xml]$manifest = Get-Content -Raw -LiteralPath $manifestPath
-      $publisher = [string]$manifest.Package.Identity.Publisher
+      $identity = @($manifest.SelectNodes("/*[local-name()='Package']/*[local-name()='Identity']") | Select-Object -First 1)
+      if ($identity.Count -eq 0) { return }
+      $publisher = [string]$identity[0].Publisher
       if ($codexDesktopTrustedPublishers -notcontains $publisher) { return }
       $startApp = @($startApps | Where-Object { $_.AppID -like "$($package.PackageFamilyName)!*" } | Select-Object -First 1)
       $applicationId = if ($startApp.Count -gt 0) {
@@ -77,7 +79,7 @@ function Get-CodexDesktopEntries {
       } else {
         $null
       }
-      $applications = @($manifest.Package.Applications.Application | Where-Object {
+      $applications = @($manifest.SelectNodes("/*[local-name()='Package']/*[local-name()='Applications']/*[local-name()='Application']") | Where-Object {
         if (-not $_.Executable) { return $false }
         $entryPoint = [string]$_.EntryPoint
         $isFullTrust = [string]::IsNullOrWhiteSpace($entryPoint) -or $entryPoint -eq 'Windows.FullTrustApplication'
@@ -231,7 +233,7 @@ $package = $entry[0].package
 $manifestPath = Join-Path $package.InstallLocation 'AppxManifest.xml'
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'ChatGPT/Codex 应用包缺少 AppxManifest.xml' }
 [xml]$manifest = Get-Content -LiteralPath $manifestPath
-$minimumVersions = @($manifest.Package.Dependencies.TargetDeviceFamily | ForEach-Object { [string]$_.MinVersion } | Where-Object { $_ })
+$minimumVersions = @($manifest.SelectNodes("/*[local-name()='Package']/*[local-name()='Dependencies']/*[local-name()='TargetDeviceFamily']") | ForEach-Object { [string]$_.MinVersion } | Where-Object { $_ })
 if ($minimumVersions.Count -eq 0) { throw 'ChatGPT/Codex 应用包未声明最低 Windows 版本' }
 $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -Descending | Select-Object -First 1)[0]
 [pscustomobject]@{

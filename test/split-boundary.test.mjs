@@ -57,7 +57,8 @@ test("Windows desktop discovery follows the codex protocol instead of package na
   for (const source of [desktopPreamble, installer]) {
     assert.match(source, /local-name\(\)='Protocol'/);
     assert.match(source, /CODEX_DESKTOP_PROTOCOL/);
-    assert.match(source, /CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON/);
+    assert.match(source, /CODEX_DESKTOP_TRUSTED_PUBLISHERS/);
+    assert.doesNotMatch(source, /CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON/);
     assert.match(source, /publisher = \[string\]\$identity\[0\]\.Publisher/);
     assert.match(source, /Windows\.FullTrustApplication/);
     assert.doesNotMatch(source, /OpenAI\.ChatGPT-Desktop/);

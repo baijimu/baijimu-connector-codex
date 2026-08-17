@@ -43,8 +43,9 @@ pub(crate) fn get() -> &'static ProductConfig {
                 && config
                     .windows_desktop_trusted_publishers
                     .iter()
-                    .all(|publisher| !publisher.trim().is_empty()),
-            "Windows 桌面可信 Publisher 不能为空"
+                    .all(|publisher| !publisher.trim().is_empty()
+                        && !publisher.contains(['\r', '\n'])),
+            "Windows 桌面可信 Publisher 不能为空或包含换行符"
         );
         config
     })

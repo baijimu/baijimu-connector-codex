@@ -398,9 +398,7 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupCompletion> {
 
         let mut command = install_command(&script_path)?;
         let product_config = crate::product_config::get();
-        let trusted_publishers =
-            serde_json::to_string(&product_config.windows_desktop_trusted_publishers)
-                .context("序列化 Windows 桌面可信 Publisher 配置失败")?;
+        let trusted_publishers = product_config.windows_desktop_trusted_publishers.join("\n");
         command
             .env("CODEX_WORKSPACE_ID", workspace_id.to_string())
             .env("CODEX_ARTIFACT_MANIFEST_URL", source::manifest_url()?)
@@ -412,7 +410,7 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupCompletion> {
                 "CODEX_DESKTOP_PROTOCOL",
                 &product_config.windows_desktop_protocol,
             )
-            .env("CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON", trusted_publishers)
+            .env("CODEX_DESKTOP_TRUSTED_PUBLISHERS", trusted_publishers)
             .env("CODEX_HOME", &profile_home)
             .env_remove("CODEX_PROJECT_ID")
             .env_remove("BAIJIMU_PROJECT_ID")

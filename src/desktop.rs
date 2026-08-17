@@ -103,6 +103,7 @@ function Get-CodexDesktopEntries {
         }
       }
     } catch {
+      if ($env:CODEX_DESKTOP_DISCOVERY_FAIL_FAST -eq '1') { throw }
       return
     }
   })
@@ -407,6 +408,7 @@ function Get-AppxPackage {
 function Get-StartApps {
   [pscustomobject]@{ Name = 'Renamed desktop'; AppID = 'Example.RenamedDesktop_family!Desktop' }
 }
+$env:CODEX_DESKTOP_DISCOVERY_FAIL_FAST = '1'
 $entry = @(Get-CodexDesktopEntries)
 if ($entry.Count -ne 1) { throw "expected one entry, got $($entry.Count)" }
 [pscustomobject]@{

@@ -257,6 +257,7 @@ function Get-CodexDesktopEntries {
         }
       }
     } catch {
+      if ($env:CODEX_DESKTOP_DISCOVERY_FAIL_FAST -eq "1") { throw }
       return
     }
   })

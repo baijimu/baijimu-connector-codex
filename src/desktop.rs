@@ -108,6 +108,116 @@ function New-CodexDesktopPackageNotFoundMessage {
   $startAppCount = @(Get-StartApps -ErrorAction SilentlyContinue).Count
   return "当前 Windows 账户未发现可信 Publisher 签名、声明 $codexDesktopProtocol 协议且具有 FullTrust 可执行入口的桌面应用包（可见 AppX 包：$visiblePackageCount，开始菜单应用：$startAppCount）。请确认百积木与 ChatGPT/Codex 在同一 Windows 账户下运行，然后重试安装"
 }
+
+if (-not ('BaijimuCodexPackageActivator' -as [type])) {
+  Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+[ComImport]
+[Guid("2e941141-7f97-4756-ba1d-9decde894a3d")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IApplicationActivationManager {
+    [PreserveSig]
+    int ActivateApplication(
+        [MarshalAs(UnmanagedType.LPWStr)] string appUserModelId,
+        [MarshalAs(UnmanagedType.LPWStr)] string arguments,
+        uint options,
+        out uint processId);
+
+    [PreserveSig]
+    int ActivateForFile(
+        [MarshalAs(UnmanagedType.LPWStr)] string appUserModelId,
+        IntPtr itemArray,
+        [MarshalAs(UnmanagedType.LPWStr)] string verb,
+        out uint processId);
+
+    [PreserveSig]
+    int ActivateForProtocol(
+        [MarshalAs(UnmanagedType.LPWStr)] string appUserModelId,
+        IntPtr itemArray,
+        out uint processId);
+}
+
+[ComImport]
+[Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C")]
+class ApplicationActivationManager {}
+
+public static class BaijimuCodexPackageActivator {
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessageTimeout(
+        IntPtr window,
+        uint message,
+        IntPtr wParam,
+        string lParam,
+        uint flags,
+        uint timeout,
+        out IntPtr result);
+
+    public static uint Activate(string appUserModelId) {
+        var manager = (IApplicationActivationManager)new ApplicationActivationManager();
+        uint processId;
+        int result = manager.ActivateApplication(appUserModelId, null, 0, out processId);
+        Marshal.ThrowExceptionForHR(result);
+        return processId;
+    }
+
+    public static void BroadcastEnvironmentChange() {
+        IntPtr result;
+        IntPtr sent = SendMessageTimeout(
+            new IntPtr(0xffff),
+            0x001A,
+            IntPtr.Zero,
+            "Environment",
+            0x0002,
+            5000,
+            out result);
+        if (sent == IntPtr.Zero) {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+}
+'@
+}
+
+function Invoke-CodexDesktopActivation {
+  param(
+    [Parameter(Mandatory = $true)][string]$AppUserModelId,
+    [Parameter(Mandatory = $true)][string]$CodexHome
+  )
+  if ([string]::IsNullOrWhiteSpace($AppUserModelId)) {
+    throw 'ChatGPT/Codex 桌面应用包未登记 AUMID，无法通过 Windows 应用激活器启动'
+  }
+
+  $environmentKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment', $true)
+  if (-not $environmentKey) { throw '无法打开当前用户环境变量注册表' }
+  $hadOriginal = @($environmentKey.GetValueNames()) -contains 'CODEX_HOME'
+  $originalValue = if ($hadOriginal) {
+    $environmentKey.GetValue('CODEX_HOME', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+  } else {
+    $null
+  }
+  $originalKind = if ($hadOriginal) { $environmentKey.GetValueKind('CODEX_HOME') } else { $null }
+  $activatedProcessId = $null
+  try {
+    $environmentKey.SetValue('CODEX_HOME', $CodexHome, [Microsoft.Win32.RegistryValueKind]::String)
+    [BaijimuCodexPackageActivator]::BroadcastEnvironmentChange()
+    $activatedProcessId = [BaijimuCodexPackageActivator]::Activate($AppUserModelId)
+  } finally {
+    try {
+      if ($hadOriginal) {
+        $environmentKey.SetValue('CODEX_HOME', $originalValue, $originalKind)
+      } else {
+        $environmentKey.DeleteValue('CODEX_HOME', $false)
+      }
+      [BaijimuCodexPackageActivator]::BroadcastEnvironmentChange()
+    } finally {
+      $environmentKey.Dispose()
+    }
+  }
+  return $activatedProcessId
+}
 "#;
 
     const STOP_SCRIPT: &str = r#"
@@ -190,7 +300,7 @@ public static class BaijimuCodexVisibleWindowProbe {
 '@
 }
 
-Start-Process -FilePath $entry[0].executable -ErrorAction Stop
+$activatedProcessId = Invoke-CodexDesktopActivation -AppUserModelId $entry[0].appUserModelId -CodexHome $codexHome
 $deadline = (Get-Date).AddSeconds(45)
 do {
   $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
@@ -215,6 +325,7 @@ if ($visible.Count -eq 0) { throw 'ChatGPT/Codex 桌面应用已启动进程，�
   packageFullName = [string]$entry[0].package.PackageFullName
   applicationId = $entry[0].applicationId
   appUserModelId = $entry[0].appUserModelId
+  activatedProcessId = $activatedProcessId
   executable = $entry[0].executable
   codexHome = $codexHome
 } | ConvertTo-Json -Compress
@@ -346,9 +457,17 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
         }
 
         #[test]
-        fn packaged_app_launch_does_not_use_the_protected_install_directory_as_cwd() {
-            assert!(LAUNCH_AND_VERIFY_SCRIPT
-                .contains("Start-Process -FilePath $entry[0].executable -ErrorAction Stop"));
+        fn packaged_app_launch_uses_aumid_and_restores_the_user_environment() {
+            assert!(POWERSHELL_PREAMBLE.contains("IApplicationActivationManager"));
+            assert!(POWERSHELL_PREAMBLE.contains("ActivateApplication"));
+            assert!(POWERSHELL_PREAMBLE.contains("DoNotExpandEnvironmentNames"));
+            assert!(POWERSHELL_PREAMBLE.contains("GetValueKind('CODEX_HOME')"));
+            assert!(POWERSHELL_PREAMBLE.contains("DeleteValue('CODEX_HOME', $false)"));
+            assert!(POWERSHELL_PREAMBLE.contains("BroadcastEnvironmentChange"));
+            assert!(LAUNCH_AND_VERIFY_SCRIPT.contains(
+                "Invoke-CodexDesktopActivation -AppUserModelId $entry[0].appUserModelId"
+            ));
+            assert!(!LAUNCH_AND_VERIFY_SCRIPT.contains("Start-Process"));
             assert!(!LAUNCH_AND_VERIFY_SCRIPT.contains("-WorkingDirectory"));
         }
 

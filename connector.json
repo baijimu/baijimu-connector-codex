@@ -1,11 +1,11 @@
 {
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
-  "name": "Codex Desktop Manager",
-  "version": "1.3.4",
+  "name": "Codex 桌面管理器",
+  "version": "1.3.5",
   "description": "安装 Codex 桌面应用，并管理相互隔离的百积木工作区桌面档案。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "momoplan/baijimu-connector-codex", "revision": "v1.3.4"},
+  "source": {"type": "github", "repo": "momoplan/baijimu-connector-codex", "revision": "v1.3.5"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
@@ -18,7 +18,7 @@
   "methods": [
     {
       "name": "status",
-      "description": "读取 Codex Desktop Manager 自身的启动与健康状态；不访问 Codex CLI、任务、轮次或事件。",
+      "description": "读取 Codex 桌面管理器自身的启动与健康状态；不访问 Codex CLI、任务、轮次或事件。",
       "path": "/healthz",
       "httpMethod": "GET",
       "timeoutSecs": 5,
@@ -50,8 +50,8 @@
       "executablePathEnv": "CODEX_DESKTOP_BAIJIMU_BINARY"
     }
   ],
-  "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex Desktop Manager", "defaultView": true},
-  "releaseNotes": ["Windows 通过 AUMID 激活受保护的 Codex 桌面应用包，在激活瞬间传递工作区 CODEX_HOME 并按原值恢复用户环境，修复 Access is denied 且保持档案隔离。"],
+  "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex 桌面管理器", "defaultView": true},
+  "releaseNotes": ["产品名称统一为 Codex 桌面管理器，只负责桌面应用安装、工作区档案与用户显式切换；保留 Windows 通过 AUMID 激活受保护应用包并隔离工作区档案的能力。CLI 和外部 Codex 接口由独立的 Codex 外部连接器提供。"],
   "configSchema": {
     "type": "object",
     "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},

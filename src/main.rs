@@ -73,7 +73,7 @@ impl StartupReadiness {
         Self {
             inner: Arc::new(Mutex::new(StartupSnapshot {
                 phase: StartupPhase::Initializing,
-                message: "正在初始化 Codex 桌面环境管理应用".to_string(),
+                message: "正在初始化 Codex 桌面管理器".to_string(),
                 error: None,
                 started_at: timestamp(),
                 completed_at: None,
@@ -87,7 +87,7 @@ impl StartupReadiness {
             .map(|snapshot| snapshot.clone())
             .unwrap_or_else(|_| StartupSnapshot {
                 phase: StartupPhase::Failed,
-                message: "Codex 桌面环境管理应用初始化状态不可用".to_string(),
+                message: "Codex 桌面管理器初始化状态不可用".to_string(),
                 error: Some("startup readiness lock poisoned".to_string()),
                 started_at: timestamp(),
                 completed_at: Some(timestamp()),
@@ -97,7 +97,7 @@ impl StartupReadiness {
     fn ready(&self) {
         if let Ok(mut snapshot) = self.inner.lock() {
             snapshot.phase = StartupPhase::Ready;
-            snapshot.message = "Codex 桌面环境管理应用已就绪".to_string();
+            snapshot.message = "Codex 桌面管理器已就绪".to_string();
             snapshot.error = None;
             snapshot.completed_at = Some(timestamp());
         }
@@ -106,7 +106,7 @@ impl StartupReadiness {
     fn fail(&self, error: String) {
         if let Ok(mut snapshot) = self.inner.lock() {
             snapshot.phase = StartupPhase::Failed;
-            snapshot.message = "Codex 桌面环境管理应用初始化失败".to_string();
+            snapshot.message = "Codex 桌面管理器初始化失败".to_string();
             snapshot.error = Some(error);
             snapshot.completed_at = Some(timestamp());
         }

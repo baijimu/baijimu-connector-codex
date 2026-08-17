@@ -1,5 +1,3 @@
-#[cfg(target_os = "windows")]
-use crate::codex_binary;
 use crate::credential;
 use anyhow::{Context, Result};
 #[cfg(any(target_os = "windows", test))]
@@ -198,13 +196,7 @@ impl SetupManager {
         status
     }
 
-    pub fn start(
-        &self,
-        workspace_id: u64,
-        codex_cli: Option<PathBuf>,
-        force: bool,
-        verify_app_server_capability: bool,
-    ) -> Result<SetupStatus> {
+    pub fn start(&self, workspace_id: u64, force: bool) -> Result<SetupStatus> {
         if workspace_id == 0 {
             anyhow::bail!("workspaceId 必须是正整数");
         }
@@ -220,7 +212,6 @@ impl SetupManager {
                 anyhow::bail!("另一个工作区的初始化正在进行");
             }
             if !force
-                && codex_cli.is_some()
                 && current.status == "succeeded"
                 && current.workspace_id == Some(workspace_id)
                 && credential::codex_ready_for_workspace(workspace_id)
@@ -259,11 +250,7 @@ impl SetupManager {
         let manager = self.clone();
         let background = running.clone();
         thread::spawn(move || {
-            let completed = match run_install(
-                workspace_id,
-                codex_cli.as_deref(),
-                verify_app_server_capability,
-            ) {
+            let completed = match run_install(workspace_id) {
                 Ok(outcome) => SetupStatus {
                     schema_version: SETUP_STATUS_SCHEMA_VERSION,
                     attempt_id: background.attempt_id.clone(),
@@ -356,11 +343,7 @@ fn recover_persisted_status(mut status: SetupStatus) -> (SetupStatus, bool) {
     (status, false)
 }
 
-fn run_install(
-    workspace_id: u64,
-    codex_cli: Option<&Path>,
-    verify_app_server_capability: bool,
-) -> Result<SetupCompletion> {
+fn run_install(workspace_id: u64) -> Result<SetupCompletion> {
     #[cfg(target_os = "macos")]
     {
         let setup_dir = connector_home().join("setup");
@@ -373,34 +356,25 @@ fn run_install(
             &script_path,
             include_bytes!("../installers/macos-configure-terminal-and-login.sh"),
         )?;
-        let install_result = macos::run_install(
-            workspace_id,
-            codex_cli,
-            verify_app_server_capability,
-            &script_path,
-        );
+        let install_result = macos::run_install(workspace_id, &script_path);
         let _ = fs::remove_file(&script_path);
         install_result
     }
 
     #[cfg(target_os = "windows")]
     {
-        run_windows_install(workspace_id, codex_cli, verify_app_server_capability)
+        run_windows_install(workspace_id)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let _ = (workspace_id, codex_cli, verify_app_server_capability);
+        let _ = workspace_id;
         anyhow::bail!("Codex 一键安装目前只支持 macOS 和 Windows")
     }
 }
 
 #[cfg(target_os = "windows")]
-fn run_windows_install(
-    workspace_id: u64,
-    codex_cli: Option<&Path>,
-    verify_app_server_capability: bool,
-) -> Result<SetupCompletion> {
+fn run_windows_install(workspace_id: u64) -> Result<SetupCompletion> {
     let setup_dir = connector_home().join("setup");
     fs::create_dir_all(&setup_dir)
         .with_context(|| format!("创建安装目录失败: {}", setup_dir.display()))?;
@@ -429,15 +403,12 @@ fn run_windows_install(
             .env("CODEX_LLM_CREDENTIAL_FILE", &secret_path)
             .env("CODEX_INSTALL_STATE_DIR", &state_dir)
             .env("CODEX_INSTALL_QUIET", "1")
+            .env("CODEX_DESKTOP_ONLY", "1")
             .env("CODEX_HOME", &profile_home)
             .env_remove("CODEX_PROJECT_ID")
             .env_remove("BAIJIMU_PROJECT_ID")
             .env_remove("PROJECT_ID");
-        if let Some(codex_cli) = codex_cli {
-            command.env("CODEX_CLI_BIN", codex_cli);
-        } else {
-            command.env_remove("CODEX_CLI_BIN");
-        }
+        command.env_remove("CODEX_CLI_BIN");
         let output = command.output().context("启动 Codex 官方安装脚本失败")?;
         let installer_result_path = state_dir.join("result.json");
         let installer_result = read_json::<InstallerResultEnvelope>(&installer_result_path)
@@ -478,19 +449,6 @@ fn run_windows_install(
 
     if !credential::codex_ready_for_workspace(workspace_id) {
         anyhow::bail!("安装脚本执行成功，但独立工作区凭证归属回查失败");
-    }
-    let resolution = codex_binary::resolve()
-        .map_err(|error| anyhow::anyhow!("安装脚本执行成功，但 Codex CLI 回查失败：{error}"))?;
-    if verify_app_server_capability {
-        let inspection = codex_binary::inspect(&resolution);
-        if !inspection.app_server_supported {
-            anyhow::bail!(
-                "安装脚本执行成功，但 Codex CLI 不支持 app-server：{}",
-                inspection
-                    .error
-                    .unwrap_or_else(|| "能力检查失败".to_string())
-            );
-        }
     }
     Ok(match activated_profile_home {
         Some(profile_home) => launch_desktop_after_setup(&profile_home),
@@ -548,9 +506,9 @@ fn powershell_encoded_command(script: &str) -> String {
 
 fn connector_home() -> PathBuf {
     env::var_os("BAIJIMU_CONNECTOR_DATA_DIR")
-        .or_else(|| env::var_os("CODEX_CONNECTOR_HOME"))
+        .or_else(|| env::var_os("CODEX_DESKTOP_HOME"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".baijimu-connector-codex"))
+        .unwrap_or_else(|| home_dir().join(".baijimu-codex-desktop"))
 }
 
 fn installer_state_dir() -> PathBuf {

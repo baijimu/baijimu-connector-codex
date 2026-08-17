@@ -6,7 +6,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BAIJIMU_BINARY_ENV: &str = "CODEX_CONNECTOR_BAIJIMU_BINARY";
+const BAIJIMU_BINARY_ENV: &str = "CODEX_DESKTOP_BAIJIMU_BINARY";
 const WORKSPACE_PAGE_SIZE: u64 = 200;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

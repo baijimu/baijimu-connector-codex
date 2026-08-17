@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "defaultModel": "gpt-5.6-sol",
+  "routerProvider": "baijimu-router",
+  "routerBaseUrl": "https://router.baijimu.com/api/claudecode/v1"
+}

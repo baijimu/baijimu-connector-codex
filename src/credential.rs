@@ -21,12 +21,10 @@ const OWNERSHIP_MARKER_FILE: &str = ".baijimu-owner.json";
 const OWNERSHIP_RESERVATION_FILE: &str = ".baijimu-owner.pending.json";
 const OWNERSHIP_SCHEMA_VERSION: u32 = 2;
 const LEGACY_OWNERSHIP_SCHEMA_VERSION: u32 = 1;
-const OWNERSHIP_OWNER: &str = "baijimu-connector-codex";
+const OWNERSHIP_OWNER: &str = "baijimu-codex-desktop";
+const LEGACY_OWNERSHIP_OWNER: &str = "baijimu-connector-codex";
 const OWNED_AUTH_FILE: &str = "auth.json";
 const OWNED_CONFIG_FILE: &str = "config.toml";
-const DEFAULT_MODEL: &str = "gpt-5.6-sol";
-const ROUTER_PROVIDER: &str = "baijimu-router";
-const ROUTER_BASE_URL: &str = "https://router.baijimu.com/api/claudecode/v1";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -202,6 +200,7 @@ pub fn state() -> Result<CredentialManagerState> {
 }
 
 pub fn prepare_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspaceProfile> {
+    let product = crate::product_config::get();
     if workspace_id == 0 {
         anyhow::bail!("工作区 ID 必须大于 0");
     }
@@ -261,7 +260,7 @@ pub fn prepare_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspaceP
         client_id,
         workspace_id,
         workspace_name: workspace.name,
-        model: DEFAULT_MODEL.to_string(),
+        model: product.default_model.clone(),
         activated_at_epoch_seconds: previous_activation,
         codex_home: profile_home.display().to_string(),
         credential_status: "verified".to_string(),
@@ -428,6 +427,7 @@ fn write_workspace_auth(path: &Path, credential: &str) -> Result<()> {
 }
 
 fn write_workspace_config(path: &Path) -> Result<()> {
+    let product = crate::product_config::get();
     let original_path = original_codex_home().join("config.toml");
     let mut document = if original_path.exists() {
         let content = fs::read_to_string(&original_path)
@@ -438,8 +438,8 @@ fn write_workspace_config(path: &Path) -> Result<()> {
     } else {
         DocumentMut::new()
     };
-    document["model"] = value(DEFAULT_MODEL);
-    document["model_provider"] = value(ROUTER_PROVIDER);
+    document["model"] = value(product.default_model.as_str());
+    document["model_provider"] = value(product.router_provider.as_str());
     document["sandbox_mode"] = value("danger-full-access");
     document["approval_policy"] = value("on-request");
     document["cli_auth_credentials_store"] = value("file");
@@ -453,15 +453,15 @@ fn write_workspace_config(path: &Path) -> Result<()> {
     }
     if document["model_providers"]
         .as_table()
-        .and_then(|table| table.get(ROUTER_PROVIDER))
+        .and_then(|table| table.get(product.router_provider.as_str()))
         .and_then(Item::as_table)
         .is_none()
     {
-        document["model_providers"][ROUTER_PROVIDER] = Item::Table(Table::new());
+        document["model_providers"][product.router_provider.as_str()] = Item::Table(Table::new());
     }
-    let provider = &mut document["model_providers"][ROUTER_PROVIDER];
-    provider["name"] = value(ROUTER_PROVIDER);
-    provider["base_url"] = value(ROUTER_BASE_URL);
+    let provider = &mut document["model_providers"][product.router_provider.as_str()];
+    provider["name"] = value(product.router_provider.as_str());
+    provider["base_url"] = value(product.router_base_url.as_str());
     provider["wire_api"] = value("responses");
     provider["requires_openai_auth"] = value(true);
     atomic_write_private(path, document.to_string().as_bytes())?;
@@ -469,6 +469,7 @@ fn write_workspace_config(path: &Path) -> Result<()> {
 }
 
 fn managed_config_ready(path: &Path) -> bool {
+    let product = crate::product_config::get();
     fs::read_to_string(path)
         .ok()
         .and_then(|text| {
@@ -477,15 +478,16 @@ fn managed_config_ready(path: &Path) -> bool {
                 .ok()
         })
         .is_some_and(|doc| {
-            doc.get("model_provider").and_then(Item::as_str) == Some(ROUTER_PROVIDER)
+            doc.get("model_provider").and_then(Item::as_str)
+                == Some(product.router_provider.as_str())
                 && doc
                     .get("model_providers")
                     .and_then(Item::as_table)
-                    .and_then(|table| table.get(ROUTER_PROVIDER))
+                    .and_then(|table| table.get(product.router_provider.as_str()))
                     .and_then(Item::as_table)
                     .and_then(|table| table.get("base_url"))
                     .and_then(Item::as_str)
-                    == Some(ROUTER_BASE_URL)
+                    == Some(product.router_base_url.as_str())
         })
 }
 
@@ -1050,7 +1052,10 @@ fn read_default_home_reservation(home: &Path) -> Result<Option<CodexHomeReservat
     let reservation: CodexHomeReservation = crate::json_compat::from_slice(&content)
         .with_context(|| format!("解析百积木 Codex 默认目录预留标记失败: {}", path.display()))?;
     if reservation.schema_version != OWNERSHIP_SCHEMA_VERSION
-        || reservation.owner != OWNERSHIP_OWNER
+        || !matches!(
+            reservation.owner.as_str(),
+            OWNERSHIP_OWNER | LEGACY_OWNERSHIP_OWNER
+        )
         || reservation.profile_key.len() != 24
         || !reservation
             .profile_key
@@ -1073,10 +1078,11 @@ fn commit_default_home_ownership(profile: &CredentialProfile) -> Result<()> {
     let profile_key = profile_short_key(&profile.profile_id);
     if let Some(ownership) = read_valid_ownership(profile_home)? {
         if ownership.profile_key.as_deref() == Some(profile_key.as_str()) {
-            let _ = fs::remove_file(profile_home.join(OWNERSHIP_RESERVATION_FILE));
-            return Ok(());
-        }
-        if ownership.schema_version != LEGACY_OWNERSHIP_SCHEMA_VERSION {
+            if ownership.owner == OWNERSHIP_OWNER {
+                let _ = fs::remove_file(profile_home.join(OWNERSHIP_RESERVATION_FILE));
+                return Ok(());
+            }
+        } else if ownership.schema_version != LEGACY_OWNERSHIP_SCHEMA_VERSION {
             anyhow::bail!("默认 Codex 状态目录已经绑定其他百积木档案");
         }
     }
@@ -1129,7 +1135,10 @@ fn read_valid_ownership(home: &Path) -> Result<Option<CodexHomeOwnership>> {
         _ => false,
     };
     if !supported_schema
-        || marker.owner != OWNERSHIP_OWNER
+        || !matches!(
+            marker.owner.as_str(),
+            OWNERSHIP_OWNER | LEGACY_OWNERSHIP_OWNER
+        )
         || marker.managed_files != expected_files
         || !valid_profile_key
     {
@@ -1269,7 +1278,7 @@ mod tests {
         let _config = EnvironmentRestore::set("BAIJIMU_CONFIG_HOME", &config_home);
         let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
         let mut legacy = vec![0xef, 0xbb, 0xbf];
-        legacy.extend(serde_json::to_vec_pretty(&json!({"version":1,"profiles":[{"workspaceId":12,"workspaceName":"测试工作区","model":DEFAULT_MODEL,"activatedAtEpochSeconds":56}],"activeWorkspaceId":12})).unwrap());
+        legacy.extend(serde_json::to_vec_pretty(&json!({"version":1,"profiles":[{"workspaceId":12,"workspaceName":"测试工作区","model":crate::product_config::get().default_model,"activatedAtEpochSeconds":56}],"activeWorkspaceId":12})).unwrap());
         fs::write(legacy_metadata_path(), legacy).unwrap();
         let metadata = load_metadata().unwrap();
         assert_eq!(metadata.active_mode, AuthMode::Baijimu);
@@ -1462,7 +1471,7 @@ mod tests {
             client_id: Some("device-a".to_string()),
             workspace_id: 1390,
             workspace_name: "迁移工作区".to_string(),
-            model: DEFAULT_MODEL.to_string(),
+            model: crate::product_config::get().default_model.clone(),
             activated_at_epoch_seconds: 1,
             codex_home: legacy_home.display().to_string(),
             credential_status: "verified".to_string(),
@@ -1771,7 +1780,7 @@ mod tests {
             client_id: Some("device-a".to_string()),
             workspace_id: 1203,
             workspace_name: "工作区 1203".to_string(),
-            model: DEFAULT_MODEL.to_string(),
+            model: crate::product_config::get().default_model.clone(),
             activated_at_epoch_seconds: 1,
             codex_home: managed_home.display().to_string(),
             credential_status: "verified".to_string(),
@@ -1909,7 +1918,7 @@ mod tests {
             client_id: Some("device-a".to_string()),
             workspace_id: 1390,
             workspace_name: "既有工作区".to_string(),
-            model: DEFAULT_MODEL.to_string(),
+            model: crate::product_config::get().default_model.clone(),
             activated_at_epoch_seconds: 1,
             codex_home: "/isolated/workspace-1390".to_string(),
             credential_status: "verified".to_string(),
@@ -2070,7 +2079,7 @@ mod tests {
             client_id: Some("device-a".to_string()),
             workspace_id,
             workspace_name: format!("工作区 {workspace_id}"),
-            model: DEFAULT_MODEL.to_string(),
+            model: crate::product_config::get().default_model.clone(),
             activated_at_epoch_seconds: 0,
             codex_home: data_dir
                 .join("profile-homes")

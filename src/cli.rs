@@ -56,50 +56,8 @@ pub(crate) fn run(args: Vec<String>) -> Result<(), String> {
             );
             Ok(())
         }
-        "checkout-project" => {
-            let request = project_checkout::CheckoutRequest {
-                workspace_id: required_u64_arg(&parsed, "workspaceId")?,
-                project_id: required_u64_arg(&parsed, "projectId")?,
-                branch: string_arg(&parsed, "branch"),
-            };
-            println!(
-                "{}",
-                serde_json::to_string_pretty(
-                    &project_checkout::prepare(request).map_err(|error| error.to_string())?
-                )
-                .map_err(|error| error.to_string())?
-            );
-            Ok(())
-        }
         other => Err(format!("unknown command: {other}")),
     }
-}
-
-fn string_arg(parsed: &ParsedArgs, key: &str) -> Option<String> {
-    parsed
-        .values
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn required_u64_arg(parsed: &ParsedArgs, key: &str) -> Result<u64, String> {
-    string_arg(parsed, key)
-        .ok_or_else(|| format!("--{} is required", to_kebab_case(key)))?
-        .parse::<u64>()
-        .map_err(|_| format!("--{} must be a positive integer", to_kebab_case(key)))
-        .and_then(|value| {
-            if value == 0 {
-                Err(format!(
-                    "--{} must be greater than zero",
-                    to_kebab_case(key)
-                ))
-            } else {
-                Ok(value)
-            }
-        })
 }
 
 #[derive(Default)]
@@ -124,12 +82,6 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
         let raw = &arg[2..];
         let (key, inline) = raw.split_once('=').unwrap_or((raw, ""));
         let key = to_camel_case(key);
-        if key == "codexBinary" {
-            return Err(
-                "--codex-binary is no longer supported; Codex CLI discovery is automatic"
-                    .to_string(),
-            );
-        }
         if matches!(key.as_str(), "daemon" | "help" | "version") {
             parsed.flags.insert(key, Value::Bool(true));
             index += 1;
@@ -154,39 +106,19 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
 
 fn server_options(parsed: &ParsedArgs) -> Result<ServerOptions, String> {
     let value = |key: &str| parsed.values.get(key).and_then(Value::as_str);
-    let extra_args = if let Some(raw) = value("codexArgs") {
-        serde_json::from_str::<Vec<String>>(raw).map_err(|error| error.to_string())?
-    } else if let Ok(raw) = env::var("CODEX_CONNECTOR_CODEX_ARGS") {
-        serde_json::from_str::<Vec<String>>(&raw).map_err(|error| error.to_string())?
-    } else {
-        Vec::new()
-    };
     Ok(ServerOptions {
         host: value("host")
             .map(str::to_string)
-            .or_else(|| env::var("CODEX_CONNECTOR_HOST").ok())
+            .or_else(|| env::var("CODEX_DESKTOP_HOST").ok())
             .unwrap_or_else(|| DEFAULT_HOST.to_string()),
         port: value("port")
             .and_then(|value| value.parse().ok())
             .or_else(|| {
-                env::var("CODEX_CONNECTOR_PORT")
+                env::var("CODEX_DESKTOP_PORT")
                     .ok()
                     .and_then(|value| value.parse().ok())
             })
             .unwrap_or(DEFAULT_PORT),
-        listen: value("listen")
-            .map(str::to_string)
-            .or_else(|| env::var("CODEX_CONNECTOR_LISTEN").ok())
-            .unwrap_or_else(|| DEFAULT_LISTEN.to_string()),
-        request_timeout_ms: value("requestTimeoutMs")
-            .and_then(|value| value.parse().ok())
-            .or_else(|| {
-                env::var("CODEX_CONNECTOR_REQUEST_TIMEOUT_MS")
-                    .ok()
-                    .and_then(|value| value.parse().ok())
-            })
-            .unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS),
         daemon: parsed.flags.get("daemon").and_then(Value::as_bool) == Some(true),
-        extra_args,
     })
 }

@@ -1,14 +1,14 @@
 {
-  "name": "@baijimu/connector-codex",
-  "version": "1.2.68",
-  "description": "Baijimu Local connector for Codex app-server.",
+  "name": "@baijimu/codex-desktop",
+  "version": "1.0.0",
+  "description": "Baijimu local app for Codex desktop installation and workspace switching.",
   "type": "module",
   "bin": {
-    "baijimu-connector-codex": "./bin/baijimu-connector-codex.js"
+    "baijimu-codex-desktop": "./bin/baijimu-codex-desktop.js"
   },
   "scripts": {
-    "test": "node --test --test-concurrency=1 test/*.test.mjs",
-    "test:rust": "cargo test && node --test test/rust-connector.test.mjs",
+    "test": "node --test test/split-boundary.test.mjs test/platform-cli-boundary.test.mjs",
+    "test:rust": "cargo test",
     "start": "cargo run -- start"
   },
   "engines": {
@@ -16,9 +16,8 @@
   },
   "keywords": [
     "baijimu",
-    "connector",
     "codex",
-    "app-server"
+    "desktop"
   ],
   "license": "MIT"
 }

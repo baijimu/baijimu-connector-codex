@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>管理</title>
+    <title>Codex 桌面环境</title>
     <link rel="stylesheet" href="./styles.css" />
     <script type="module" src="./app.js"></script>
   </head>
@@ -37,55 +37,15 @@
         </section>
       </div>
 
-      <section class="panel integration-panel" aria-labelledby="integration-title">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">百积木接入</p>
-            <h2 id="integration-title">Connector 已独立接入</h2>
-          </div>
-          <div class="section-heading-actions">
-            <span id="connector-status-badge" class="status-badge neutral">检查中</span>
-            <button id="refresh-button" class="button secondary compact" type="button" hidden>刷新状态</button>
-          </div>
-        </div>
-        <dl class="status-grid integration-status-grid">
-          <div><dt>Connector 进程</dt><dd id="connector-process-status">正在检查</dd></div>
-          <div><dt>平台能力注册</dt><dd id="connector-registration-status">正在检查</dd></div>
-          <div><dt>Codex 会话能力</dt><dd id="codex-capability-status">正在检查</dd></div>
-        </dl>
-        <p class="integration-note">Connector 安装成功后即可由百积木发现和管理；只有会话、线程和对话等 Codex 能力需要本机运行环境。</p>
-      </section>
-
       <section id="integration-unavailable-panel" class="panel capability-panel" aria-labelledby="capability-title" hidden>
         <div class="section-heading">
           <div>
             <p class="eyebrow">能力状态</p>
-            <h2 id="capability-title">Codex 会话能力暂不可用</h2>
+            <h2 id="capability-title">Codex 桌面环境暂不可用</h2>
           </div>
           <button id="go-to-runtime-button" class="button primary" type="button">查看初始化进度</button>
         </div>
-        <p id="capability-message" class="section-note capability-note">Connector 已在线；Codex 运行环境会自动初始化，完成后即可查询会话或发起对话。</p>
-      </section>
-
-      <section id="management-active-panel" class="panel active-panel" aria-labelledby="active-title" hidden>
-        <div class="section-heading active-heading">
-          <div>
-            <p class="eyebrow">当前生效</p>
-            <h2 id="active-title">Codex 环境</h2>
-          </div>
-          <div class="active-actions">
-            <span id="credential-badge" class="status-badge neutral">读取中</span>
-            <button id="open-codex-button" class="button primary" type="button">打开 Codex</button>
-          </div>
-        </div>
-        <dl class="status-grid">
-          <div><dt>授权模式</dt><dd id="auth-mode">—</dd></div>
-          <div><dt>当前身份</dt><dd id="active-workspace">—</dd></div>
-          <div class="path-status"><dt>状态目录</dt><dd id="active-codex-home">—</dd></div>
-          <div><dt>模型</dt><dd id="active-model">—</dd></div>
-          <div><dt>Codex 配置</dt><dd id="codex-configured">—</dd></div>
-          <div><dt>初始化状态</dt><dd id="setup-status">—</dd></div>
-        </dl>
+        <p id="capability-message" class="section-note capability-note">Codex 桌面环境会自动初始化，完成后即可选择工作区并启动。</p>
       </section>
 
       <section id="switch-progress" class="panel operation-panel" aria-live="polite" hidden>
@@ -118,7 +78,7 @@
 
       <footer id="management-footer" class="privacy-note" hidden>
         <strong>安全边界</strong>
-        <span>工作区选择、安装修复和桌面启动只通过本机管理令牌调用；Connector 的远程会话能力不会在此页面中重复展示。</span>
+        <span>工作区选择、安装修复和桌面启动只通过本机管理令牌调用。</span>
       </footer>
       <section id="setup-panel" class="panel setup-panel" aria-labelledby="setup-title" tabindex="-1">
         <div class="section-heading">
@@ -126,7 +86,10 @@
             <p class="eyebrow">安装与修复</p>
             <h2 id="setup-title">本机 Codex</h2>
           </div>
-          <span id="runtime-status-badge" class="status-badge neutral">检查中</span>
+          <div class="section-heading-actions">
+            <span id="runtime-status-badge" class="status-badge neutral">检查中</span>
+            <button id="refresh-button" class="button secondary compact" type="button" hidden>刷新状态</button>
+          </div>
         </div>
         <p id="setup-message" class="section-note setup-message">正在读取初始化状态…</p>
         <div id="setup-progress" class="setup-progress" hidden>

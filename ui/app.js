@@ -1,8 +1,6 @@
 import {
-  DEFAULT_MODEL,
   codexCapabilityMeta,
   connectorStartupRetryable,
-  credentialStatusMeta,
   normalizeCredentialState,
   normalizeSetupProgress,
   setupActionMeta,
@@ -11,21 +9,18 @@ import {
 } from "./state.mjs";
 
 const elementIds = [
-  "refresh-button", "open-codex-button",
-  "connector-status-badge", "connector-process-status", "connector-registration-status",
-  "codex-capability-status", "integration-unavailable-panel", "capability-message",
+  "refresh-button", "integration-unavailable-panel", "capability-message",
   "go-to-runtime-button", "runtime-status-badge",
   "message", "error", "error-text",
   "error-retry-button", "warning",
   "legacy-home-migration", "legacy-home-message", "restore-external-home-button",
-  "credential-badge", "active-workspace", "active-codex-home", "active-model",
-  "codex-configured", "auth-mode", "auth-profile-list", "setup-status",
+  "auth-profile-list",
   "setup-message", "setup-action-button", "setup-progress", "setup-progress-label",
   "setup-progress-percent", "setup-progress-track", "setup-progress-bar", "setup-step-list",
   "switch-progress", "switch-progress-message", "auth-switch-modal",
   "auth-switch-modal-title", "auth-switch-modal-message", "auth-switch-cancel",
   "auth-switch-confirm",
-  "management-active-panel", "management-workspace-panel", "management-footer",
+  "management-workspace-panel", "management-footer",
   "setup-panel", "setup-actions",
 ];
 const elements = Object.fromEntries(elementIds.map((id) => [id, document.getElementById(id)]));
@@ -57,7 +52,7 @@ async function invokeManagement(operation, argumentsValue = undefined) {
       await new Promise((resolve) => window.setTimeout(resolve, Math.min(500, 100 + attempt * 25)));
     }
   }
-  throw lastError || new Error("Codex Connector 初始化超时。");
+  throw lastError || new Error("Codex 桌面管理器初始化超时。");
 }
 
 function setMessage(target, value) {
@@ -82,7 +77,6 @@ function clearNotices() {
 
 function renderContentVisibility() {
   const capability = codexCapabilityMeta(setupState);
-  elements["management-active-panel"].hidden = !capability.available;
   elements["management-workspace-panel"].hidden = !capability.available;
   elements["management-footer"].hidden = !capability.available;
   elements["integration-unavailable-panel"].hidden = capability.available;
@@ -90,11 +84,6 @@ function renderContentVisibility() {
 
 function renderIntegrationState() {
   const capability = codexCapabilityMeta(setupState);
-  elements["connector-status-badge"].textContent = "在线";
-  elements["connector-status-badge"].className = "status-badge success";
-  elements["connector-process-status"].textContent = "运行中";
-  elements["connector-registration-status"].textContent = "已注册";
-  elements["codex-capability-status"].textContent = capability.label;
   elements["capability-message"].textContent = capability.message;
   elements["runtime-status-badge"].textContent = capability.label;
   elements["runtime-status-badge"].className = `status-badge ${capability.tone}`;
@@ -109,7 +98,6 @@ function errorMessage(error) {
 function setAccountBusy(value) {
   accountBusy = value;
   elements["refresh-button"].disabled = value;
-  elements["open-codex-button"].disabled = value;
   elements["setup-action-button"].disabled = value;
   elements["error-retry-button"].disabled = value || !errorRetryAction;
   elements["restore-external-home-button"].disabled = value;
@@ -221,23 +209,6 @@ function renderAuthProfiles() {
 
 function renderCredentialState() {
   const state = credentialState;
-  const active = state?.activeProfile;
-  const status = credentialStatusMeta(state?.credentialStatus);
-  const currentWorkspaceId = state?.activeWorkspaceId || active?.workspaceId;
-  const currentWorkspace = state?.workspaces.find((item) => item.workspaceId === currentWorkspaceId);
-  elements["credential-badge"].textContent = status.label;
-  elements["credential-badge"].className = `status-badge ${status.tone}`;
-  elements["auth-mode"].textContent = state?.activeMode === "baijimu" ? "百积木工作区凭证" : "原有 ChatGPT 登录";
-  elements["active-workspace"].textContent = state?.activeMode === "chatgpt"
-    ? "原有 Codex 环境"
-    : currentWorkspaceId
-      ? `${currentWorkspace?.name || active?.workspaceName || `工作区 ${currentWorkspaceId}`}（${currentWorkspaceId}）`
-      : "尚未识别";
-  const activeHome = state?.activeCodexHome || active?.codexHome || state?.originalCodexHome;
-  elements["active-codex-home"].textContent = activeHome || "使用 Codex 默认目录";
-  elements["active-codex-home"].title = activeHome || "";
-  elements["active-model"].textContent = active?.model || DEFAULT_MODEL;
-  elements["codex-configured"].textContent = state?.codexConfigured ? "已由 Connector 管理" : "尚未完成配置";
   setMessage("warning", state?.discoveryWarning || "");
   const migration = state?.legacyGlobalCodexHome;
   elements["legacy-home-migration"].hidden = !migration?.restoreRequired;
@@ -327,7 +298,6 @@ function renderSetupState() {
   const meta = setupStatusMeta(setupState);
   const action = setupActionMeta(setupState);
   const status = meta.status;
-  elements["setup-status"].textContent = meta.label;
   elements["setup-message"].textContent = meta.showCurrentError
     ? setupState.error
     : setupState?.message || (status === "pending"
@@ -501,10 +471,8 @@ async function loadState({ ensureReady = false, monitor = true, successMessage =
     else if (monitor && setupState?.status === "running") void monitorSetup();
     if (successMessage) setMessage("message", successMessage);
   } catch (error) {
-    elements["connector-status-badge"].textContent = "检查失败";
-    elements["connector-status-badge"].className = "status-badge danger";
-    elements["connector-process-status"].textContent = "无法确认";
-    elements["connector-registration-status"].textContent = "无法确认";
+    elements["runtime-status-badge"].textContent = "检查失败";
+    elements["runtime-status-badge"].className = "status-badge danger";
     showError(errorMessage(error), {
       action: () => loadState({ ensureReady, monitor, successMessage }),
       label: "重新加载",
@@ -558,31 +526,10 @@ async function restoreExternalCodexHome() {
   }
 }
 
-async function openCodex() {
-  clearNotices();
-  setAccountBusy(true);
-  elements["open-codex-button"].textContent = "正在打开…";
-  try {
-    const request = credentialState?.activeMode === "baijimu" && credentialState?.activeWorkspaceId
-      ? { mode: "baijimu", workspaceId: credentialState.activeWorkspaceId }
-      : { mode: "chatgpt" };
-    await launchCodex(request, "正在重新启动并验证当前 Codex 环境…");
-  } catch (error) {
-    showError(errorMessage(error), {
-      action: openCodex,
-      label: "重试启动",
-    });
-  } finally {
-    elements["open-codex-button"].textContent = "打开 Codex";
-    setAccountBusy(false);
-  }
-}
-
 elements["refresh-button"].addEventListener("click", () => void loadState({
   ensureReady: true,
-  successMessage: "接入与运行环境状态已刷新。",
+  successMessage: "Codex 桌面环境状态已刷新。",
 }));
-elements["open-codex-button"].addEventListener("click", () => void openCodex());
 elements["setup-action-button"].addEventListener("click", () => void retrySetup());
 elements["go-to-runtime-button"].addEventListener("click", () => {
   elements["setup-panel"].scrollIntoView({ behavior: "smooth", block: "start" });

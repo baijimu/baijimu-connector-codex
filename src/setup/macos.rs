@@ -3,7 +3,7 @@ use super::{
     atomic_write_private, compact_error, installer_state_dir, launch_desktop_after_setup,
     set_private_directory, SetupCompletion,
 };
-use crate::{codex_binary, credential};
+use crate::credential;
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -20,12 +20,7 @@ const MANIFEST_KIND: &str = "baijimu.codex.customer-install-artifacts";
 const TARGET_APP_PATH: &str = "/Applications/ChatGPT.app";
 const LEGACY_APP_PATH: &str = "/Applications/Codex.app";
 
-pub(super) fn run_install(
-    workspace_id: u64,
-    existing_codex_cli: Option<&Path>,
-    verify_app_server_capability: bool,
-    native_script_path: &Path,
-) -> Result<SetupCompletion> {
+pub(super) fn run_install(workspace_id: u64, native_script_path: &Path) -> Result<SetupCompletion> {
     let state_dir = installer_state_dir();
     fs::create_dir_all(&state_dir)
         .with_context(|| format!("创建安装状态目录失败: {}", state_dir.display()))?;
@@ -37,8 +32,6 @@ pub(super) fn run_install(
     let model = credential::default_model().to_string();
     let request = MacosInstallRequest {
         workspace_id,
-        existing_codex_cli,
-        verify_app_server_capability,
         native_script_path,
         state_dir: &state_dir,
         work_dir: work_dir.path(),
@@ -69,21 +62,16 @@ pub(super) fn run_install(
 
 struct MacosInstaller<'a> {
     workspace_id: u64,
-    existing_codex_cli: Option<&'a Path>,
-    verify_app_server_capability: bool,
     native_script_path: &'a Path,
     work_dir: &'a Path,
     progress: ProgressStore,
     result_path: PathBuf,
     manifest: Option<UpstreamManifestV4>,
-    cli_path: Option<PathBuf>,
     result: MacosInstallerResult,
 }
 
 struct MacosInstallRequest<'a> {
     workspace_id: u64,
-    existing_codex_cli: Option<&'a Path>,
-    verify_app_server_capability: bool,
     native_script_path: &'a Path,
     state_dir: &'a Path,
     work_dir: &'a Path,
@@ -111,21 +99,17 @@ impl<'a> MacosInstaller<'a> {
         );
         Ok(Self {
             workspace_id: request.workspace_id,
-            existing_codex_cli: request.existing_codex_cli,
-            verify_app_server_capability: request.verify_app_server_capability,
             native_script_path: request.native_script_path,
             work_dir: request.work_dir,
             progress,
             result_path,
             manifest: None,
-            cli_path: None,
             result,
         })
     }
 
     fn execute(&mut self) -> Result<SetupCompletion> {
         self.ensure_desktop_app()?;
-        self.ensure_codex_cli()?;
 
         self.progress.set_step(
             6,
@@ -151,7 +135,6 @@ impl<'a> MacosInstaller<'a> {
         )?;
 
         self.verify_router(&prepared.credential)?;
-        self.verify_codex_cli(&profile_home)?;
 
         self.progress.set_step(
             9,
@@ -163,19 +146,6 @@ impl<'a> MacosInstaller<'a> {
         credential::finalize_workspace_setup(&prepared.profile, auto_activate)?;
         if !credential::codex_ready_for_workspace(self.workspace_id) {
             anyhow::bail!("安装配置完成，但独立工作区凭证归属回查失败");
-        }
-        let resolution = codex_binary::resolve()
-            .map_err(|error| anyhow::anyhow!("安装配置完成，但 Codex CLI 回查失败：{error}"))?;
-        if self.verify_app_server_capability {
-            let inspection = codex_binary::inspect(&resolution);
-            if !inspection.app_server_supported {
-                anyhow::bail!(
-                    "安装配置完成，但 Codex CLI 不支持 app-server：{}",
-                    inspection
-                        .error
-                        .unwrap_or_else(|| "能力检查失败".to_string())
-                );
-            }
         }
         let credential_state = credential::state()?;
         let workspace_profile_is_active = credential_state.active_mode
@@ -294,66 +264,6 @@ impl<'a> MacosInstaller<'a> {
             4,
             InstallerStepState::Completed,
             "ChatGPT 桌面应用已安装",
-            None,
-            None,
-        )?;
-        Ok(())
-    }
-
-    fn ensure_codex_cli(&mut self) -> Result<()> {
-        self.progress.set_step(
-            5,
-            InstallerStepState::Running,
-            "正在检查 Codex CLI",
-            None,
-            None,
-        )?;
-        if let Some(path) = self.existing_codex_cli.filter(|path| path.is_file()) {
-            self.cli_path = Some(path.to_path_buf());
-            self.result.cli_installed = true;
-            self.result.cli_install_method = "already-installed".to_string();
-            self.result.cli_path = path.display().to_string();
-            self.progress.set_step(
-                5,
-                InstallerStepState::Completed,
-                "Codex CLI 已可用",
-                None,
-                None,
-            )?;
-            return Ok(());
-        }
-
-        self.ensure_manifest(5)?;
-        let asset = self.select_asset("codex_cli")?.clone();
-        let archive = self.work_dir.join(&asset.name);
-        self.download_to_path(
-            &asset.mirror_url,
-            &archive,
-            5,
-            "正在下载官方 Codex CLI 安装包",
-            Some(asset.size_bytes),
-        )?;
-        self.progress.set_step(
-            5,
-            InstallerStepState::Running,
-            "正在校验并安装 Codex CLI",
-            None,
-            None,
-        )?;
-        let cli_path =
-            self.run_native_action("install-cli", &[&archive, Path::new(&asset.sha256)])?;
-        let cli_path = PathBuf::from(cli_path.trim());
-        if !cli_path.is_absolute() || !cli_path.is_file() {
-            anyhow::bail!("macOS 原生安装适配器未生成有效的 Codex CLI");
-        }
-        self.cli_path = Some(cli_path.clone());
-        self.result.cli_installed = true;
-        self.result.cli_install_method = "baijimu-cache-tar".to_string();
-        self.result.cli_path = cli_path.display().to_string();
-        self.progress.set_step(
-            5,
-            InstallerStepState::Completed,
-            "Codex CLI 已安装",
             None,
             None,
         )?;
@@ -528,62 +438,6 @@ impl<'a> MacosInstaller<'a> {
             7,
             InstallerStepState::Completed,
             "百积木路由验证通过",
-            None,
-            None,
-        )?;
-        Ok(())
-    }
-
-    fn verify_codex_cli(&mut self, profile_home: &Path) -> Result<()> {
-        self.progress.set_step(
-            8,
-            InstallerStepState::Running,
-            "正在检查 Codex CLI 版本",
-            None,
-            None,
-        )?;
-        let cli_path = self.cli_path.as_ref().context("Codex CLI 路径尚未确定")?;
-        let version_output = Command::new(cli_path)
-            .arg("--version")
-            .output()
-            .context("读取 Codex CLI 版本失败")?;
-        if !version_output.status.success() {
-            anyhow::bail!("Codex CLI 版本检查失败");
-        }
-        self.result.cli_version = compact_error(&String::from_utf8_lossy(&version_output.stdout));
-
-        let smoke = Command::new(cli_path)
-            .args(["exec", "--skip-git-repo-check", "Reply exactly OK"])
-            .env("CODEX_HOME", profile_home)
-            .output()
-            .context("启动 Codex CLI 冒烟测试失败")?;
-        let combined = format!(
-            "{}\n{}",
-            String::from_utf8_lossy(&smoke.stdout),
-            String::from_utf8_lossy(&smoke.stderr)
-        );
-        if !smoke.status.success() {
-            let exit = smoke
-                .status
-                .code()
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "signal".to_string());
-            anyhow::bail!(
-                "Codex CLI 冒烟测试失败，退出码 {exit}：{}",
-                compact_error(&combined)
-            );
-        }
-        if !combined
-            .lines()
-            .any(|line| line.trim_end_matches('\r') == "OK")
-        {
-            anyhow::bail!("Codex CLI 冒烟测试未返回准确的 OK 响应");
-        }
-        self.result.cli_smoke = true;
-        self.progress.set_step(
-            8,
-            InstallerStepState::Completed,
-            "Codex CLI 验证通过",
             None,
             None,
         )?;
@@ -812,14 +666,11 @@ impl UpstreamAssetV4 {
             self.sha256.as_str(),
             self.content_type.as_str(),
         ];
-        let host_requirements_valid = match self.component.as_str() {
-            "codex_desktop_app" => self.host_requirements.as_ref().is_some_and(|requirements| {
+        let host_requirements_valid = self.component == "codex_desktop_app"
+            && self.host_requirements.as_ref().is_some_and(|requirements| {
                 crate::system_compatibility::validate_version(&requirements.minimum_os_version)
                     .is_ok()
-            }),
-            "codex_cli" => self.host_requirements.is_none(),
-            _ => false,
-        };
+            });
         if required.iter().any(|value| value.trim().is_empty())
             || self.size == 0
             || self.size != self.size_bytes
@@ -945,15 +796,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn customer_manifest_is_deserialized_into_a_closed_contract() {
-        let manifest = crate::json_compat::from_slice::<UpstreamManifestV4>(include_bytes!(
+    fn desktop_manifest_is_deserialized_into_a_closed_contract() {
+        let mut manifest = crate::json_compat::from_slice::<UpstreamManifestV4>(include_bytes!(
             "../../test/fixtures/codex-artifacts-manifest-v4.json"
         ))
         .unwrap();
+        manifest
+            .assets
+            .retain(|asset| asset.component == "codex_desktop_app");
+        manifest.required_assets = manifest
+            .assets
+            .iter()
+            .map(|asset| asset.name.clone())
+            .collect();
         manifest.validate().unwrap();
-        assert_eq!(manifest.assets.len(), 2);
+        assert_eq!(manifest.assets.len(), 1);
         assert_eq!(manifest.assets[0].component, "codex_desktop_app");
-        assert_eq!(manifest.assets[1].component, "codex_cli");
     }
 
     #[test]
@@ -975,6 +833,8 @@ mod tests {
             "../../test/fixtures/codex-artifacts-manifest-v4.json"
         ))
         .unwrap();
+        manifest.assets.truncate(1);
+        manifest.required_assets = vec![manifest.assets[0].name.clone()];
         manifest.assets[0].host_requirements = None;
         assert!(manifest.validate().is_err());
 

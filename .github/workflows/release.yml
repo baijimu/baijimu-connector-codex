@@ -200,6 +200,17 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $PSNativeCommandUseErrorActionPreference = $true
+          $tokens = $null
+          $parseErrors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "installers\windows-configure-terminal-and-login.ps1").Path,
+            [ref]$tokens,
+            [ref]$parseErrors
+          )
+          if ($parseErrors.Count -ne 0) {
+            $parseErrors | ForEach-Object { Write-Error $_.Message }
+            throw "Windows installer PowerShell syntax validation failed"
+          }
           cargo test --locked
           cargo build --locked --release
           $binDir = Join-Path $env:RUNNER_TEMP "codex-local-app\bin\${{ matrix.platform_dir }}"

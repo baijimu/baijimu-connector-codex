@@ -512,15 +512,12 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
         .with_context(|| format!("创建安装目录失败: {}", setup_dir.display()))?;
     set_private_directory(&setup_dir)?;
     let unique = format!("{}-{}", std::process::id(), now_epoch_seconds());
-    let secret_path = setup_dir.join(format!("credential-{unique}"));
     let script_path = setup_dir.join(format!("install-{unique}.ps1"));
     let auto_activate = credential::should_auto_activate_workspace_after_setup()?;
 
     let install_result = (|| -> Result<(Option<PathBuf>, String)> {
         let prepared = credential::prepare_workspace_profile(workspace_id)?;
         let profile_home = PathBuf::from(&prepared.profile.codex_home);
-        atomic_write_private(&secret_path, prepared.credential.as_bytes())?;
-
         atomic_write_private(&script_path, &windows_install_script_bytes())?;
         let state_dir = installer_state_dir();
         fs::create_dir_all(&state_dir)?;
@@ -534,7 +531,6 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
         command
             .env("CODEX_WORKSPACE_ID", workspace_id.to_string())
             .env("CODEX_ARTIFACT_MANIFEST_URL", source::manifest_url()?)
-            .env("CODEX_LLM_CREDENTIAL_FILE", &secret_path)
             .env("CODEX_INSTALL_STATE_DIR", &state_dir)
             .env("CODEX_INSTALL_QUIET", "1")
             .env("CODEX_UI_LOCALE", &product_config.default_ui_locale)
@@ -584,7 +580,6 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
             prepared.credential,
         ))
     })();
-    let _ = fs::remove_file(&secret_path);
     let _ = fs::remove_file(&script_path);
     let (activated_profile_home, router_credential) = install_result?;
 

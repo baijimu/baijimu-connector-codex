@@ -53,6 +53,14 @@ test("desktop manager neither installs CLI nor exposes invoke routes", async () 
   assert.doesNotMatch(contract, /cli_installed|cli_install_method|cli_path|cli_version|cli_smoke/);
   assert.doesNotMatch(windows, /Resolve-CodexCli|Invoke-AppServerProfileSetup|Test-CodexCli|CODEX_DESKTOP_ONLY|CODEX_CLI_BIN|cliInstallMethod|cliArtifact|codexExe/);
   assert.doesNotMatch(windows, /Invoke-WebRequest[^\n]+\/responses|function Test-Router/);
+  assert.doesNotMatch(windows, /RouterBaseUrl|New-BaijimuLlmCredential|ConvertTo-CodexConfigContent|Write-CodexConfig|CODEX_LLM_CREDENTIAL_FILE/);
+  assert.doesNotMatch(windows, /gpt-5\.6-sol|baijimu-router|base_url\s*=/);
+  assert.match(windows, /function Confirm-CodexConfiguration/);
+  assert.match(windows, /Rust 凭证管理器未生成 Codex 授权文件/);
+  assert.match(windows, /Rust 凭证管理器未生成 Codex 配置文件/);
+  assert.doesNotMatch(setup, /CODEX_LLM_CREDENTIAL_FILE|credential-\{unique\}/);
+  assert.match(setup, /credential::prepare_workspace_profile\(workspace_id\)/);
+  assert.match(setup, /prepared\.credential/);
   assert.match(setup, /mod router;/);
   assert.doesNotMatch(macosScript, /install_cli|install-cli/);
 });

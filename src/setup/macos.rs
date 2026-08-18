@@ -1,12 +1,12 @@
 use super::contract::{InstallerStatus, InstallerStepState, MacosInstallerResult};
 use super::{
     atomic_write_private, compact_error, installer_state_dir, launch_desktop_after_setup,
-    set_private_directory, SetupCompletion,
+    set_private_directory, SetupCompletion, SetupInstallation,
 };
 use crate::credential;
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
@@ -20,7 +20,10 @@ const MANIFEST_KIND: &str = "baijimu.codex.customer-install-artifacts";
 const TARGET_APP_PATH: &str = "/Applications/ChatGPT.app";
 const LEGACY_APP_PATH: &str = "/Applications/Codex.app";
 
-pub(super) fn run_install(workspace_id: u64, native_script_path: &Path) -> Result<SetupCompletion> {
+pub(super) fn run_install(
+    workspace_id: u64,
+    native_script_path: &Path,
+) -> Result<SetupInstallation> {
     let state_dir = installer_state_dir();
     fs::create_dir_all(&state_dir)
         .with_context(|| format!("创建安装状态目录失败: {}", state_dir.display()))?;
@@ -40,11 +43,11 @@ pub(super) fn run_install(workspace_id: u64, native_script_path: &Path) -> Resul
     let mut installer = MacosInstaller::new(request)?;
     let started = Instant::now();
     match installer.execute() {
-        Ok(outcome) => {
+        Ok(installed) => {
             installer.result.ok = true;
             installer.result.elapsed_ms = started.elapsed().as_millis();
             installer.write_result()?;
-            Ok(outcome)
+            Ok(installed)
         }
         Err(error) => {
             let message = compact_error(&format!("{error:#}"));
@@ -108,7 +111,7 @@ impl<'a> MacosInstaller<'a> {
         })
     }
 
-    fn execute(&mut self) -> Result<SetupCompletion> {
+    fn execute(&mut self) -> Result<SetupInstallation> {
         self.ensure_desktop_app()?;
 
         self.progress.set_step(
@@ -133,7 +136,13 @@ impl<'a> MacosInstaller<'a> {
             None,
         )?;
 
-        self.verify_router(&prepared.credential)?;
+        self.progress.set_step(
+            6,
+            InstallerStepState::Skipped,
+            "安装完成后由桌面管理器在后台验证百积木路由",
+            None,
+            None,
+        )?;
 
         self.progress.set_step(
             7,
@@ -168,7 +177,10 @@ impl<'a> MacosInstaller<'a> {
         )?;
         self.progress
             .complete_pending(InstallerStepState::Skipped, "安装已完成")?;
-        Ok(outcome)
+        Ok(SetupInstallation {
+            completion: outcome,
+            router_credential: prepared.credential,
+        })
     }
 
     fn ensure_desktop_app(&mut self) -> Result<()> {
@@ -403,43 +415,6 @@ impl<'a> MacosInstaller<'a> {
             read_app_metadata(path, "kMDItemVersion", "CFBundleShortVersionString");
         self.result.bundle_id =
             read_app_metadata(path, "kMDItemCFBundleIdentifier", "CFBundleIdentifier");
-        Ok(())
-    }
-
-    fn verify_router(&mut self, credential_value: &str) -> Result<()> {
-        self.progress.set_step(
-            6,
-            InstallerStepState::Running,
-            "正在验证百积木路由",
-            None,
-            None,
-        )?;
-        let endpoint = format!("{}/responses", credential::router_base_url());
-        let response = Client::builder()
-            .connect_timeout(Duration::from_secs(15))
-            .timeout(Duration::from_secs(60))
-            .build()
-            .context("创建百积木路由验证客户端失败")?
-            .post(&endpoint)
-            .bearer_auth(credential_value)
-            .json(&RouterProbeRequest {
-                model: credential::default_model(),
-                input: "Reply with exactly OK",
-            })
-            .send()
-            .context("路由 /responses 健康检查失败")?;
-        let status = response.status().as_u16();
-        self.result.router_http_status = Some(status);
-        if status != 200 {
-            anyhow::bail!("路由 /responses 健康检查失败：HTTP {status}");
-        }
-        self.progress.set_step(
-            6,
-            InstallerStepState::Completed,
-            "百积木路由验证通过",
-            None,
-            None,
-        )?;
         Ok(())
     }
 
@@ -687,12 +662,6 @@ impl UpstreamAssetV4 {
         let current = crate::system_compatibility::current_macos_version()?;
         crate::system_compatibility::ensure_supported("macOS", &current, minimum, "ChatGPT/Codex")
     }
-}
-
-#[derive(Serialize)]
-struct RouterProbeRequest<'a> {
-    model: &'a str,
-    input: &'a str,
 }
 
 fn validate_asset_file_name(name: &str) -> Result<()> {

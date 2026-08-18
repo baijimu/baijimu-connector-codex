@@ -17,6 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod contract;
 #[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 mod macos;
+mod router;
 mod source;
 
 #[cfg(any(target_os = "windows", test))]
@@ -69,6 +70,12 @@ enum SetupCompletion {
     Verified,
     Warning(String),
     NotRequested,
+}
+
+#[derive(Clone, Debug)]
+struct SetupInstallation {
+    completion: SetupCompletion,
+    router_credential: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,13 +131,50 @@ impl SetupCompletion {
         }
     }
 
-    #[cfg(any(target_os = "macos", test))]
     fn warning(&self) -> Option<&str> {
         match self {
             Self::Warning(warning) => Some(warning),
             _ => None,
         }
     }
+
+    fn verification_in_progress_message(&self) -> String {
+        format!(
+            "{} 百积木路由正在后台验证；验证期间仍可打开 Codex。",
+            self.message()
+        )
+    }
+
+    fn message_with_route_verification(&self, verification: &router::RouteVerification) -> String {
+        let route_message = route_verification_message(verification);
+        match self.warning() {
+            Some(warning) => format!("{route_message} {warning}"),
+            None => route_message,
+        }
+    }
+}
+
+fn route_validation_failure(verification: &router::RouteVerification) -> Option<String> {
+    verification.failure_message().map(|failure| {
+        format!(
+            "百积木路由验证已尝试 {} 次但暂未通过：{}",
+            verification.attempts(),
+            compact_error(failure)
+        )
+    })
+}
+
+fn route_verification_message(verification: &router::RouteVerification) -> String {
+    if verification.passed() {
+        return format!(
+            "Codex 应用安装和工作区配置已完成；百积木路由验证在第 {} 次尝试通过，可以正常打开使用。",
+            verification.attempts()
+        );
+    }
+    format!(
+        "Codex 应用安装和工作区配置已完成；{}。这不属于安装失败，可以打开 Codex，也可以稍后刷新或重新验证。",
+        route_validation_failure(verification).unwrap_or_else(|| "百积木路由验证暂未通过".to_string())
+    )
 }
 
 impl Default for SetupStatus {
@@ -211,6 +255,12 @@ impl SetupManager {
                 }
                 anyhow::bail!("另一个工作区的初始化正在进行");
             }
+            if current.status == "succeeded"
+                && current.workspace_id == Some(workspace_id)
+                && current.completed_at_epoch_seconds.is_none()
+            {
+                return Ok(current.clone());
+            }
             if !force
                 && current.status == "succeeded"
                 && current.workspace_id == Some(workspace_id)
@@ -249,48 +299,116 @@ impl SetupManager {
 
         let manager = self.clone();
         let background = running.clone();
-        thread::spawn(move || {
-            let completed = match run_install(workspace_id) {
-                Ok(outcome) => SetupStatus {
+        thread::spawn(move || match run_install(workspace_id) {
+            Ok(installed) => {
+                let verifying = SetupStatus {
                     schema_version: SETUP_STATUS_SCHEMA_VERSION,
                     attempt_id: background.attempt_id.clone(),
                     connector_version: Some(CONNECTOR_VERSION.to_string()),
                     status: "succeeded".to_string(),
                     workspace_id: Some(workspace_id),
-                    message: outcome.message(),
+                    message: installed.completion.verification_in_progress_message(),
                     error: None,
                     last_error: None,
                     error_code: None,
                     retryable: false,
                     automatic_retry_count: background.automatic_retry_count,
                     started_at_epoch_seconds: background.started_at_epoch_seconds,
+                    completed_at_epoch_seconds: None,
+                    installer_status: None,
+                };
+                if manager.replace(verifying.clone()).is_err() {
+                    return;
+                }
+                let verification = router::verify(&installed.router_credential);
+                let completed = SetupStatus {
+                    message: installed
+                        .completion
+                        .message_with_route_verification(&verification),
+                    last_error: route_validation_failure(&verification),
+                    retryable: !verification.passed(),
+                    completed_at_epoch_seconds: Some(now_epoch_seconds()),
+                    ..verifying
+                };
+                let _ = manager.replace(completed);
+            }
+            Err(error) => {
+                let classification = classify_setup_failure(&error);
+                let error = compact_error(&error.to_string());
+                let completed = SetupStatus {
+                    schema_version: SETUP_STATUS_SCHEMA_VERSION,
+                    attempt_id: background.attempt_id.clone(),
+                    connector_version: Some(CONNECTOR_VERSION.to_string()),
+                    status: "failed".to_string(),
+                    workspace_id: Some(workspace_id),
+                    message: classification.message.to_string(),
+                    error: Some(error.clone()),
+                    last_error: Some(error),
+                    error_code: Some(classification.error_code.to_string()),
+                    retryable: classification.retryable,
+                    automatic_retry_count: background.automatic_retry_count,
+                    started_at_epoch_seconds: background.started_at_epoch_seconds,
                     completed_at_epoch_seconds: Some(now_epoch_seconds()),
                     installer_status: None,
-                },
-                Err(error) => {
-                    let classification = classify_setup_failure(&error);
-                    let error = compact_error(&error.to_string());
-                    SetupStatus {
-                        schema_version: SETUP_STATUS_SCHEMA_VERSION,
-                        attempt_id: background.attempt_id.clone(),
-                        connector_version: Some(CONNECTOR_VERSION.to_string()),
-                        status: "failed".to_string(),
-                        workspace_id: Some(workspace_id),
-                        message: classification.message.to_string(),
-                        error: Some(error.clone()),
-                        last_error: Some(error),
-                        error_code: Some(classification.error_code.to_string()),
-                        retryable: classification.retryable,
-                        automatic_retry_count: background.automatic_retry_count,
-                        started_at_epoch_seconds: background.started_at_epoch_seconds,
-                        completed_at_epoch_seconds: Some(now_epoch_seconds()),
-                        installer_status: None,
-                    }
-                }
+                };
+                let _ = manager.replace(completed);
+            }
+        });
+        Ok(running)
+    }
+
+    pub fn verify_router(&self, workspace_id: u64, credential: String) -> Result<SetupStatus> {
+        if workspace_id == 0 {
+            anyhow::bail!("workspaceId 必须是正整数");
+        }
+        let started_at = now_epoch_seconds();
+        let verifying = {
+            let current = self
+                .state
+                .lock()
+                .map_err(|_| anyhow::anyhow!("初始化状态锁异常"))?;
+            if current.status == "running" {
+                anyhow::bail!("Codex 安装配置仍在进行，完成后再验证路由");
+            }
+            if current.status != "succeeded" || current.workspace_id != Some(workspace_id) {
+                anyhow::bail!("当前工作区尚未完成 Codex 安装配置，不能单独验证路由");
+            }
+            if current.completed_at_epoch_seconds.is_none() {
+                return Ok(current.clone());
+            }
+            SetupStatus {
+                attempt_id: Some(format!(
+                    "route-{CONNECTOR_VERSION}-{}-{started_at}",
+                    std::process::id()
+                )),
+                message: "Codex 已安装，正在后台重新验证百积木路由；验证期间仍可打开使用。"
+                    .to_string(),
+                error: None,
+                last_error: None,
+                error_code: None,
+                retryable: false,
+                started_at_epoch_seconds: Some(started_at),
+                completed_at_epoch_seconds: None,
+                installer_status: None,
+                ..current.clone()
+            }
+        };
+        self.replace(verifying.clone())?;
+
+        let manager = self.clone();
+        let background = verifying.clone();
+        thread::spawn(move || {
+            let verification = router::verify(&credential);
+            let completed = SetupStatus {
+                message: route_verification_message(&verification),
+                last_error: route_validation_failure(&verification),
+                retryable: !verification.passed(),
+                completed_at_epoch_seconds: Some(now_epoch_seconds()),
+                ..background
             };
             let _ = manager.replace(completed);
         });
-        Ok(running)
+        Ok(verifying)
     }
 
     fn replace(&self, status: SetupStatus) -> Result<()> {
@@ -324,6 +442,20 @@ fn recover_persisted_status(mut status: SetupStatus) -> (SetupStatus, bool) {
         return (status, true);
     }
 
+    if status.status == "succeeded" && status.completed_at_epoch_seconds.is_none() {
+        let interruption = "百积木路由验证被 Connector 重启中断".to_string();
+        status.schema_version = SETUP_STATUS_SCHEMA_VERSION;
+        status.message = format!(
+            "Codex 应用安装和工作区配置已完成；{interruption}。这不属于安装失败，可以打开 Codex，也可以重新验证。"
+        );
+        status.error = None;
+        status.last_error = Some(interruption);
+        status.error_code = None;
+        status.retryable = true;
+        status.completed_at_epoch_seconds = Some(now_epoch_seconds());
+        return (status, true);
+    }
+
     if status.status == "failed" && status.connector_version.as_deref() != Some(CONNECTOR_VERSION) {
         let previous_version = status
             .connector_version
@@ -343,7 +475,7 @@ fn recover_persisted_status(mut status: SetupStatus) -> (SetupStatus, bool) {
     (status, false)
 }
 
-fn run_install(workspace_id: u64) -> Result<SetupCompletion> {
+fn run_install(workspace_id: u64) -> Result<SetupInstallation> {
     #[cfg(target_os = "macos")]
     {
         let setup_dir = connector_home().join("setup");
@@ -374,7 +506,7 @@ fn run_install(workspace_id: u64) -> Result<SetupCompletion> {
 }
 
 #[cfg(target_os = "windows")]
-fn run_windows_install(workspace_id: u64) -> Result<SetupCompletion> {
+fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
     let setup_dir = connector_home().join("setup");
     fs::create_dir_all(&setup_dir)
         .with_context(|| format!("创建安装目录失败: {}", setup_dir.display()))?;
@@ -384,7 +516,7 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupCompletion> {
     let script_path = setup_dir.join(format!("install-{unique}.ps1"));
     let auto_activate = credential::should_auto_activate_workspace_after_setup()?;
 
-    let install_result = (|| -> Result<Option<PathBuf>> {
+    let install_result = (|| -> Result<(Option<PathBuf>, String)> {
         let prepared = credential::prepare_workspace_profile(workspace_id)?;
         let profile_home = PathBuf::from(&prepared.profile.codex_home);
         atomic_write_private(&secret_path, prepared.credential.as_bytes())?;
@@ -447,18 +579,25 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupCompletion> {
             == credential::AuthMode::Baijimu
             && credential_state.active_workspace_id == Some(workspace_id)
             && Path::new(&credential_state.active_codex_home) == profile_home;
-        Ok(workspace_profile_is_active.then_some(profile_home))
+        Ok((
+            workspace_profile_is_active.then_some(profile_home),
+            prepared.credential,
+        ))
     })();
     let _ = fs::remove_file(&secret_path);
     let _ = fs::remove_file(&script_path);
-    let activated_profile_home = install_result?;
+    let (activated_profile_home, router_credential) = install_result?;
 
     if !credential::codex_ready_for_workspace(workspace_id) {
         anyhow::bail!("安装脚本执行成功，但独立工作区凭证归属回查失败");
     }
-    Ok(match activated_profile_home {
+    let completion = match activated_profile_home {
         Some(profile_home) => launch_desktop_after_setup(&profile_home),
         None => SetupCompletion::completed_without_desktop_launch(),
+    };
+    Ok(SetupInstallation {
+        completion,
+        router_credential,
     })
 }
 
@@ -638,6 +777,27 @@ mod tests {
         );
         assert!(recovered.retryable);
         assert!(recovered.message.contains("1.2.27"));
+    }
+
+    #[test]
+    fn interrupted_route_verification_keeps_the_install_successful_and_retryable() {
+        let mut persisted = persisted_status("succeeded", Some(CONNECTOR_VERSION));
+        persisted.error = None;
+        persisted.completed_at_epoch_seconds = None;
+
+        let (recovered, changed) = recover_persisted_status(persisted);
+
+        assert!(changed);
+        assert_eq!(recovered.status, "succeeded");
+        assert_eq!(recovered.error, None);
+        assert_eq!(recovered.error_code, None);
+        assert!(recovered.retryable);
+        assert!(recovered
+            .last_error
+            .as_deref()
+            .is_some_and(|value| value.contains("路由验证被 Connector 重启中断")));
+        assert!(recovered.message.contains("不属于安装失败"));
+        assert!(recovered.completed_at_epoch_seconds.is_some());
     }
 
     #[test]

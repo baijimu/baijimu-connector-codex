@@ -27,6 +27,10 @@ test("desktop manager exposes only its required read-only status method", async 
     [{ name: "status", path: "/healthz", httpMethod: "GET" }],
   );
   assert.ok(manifest.management.operations.launchCodex);
+  assert.deepEqual(manifest.management.operations.verifyRouter, {
+    method: "POST",
+    path: "/management/v1/setup/verify-router",
+  });
 });
 
 test("desktop manager neither installs CLI nor exposes invoke routes", async () => {
@@ -48,6 +52,8 @@ test("desktop manager neither installs CLI nor exposes invoke routes", async () 
   assert.match(source, /codex-artifacts\/v4\/desktop\/latest\.json/);
   assert.doesNotMatch(contract, /cli_installed|cli_install_method|cli_path|cli_version|cli_smoke/);
   assert.doesNotMatch(windows, /Resolve-CodexCli|Invoke-AppServerProfileSetup|Test-CodexCli|CODEX_DESKTOP_ONLY|CODEX_CLI_BIN|cliInstallMethod|cliArtifact|codexExe/);
+  assert.doesNotMatch(windows, /Invoke-WebRequest[^\n]+\/responses|function Test-Router/);
+  assert.match(setup, /mod router;/);
   assert.doesNotMatch(macosScript, /install_cli|install-cli/);
 });
 

@@ -415,6 +415,23 @@ pub fn codex_ready_for_workspace(workspace_id: u64) -> bool {
     })
 }
 
+pub(crate) fn router_credential_for_workspace(workspace_id: u64) -> Result<String> {
+    let metadata = load_metadata()?;
+    let profile = metadata
+        .profiles
+        .iter()
+        .filter(|profile| profile.workspace_id == workspace_id)
+        .max_by_key(|profile| {
+            (
+                metadata.active_profile_id.as_deref() == Some(profile.profile_id.as_str()),
+                profile.activated_at_epoch_seconds,
+            )
+        })
+        .context("未找到工作区 Codex 凭证档案")?;
+    read_codex_api_key(&Path::new(&profile.codex_home).join("auth.json"))?
+        .context("工作区 Codex 凭证文件中缺少 OPENAI_API_KEY")
+}
+
 fn write_workspace_auth(path: &Path, credential: &str) -> Result<()> {
     atomic_write_private(
         path,

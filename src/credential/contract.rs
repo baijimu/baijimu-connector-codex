@@ -5,11 +5,6 @@ pub fn default_model() -> &'static str {
     crate::product_config::get().default_model.as_str()
 }
 
-#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
-pub fn router_base_url() -> &'static str {
-    crate::product_config::get().router_base_url.as_str()
-}
-
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthMode {

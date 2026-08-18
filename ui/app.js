@@ -397,13 +397,17 @@ function renderSetupProgress() {
 
 async function monitorSetup() {
   const generation = ++setupMonitorGeneration;
-  while (generation === setupMonitorGeneration && setupState?.status === "running") {
+  while (
+    generation === setupMonitorGeneration
+    && (setupState?.status === "running"
+      || (setupState?.status === "succeeded" && setupState?.completedAtEpochSeconds == null))
+  ) {
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
     if (generation !== setupMonitorGeneration) return;
     try {
       setupState = await invokeManagement("setupState");
       renderSetupState();
-      if (setupState?.status === "succeeded") {
+      if (setupState?.status === "succeeded" && setupState?.completedAtEpochSeconds != null) {
         await loadState({ ensureReady: false, monitor: false });
         setMessage("message", setupState?.message || "本机 Codex 已完成安装配置。");
         return;
@@ -432,6 +436,9 @@ async function ensureCodexReady() {
   renderSetupState();
   switch (readiness?.readiness) {
     case "ready":
+      if (setupState?.status === "succeeded" && setupState?.completedAtEpochSeconds == null) {
+        void monitorSetup();
+      }
       return;
     case "initializing":
       elements["setup-panel"].scrollIntoView({ behavior: "smooth", block: "start" });
@@ -468,7 +475,10 @@ async function loadState({ ensureReady = false, monitor = true, successMessage =
     renderCredentialState();
     renderSetupState();
     if (ensureReady) await ensureCodexReady();
-    else if (monitor && setupState?.status === "running") void monitorSetup();
+    else if (monitor && (
+      setupState?.status === "running"
+      || (setupState?.status === "succeeded" && setupState?.completedAtEpochSeconds == null)
+    )) void monitorSetup();
     if (successMessage) setMessage("message", successMessage);
   } catch (error) {
     elements["runtime-status-badge"].textContent = "检查失败";
@@ -507,6 +517,41 @@ async function retrySetup() {
   }
 }
 
+async function retryRouterVerification() {
+  clearNotices();
+  const workspaceId = credentialState?.currentWorkspaceId;
+  if (!workspaceId) {
+    showError("客户端当前授权中缺少工作区信息。", {
+      action: () => loadState({ ensureReady: true }),
+      label: "重新检查",
+    });
+    return;
+  }
+  setAccountBusy(true);
+  try {
+    setupState = await invokeManagement("verifyRouter", { workspaceId });
+    renderSetupState();
+    setMessage("message", "已开始重新验证百积木路由；验证期间仍可打开 Codex。");
+    void monitorSetup();
+  } catch (error) {
+    setAccountBusy(false);
+    showError(errorMessage(error), {
+      action: retryRouterVerification,
+      label: "重新验证",
+    });
+  }
+}
+
+function refreshState() {
+  if (setupState?.status === "succeeded" && setupState?.retryable === true) {
+    return retryRouterVerification();
+  }
+  return loadState({
+    ensureReady: true,
+    successMessage: "Codex 桌面环境状态已刷新。",
+  });
+}
+
 async function restoreExternalCodexHome() {
   clearNotices();
   setAccountBusy(true);
@@ -526,11 +571,12 @@ async function restoreExternalCodexHome() {
   }
 }
 
-elements["refresh-button"].addEventListener("click", () => void loadState({
-  ensureReady: true,
-  successMessage: "Codex 桌面环境状态已刷新。",
-}));
-elements["setup-action-button"].addEventListener("click", () => void retrySetup());
+elements["refresh-button"].addEventListener("click", () => void refreshState());
+elements["setup-action-button"].addEventListener("click", () => {
+  const action = setupActionMeta(setupState);
+  if (action.operation === "verify") void retryRouterVerification();
+  else void retrySetup();
+});
 elements["go-to-runtime-button"].addEventListener("click", () => {
   elements["setup-panel"].scrollIntoView({ behavior: "smooth", block: "start" });
   elements["setup-panel"].focus({ preventScroll: true });

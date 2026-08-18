@@ -1,13 +1,13 @@
 {
   "name": "@baijimu/codex-desktop",
-  "version": "1.3.9",
+  "version": "1.3.10",
   "description": "负责 Codex 桌面安装与工作区切换的百积木本地应用。",
   "type": "module",
   "bin": {
     "baijimu-codex-desktop": "./bin/baijimu-codex-desktop.js"
   },
   "scripts": {
-    "test": "node --test test/split-boundary.test.mjs test/platform-cli-boundary.test.mjs",
+    "test": "node --test test/*.test.mjs",
     "test:rust": "cargo test",
     "start": "cargo run -- start"
   },

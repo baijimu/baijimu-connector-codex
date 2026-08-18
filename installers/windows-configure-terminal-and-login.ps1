@@ -14,7 +14,6 @@ $ProjectId = if ($env:CODEX_PROJECT_ID) { $env:CODEX_PROJECT_ID } elseif ($env:B
 $AgentConfigId = if ($env:CODEX_AGENT_CONFIG_ID) { $env:CODEX_AGENT_CONFIG_ID } else { $env:BAIJIMU_AGENT_CONFIG_ID }
 $AgentSessionId = if ($env:CODEX_AGENT_SESSION_ID) { $env:CODEX_AGENT_SESSION_ID } else { $env:BAIJIMU_AGENT_SESSION_ID }
 $SessionId = if ($env:CODEX_SESSION_ID) { $env:CODEX_SESSION_ID } elseif ($env:BAIJIMU_SESSION_ID) { $env:BAIJIMU_SESSION_ID } else { $env:SESSION_ID }
-$RouterBaseUrl = if ($env:CODEX_ROUTER_BASE_URL) { $env:CODEX_ROUTER_BASE_URL.TrimEnd("/") } else { "https://router.baijimu.com/api/claudecode/v1" }
 if (-not $WorkspaceId -or $WorkspaceId -notmatch '^\d+$') {
   throw "必须提供 CODEX_WORKSPACE_ID 或 BAIJIMU_WORKSPACE_ID"
 }
@@ -644,34 +643,10 @@ function Write-CodexConfig {
   Set-InstallStep 6 "completed" "已使用百积木 LLM 凭证写入 Codex 配置"
 }
 
-function Test-Router {
-  Set-InstallStep 7 "running" "正在验证百积木路由"
-  $apiKey = Get-CodexRouterApiKey
-  $responsePath = Join-Path $env:TEMP "codex-router-responses.json"
-  $headers = @{
-    Authorization = "Bearer $apiKey"
-    "Content-Type" = "application/json"
-  }
-  $body = @{
-    model = $CodexModel
-    input = "Reply with exactly OK"
-  } | ConvertTo-Json -Compress
-  try {
-    $routerResponse = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Method POST -Uri "$RouterBaseUrl/responses" -Headers $headers -Body $body -OutFile $responsePath -PassThru
-    $script:result.routerHttpStatus = [int]$routerResponse.StatusCode
-  } finally {
-    Remove-Item $responsePath -Force -ErrorAction SilentlyContinue
-  }
-  if ($script:result.routerHttpStatus -ne 200) {
-    throw "路由 /responses 健康检查失败：HTTP $($script:result.routerHttpStatus)"
-  }
-  Set-InstallStep 7 "completed" "百积木路由验证通过"
-}
-
 try {
   Ensure-CodexApp
   Write-CodexConfig
-  Test-Router
+  Set-InstallStep 7 "skipped" "安装完成后由桌面管理器在后台验证百积木路由"
   Set-InstallStep 8 "completed" "安装配置已完成，桌面启动由桌面管理器按档案状态处理"
 } catch {
   Add-Error $_.Exception.Message

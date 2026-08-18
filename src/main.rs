@@ -441,6 +441,35 @@ fn handle_management(
             )
             .map_err(|error| HttpError::internal(error.to_string()))
         }
+        ("POST", "/management/v1/setup/verify-router") => {
+            let _credential_guard = state
+                .credential_management
+                .lock()
+                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
+            let workspace_id = body
+                .get("workspaceId")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0)
+                .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?;
+            let credential_state = credential::state()
+                .map_err(|error| HttpError::new(409, format!("读取当前工作区授权失败：{error}")))?;
+            if !credential_state
+                .workspaces
+                .iter()
+                .any(|workspace| workspace.workspace_id == workspace_id && workspace.authorized)
+            {
+                return Err(HttpError::new(403, "当前设备授权不包含该工作区"));
+            }
+            let router_credential = credential::router_credential_for_workspace(workspace_id)
+                .map_err(|error| HttpError::new(409, error.to_string()))?;
+            serde_json::to_value(
+                state
+                    .setup
+                    .verify_router(workspace_id, router_credential)
+                    .map_err(|error| HttpError::new(409, error.to_string()))?,
+            )
+            .map_err(|error| HttpError::internal(error.to_string()))
+        }
         ("GET", "/management/v1/credential-state") => {
             let _credential_guard = state
                 .credential_management

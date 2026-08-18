@@ -8,6 +8,8 @@
 - 保留原有 ChatGPT 登录和所有工作区目录，切换失败时恢复原选择；
 - 在原 Connector 数据目录中原位升级并继续使用既有桌面档案元数据。
 
+安装结果和百积木路由验证结果相互独立：应用、工作区凭证和配置完成后即可打开 Codex，路由验证会在后台对暂态错误最多尝试三次。验证仍未通过时，安装状态保持成功，界面显示可重新验证的警告；刷新或“重新验证路由”只复用现有工作区凭证进行探测，不会重新安装或重新签发凭证。
+
 本应用不安装 Codex CLI，不启动 `codex app-server`，也不声明 Relay 远程能力。CLI、session/thread/turn/event 接口由独立的 `com.baijimu.connector.codex-connector`（Codex 远程连接器）负责；OpenAI 兼容模型接口继续由 `com.baijimu.connector.codex-completion`（Codex 模型接口服务）负责。
 
 ## 状态所有权

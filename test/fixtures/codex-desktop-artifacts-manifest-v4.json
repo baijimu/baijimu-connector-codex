@@ -1,7 +1,7 @@
 {
   "schema_version": 4,
   "manifest_kind": "baijimu.codex.customer-install-artifacts",
-  "source": "momoplan/baijimu-connector-codex",
+  "source": "baijimu/baijimu-connector-codex",
   "snapshot_id": "fixture-desktop-snapshot",
   "fetched_at": "2026-08-14T00:00:00Z",
   "components": {

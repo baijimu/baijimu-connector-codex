@@ -16,7 +16,7 @@ test("desktop manager exposes only its required read-only status method", async 
   assert.equal(manifest.name, "Codex 桌面管理器");
   assert.equal(manifest.version, packageManifest.version);
   assert.equal(manifest.source.revision, `v${packageManifest.version}`);
-  assert.equal(manifest.source.repo, "momoplan/baijimu-connector-codex");
+  assert.equal(manifest.source.repo, "baijimu/baijimu-connector-codex");
   assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18110/healthz");
   assert.equal(manifest.transport.baseUrl, "http://127.0.0.1:18110");
   for (const field of ["remoteCapabilities", "events"]) {

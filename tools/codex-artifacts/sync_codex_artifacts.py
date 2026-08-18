@@ -354,7 +354,7 @@ def manifest_for(
     return {
         "schema_version": 3,
         "manifest_kind": "baijimu.codex.customer-install-artifacts",
-        "source": "momoplan/baijimu-connector-codex",
+        "source": "baijimu/baijimu-connector-codex",
         "snapshot_id": sid,
         "fetched_at": utc_now(),
         "components": {

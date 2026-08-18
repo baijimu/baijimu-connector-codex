@@ -33,4 +33,4 @@ cargo test
 npm test
 ```
 
-本仓库是 `codex` 客户端本地应用的唯一发布单元，继续使用 `momoplan/baijimu-connector-codex` 的 `main`、`v<version>` 标签、签名制品和既有 `local-app-market` 记录。
+本仓库是 `codex` 客户端本地应用的唯一发布单元，继续使用 `baijimu/baijimu-connector-codex` 的 `main`、`v<version>` 标签、签名制品和既有 `local-app-market` 记录。

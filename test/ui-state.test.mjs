@@ -3,9 +3,24 @@ import { test } from "node:test";
 
 import {
   codexCapabilityMeta,
+  profileBadgeMeta,
   setupActionMeta,
   setupStatusMeta,
 } from "../ui/state.mjs";
+
+test("workspace rows expose only compact status badges", () => {
+  assert.deepEqual(
+    profileBadgeMeta({ active: true, systemDefault: true }),
+    [
+      { label: "当前", tone: "current" },
+      { label: "系统默认", tone: "default" },
+    ],
+  );
+  assert.deepEqual(
+    profileBadgeMeta({ disabled: true }),
+    [{ label: "未授权", tone: "warning" }],
+  );
+});
 
 test("a running route verification keeps Codex available", () => {
   const setup = {

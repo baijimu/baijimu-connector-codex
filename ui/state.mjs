@@ -94,6 +94,14 @@ export function normalizeProfile(value) {
   };
 }
 
+export function profileBadgeMeta({ active = false, systemDefault = false, disabled = false } = {}) {
+  const badges = [];
+  if (active) badges.push({ label: "当前", tone: "current" });
+  if (systemDefault) badges.push({ label: "系统默认", tone: "default" });
+  if (disabled) badges.push({ label: "未授权", tone: "warning" });
+  return badges;
+}
+
 export function credentialStatusMeta(status) {
   switch (status) {
     case "verified":

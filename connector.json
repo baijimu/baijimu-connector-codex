@@ -2,17 +2,17 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex 桌面管理器",
-  "version": "1.3.11",
+  "version": "1.3.12",
   "description": "安装 Codex 桌面应用，并管理相互隔离的百积木工作区桌面档案。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.3.11"},
+  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.3.12"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
     "args": ["start"],
     "stopArgs": ["stop"],
     "processOwnership": "host",
-    "healthCheck": {"type": "http", "url": "http://127.0.0.1:18110/healthz", "timeoutSecs": 2, "expectStatus": 200}
+    "healthCheck": {"type": "http", "url": "http://127.0.0.1:18110/readyz", "timeoutSecs": 2, "expectStatus": 200}
   },
   "transport": {"type": "http", "baseUrl": "http://127.0.0.1:18110"},
   "methods": [
@@ -52,7 +52,7 @@
     }
   ],
   "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex 桌面管理器", "defaultView": true},
-  "releaseNotes": ["修复 Windows 初始化在生成 Codex 配置时引用未定义路由地址并报 Null 值错误的问题。", "凭证签发及 auth.json/config.toml 写入统一由 Rust 凭证管理器负责，Windows 安装脚本不再重复创建凭证或拼装路由配置。", "Windows 安装脚本仅安装桌面应用并验证 Rust 已准备的凭证与配置文件，消除双写和配置源漂移。"],
+  "releaseNotes": ["宿主可用性检查改为使用 /readyz，只有桌面管理器初始化完成后才允许 Bridge Agent 标记应用 ready。", "/healthz 继续提供管理器进程与启动阶段的只读状态，不再被误用为管理接口就绪信号。"],
   "configSchema": {
     "type": "object",
     "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},

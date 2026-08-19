@@ -3,6 +3,7 @@ import {
   connectorStartupRetryable,
   normalizeCredentialState,
   normalizeSetupProgress,
+  profileBadgeMeta,
   setupActionMeta,
   setupStatusMeta,
   shouldShowSetupProgress,
@@ -20,7 +21,7 @@ const elementIds = [
   "switch-progress", "switch-progress-message", "auth-switch-modal",
   "auth-switch-modal-title", "auth-switch-modal-message", "auth-switch-cancel",
   "auth-switch-confirm",
-  "management-workspace-panel", "management-footer",
+  "management-workspace-panel",
   "setup-panel", "setup-actions",
 ];
 const elements = Object.fromEntries(elementIds.map((id) => [id, document.getElementById(id)]));
@@ -78,7 +79,6 @@ function clearNotices() {
 function renderContentVisibility() {
   const capability = codexCapabilityMeta(setupState);
   elements["management-workspace-panel"].hidden = !capability.available;
-  elements["management-footer"].hidden = !capability.available;
   elements["integration-unavailable-panel"].hidden = capability.available;
 }
 
@@ -108,55 +108,48 @@ function setAccountBusy(value) {
   });
 }
 
-function profileRow({ title, detail, meta, active, disabled, actionLabel, onSwitch }) {
+function profileRow({ title, badges, active, disabled, actionLabel, onSwitch }) {
   const row = document.createElement("div");
   row.className = `profile-row${active ? " active" : ""}${disabled ? " unavailable" : ""}`;
-  const copy = document.createElement("div");
-  copy.className = "profile-copy";
   const heading = document.createElement("div");
   heading.className = "profile-heading";
   const strong = document.createElement("strong");
   strong.textContent = title;
   heading.append(strong);
-  if (active) {
-    const current = document.createElement("span");
-    current.className = "current-label";
-    current.textContent = "当前环境";
-    heading.append(current);
+  for (const badge of badges) {
+    const label = document.createElement("span");
+    label.className = `profile-label ${badge.tone}`;
+    label.textContent = badge.label;
+    heading.append(label);
   }
-  const span = document.createElement("span");
-  span.textContent = detail;
-  const small = document.createElement("small");
-  small.textContent = meta;
-  copy.append(heading, span, small);
   const button = document.createElement("button");
   button.type = "button";
   button.className = `button ${active ? "secondary" : "primary"} compact auth-switch`;
-  button.textContent = actionLabel || (active ? "重新启动 Codex" : "启动 Codex");
+  button.textContent = actionLabel || (active ? "重启" : "启动");
+  button.setAttribute("aria-label", `${button.textContent}${title}`);
   button.dataset.profileDisabled = String(disabled);
   button.disabled = accountBusy || disabled;
   button.addEventListener("click", onSwitch);
-  row.append(copy, button);
+  row.append(heading, button);
   return row;
-}
-
-function environmentLabel(value) {
-  const environment = String(value || "prod").trim() || "prod";
-  return environment === "prod" ? "生产环境（prod）" : `环境标识：${environment}`;
 }
 
 function authProfiles() {
   const state = credentialState;
   const profiles = [];
   if (state?.chatgpt?.available !== false) {
+    const active = state?.activeMode === "chatgpt";
+    const systemDefault = Boolean(
+      state?.chatgpt?.codexHome
+      && state.chatgpt.codexHome === state.originalCodexHome,
+    );
     profiles.push({
       key: "chatgpt",
       title: "原有 Codex 环境",
-      detail: state?.chatgpt?.accountId ? `ChatGPT 账号 ${state.chatgpt.accountId}` : "接管前的默认 Codex 登录",
-      meta: state?.chatgpt?.configured ? "已配置；恢复后使用原有登录、配置和会话" : "尚未登录；恢复后可在 Codex 中完成登录",
-      active: state?.activeMode === "chatgpt",
+      badges: profileBadgeMeta({ active, systemDefault }),
+      active,
       disabled: false,
-      actionLabel: state?.activeMode === "chatgpt" ? "重新启动个人 Codex" : "启动个人 Codex",
+      actionLabel: active ? "重启" : "启动",
       request: { mode: "chatgpt" },
     });
   }
@@ -169,17 +162,10 @@ function authProfiles() {
     profiles.push({
       key: `workspace-${workspace.workspaceId}`,
       title: `${workspace.name || `工作区 ${workspace.workspaceId}`}（${workspace.workspaceId}）`,
-      detail: environmentLabel(profile?.environment),
-      meta: workspace.authorized
-        ? (profile
-          ? (usesDefaultHome
-            ? "已绑定默认 .codex；从系统直接启动也使用该工作区"
-            : "凭证档案已保存；使用隔离目录启动 Codex")
-          : "已授权；首次启动时自动创建工作区凭证档案")
-        : "当前百积木账号未授权这个工作区",
+      badges: profileBadgeMeta({ active, systemDefault: usesDefaultHome, disabled: !workspace.authorized }),
       active,
       disabled: !workspace.authorized,
-      actionLabel: active ? "重新启动 Codex" : "启动 Codex",
+      actionLabel: active ? "重启" : "启动",
       request: { mode: "baijimu", workspaceId: workspace.workspaceId },
     });
   }
@@ -409,7 +395,6 @@ async function monitorSetup() {
       renderSetupState();
       if (setupState?.status === "succeeded" && setupState?.completedAtEpochSeconds != null) {
         await loadState({ ensureReady: false, monitor: false });
-        setMessage("message", setupState?.message || "本机 Codex 已完成安装配置。");
         return;
       }
       if (setupState?.status === "failed") {
@@ -462,7 +447,7 @@ async function ensureCodexReady() {
   }
 }
 
-async function loadState({ ensureReady = false, monitor = true, successMessage = "" } = {}) {
+async function loadState({ ensureReady = false, monitor = true } = {}) {
   clearNotices();
   setAccountBusy(true);
   try {
@@ -479,12 +464,11 @@ async function loadState({ ensureReady = false, monitor = true, successMessage =
       setupState?.status === "running"
       || (setupState?.status === "succeeded" && setupState?.completedAtEpochSeconds == null)
     )) void monitorSetup();
-    if (successMessage) setMessage("message", successMessage);
   } catch (error) {
     elements["runtime-status-badge"].textContent = "检查失败";
     elements["runtime-status-badge"].className = "status-badge danger";
     showError(errorMessage(error), {
-      action: () => loadState({ ensureReady, monitor, successMessage }),
+      action: () => loadState({ ensureReady, monitor }),
       label: "重新加载",
     });
   } finally {
@@ -546,10 +530,7 @@ function refreshState() {
   if (setupState?.status === "succeeded" && setupState?.retryable === true) {
     return retryRouterVerification();
   }
-  return loadState({
-    ensureReady: true,
-    successMessage: "Codex 桌面环境状态已刷新。",
-  });
+  return loadState({ ensureReady: true });
 }
 
 async function restoreExternalCodexHome() {

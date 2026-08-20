@@ -516,18 +516,10 @@ fn handle_management(
                 ),
                 _ => return Err(HttpError::new(400, "mode 必须是 chatgpt 或 baijimu")),
             };
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            if !test_control_enabled() {
-                desktop::verify_system_compatibility().map_err(desktop_compatibility_http_error)?;
-            }
             let prepared_workspace = workspace_id
                 .map(credential::prepare_workspace_profile)
                 .transpose()
                 .map_err(|error| HttpError::new(409, error.to_string()))?;
-            if !test_control_enabled() {
-                desktop::stop_for_codex_home_switch()
-                    .map_err(|error| HttpError::new(409, error.to_string()))?;
-            }
             match mode {
                 "chatgpt" => credential::activate_chatgpt_profile().map(|_| ()),
                 "baijimu" => credential::activate_prepared_workspace_profile(
@@ -541,8 +533,7 @@ fn handle_management(
             let selected_home = credential::active_codex_home();
             if !test_control_enabled() {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
-                desktop::launch(&selected_home)
-                    .map_err(|error| HttpError::new(409, error.to_string()))?;
+                desktop::launch(&selected_home).map_err(desktop_compatibility_http_error)?;
             }
             serde_json::to_value(
                 credential::state().map_err(|error| HttpError::internal(error.to_string()))?,

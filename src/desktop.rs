@@ -47,6 +47,14 @@ mod platform {
         minimum_version: String,
     }
 
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct LaunchResult {
+        current_version: String,
+        minimum_version: String,
+        activation_accepted: bool,
+    }
+
     const POWERSHELL_PREAMBLE: &str = r#"
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
@@ -248,6 +256,22 @@ $codexHome = $env:CODEX_HOME
 if (-not $codexHome) { throw '隔离启动桌面应用时必须显式提供 CODEX_HOME' }
 $entry = @(Get-CodexDesktopEntries | Select-Object -First 1)
 if ($entry.Count -eq 0) { throw (New-CodexDesktopPackageNotFoundMessage) }
+$package = $entry[0].package
+$manifestPath = Join-Path $package.InstallLocation 'AppxManifest.xml'
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'ChatGPT/Codex 应用包缺少 AppxManifest.xml' }
+[xml]$manifest = Get-Content -LiteralPath $manifestPath
+$minimumVersions = @($manifest.SelectNodes("/*[local-name()='Package']/*[local-name()='Dependencies']/*[local-name()='TargetDeviceFamily']") | ForEach-Object { [string]$_.MinVersion } | Where-Object { $_ })
+if ($minimumVersions.Count -eq 0) { throw 'ChatGPT/Codex 应用包未声明最低 Windows 版本' }
+$minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -Descending | Select-Object -First 1)[0]
+$current = [System.Environment]::OSVersion.Version
+if ($current -lt $minimum) {
+  [pscustomobject]@{
+    currentVersion = $current.ToString()
+    minimumVersion = $minimum.ToString()
+    activationAccepted = $false
+  } | ConvertTo-Json -Compress
+  return
+}
 
 $selectedRoot = $entry[0].packageRoot
 $existing = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
@@ -269,6 +293,8 @@ if ($existing.Count -gt 0) {
 
 $activatedProcessId = Invoke-CodexDesktopActivation -AppUserModelId $entry[0].appUserModelId -CodexHome $codexHome
 [pscustomobject]@{
+  currentVersion = $current.ToString()
+  minimumVersion = $minimum.ToString()
   activationAccepted = $true
   packageFullName = [string]$entry[0].package.PackageFullName
   applicationId = $entry[0].applicationId
@@ -317,8 +343,19 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
     }
 
     pub fn launch(codex_home: &Path) -> Result<()> {
-        verify_system_compatibility()?;
-        run_powershell(LAUNCH_SCRIPT, Some(codex_home))?;
+        let output = run_powershell(LAUNCH_SCRIPT, Some(codex_home))?;
+        let result: LaunchResult = crate::json_compat::from_slice(&output)
+            .context("解析 ChatGPT/Codex Windows 启动结果失败")?;
+        crate::system_compatibility::ensure_supported(
+            "Windows",
+            &result.current_version,
+            &result.minimum_version,
+            "ChatGPT/Codex",
+        )?;
+        anyhow::ensure!(
+            result.activation_accepted,
+            "Windows 未接受 ChatGPT/Codex 桌面应用启动请求"
+        );
         Ok(())
     }
 
@@ -416,6 +453,7 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
                 "Invoke-CodexDesktopActivation -AppUserModelId $entry[0].appUserModelId"
             ));
             assert!(LAUNCH_SCRIPT.contains("activationAccepted = $true"));
+            assert!(LAUNCH_SCRIPT.contains("activationAccepted = $false"));
             assert!(!LAUNCH_SCRIPT.contains("VisibleWindow"));
             assert!(!LAUNCH_SCRIPT.contains("AddSeconds(45)"));
             assert!(!LAUNCH_SCRIPT.contains("Start-Process"));
@@ -512,7 +550,11 @@ mod platform {
             return Ok(DesktopSwitch::default());
         };
         let bundle_id = application_bundle_id(&app_path)?;
-        let info = application_info(&bundle_id)?;
+        stop_application(&bundle_id)
+    }
+
+    fn stop_application(bundle_id: &str) -> Result<DesktopSwitch> {
+        let info = application_info(bundle_id)?;
         if !has_running_process(&info) {
             return Ok(DesktopSwitch::default());
         }
@@ -528,7 +570,7 @@ mod platform {
         )?;
         let deadline = Instant::now() + Duration::from_secs(15);
         while Instant::now() < deadline {
-            if !has_running_process(&application_info(&bundle_id)?) {
+            if !has_running_process(&application_info(bundle_id)?) {
                 return Ok(DesktopSwitch { was_running: true });
             }
             thread::sleep(POLL_INTERVAL);
@@ -554,6 +596,8 @@ mod platform {
         let app_path =
             installed_application_path().context("没有找到已安装的 ChatGPT/Codex 桌面应用")?;
         verify_application_compatibility(&app_path)?;
+        let bundle_id = application_bundle_id(&app_path)?;
+        stop_application(&bundle_id)?;
         run_checked(
             open_application_command(&app_path, codex_home),
             "打开 ChatGPT/Codex 桌面应用失败",

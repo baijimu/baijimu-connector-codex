@@ -106,6 +106,9 @@ test("Windows desktop discovery follows the codex protocol instead of package na
   assert.match(desktopPreamble, /DeleteValue\('CODEX_HOME', \$false\)/);
   assert.match(desktopPreamble, /BroadcastEnvironmentChange/);
   assert.match(desktopLaunch, /Invoke-CodexDesktopActivation/);
+  assert.equal(desktopLaunch.match(/Get-CodexDesktopEntries/g)?.length, 1);
+  assert.match(desktopLaunch, /currentVersion/);
+  assert.match(desktopLaunch, /minimumVersion/);
   assert.match(desktopLaunch, /activationAccepted = \$true/);
   assert.doesNotMatch(desktopLaunch, /VisibleWindow|EnumWindows|IsWindowVisible|AddSeconds\(45\)/);
   assert.doesNotMatch(desktopLaunch, /Start-Process/);
@@ -121,4 +124,10 @@ test("desktop launch commits the selected profile without window verification or
   assert.doesNotMatch(main, /active_home_snapshot|restore_active_home|启动验证失败|状态指针回滚/);
   assert.doesNotMatch(credential, /pub fn active_home_snapshot|pub fn restore_active_home/);
   assert.match(main, /desktop::launch\(&selected_home\)/);
+  const launchRouteStart = main.indexOf('(\"POST\", \"/management/v1/codex/launch\")');
+  const launchRoute = main.slice(
+    launchRouteStart,
+    main.indexOf('_ => Err(HttpError::new(404', launchRouteStart),
+  );
+  assert.doesNotMatch(launchRoute, /verify_system_compatibility|stop_for_codex_home_switch/);
 });

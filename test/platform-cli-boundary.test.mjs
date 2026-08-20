@@ -41,7 +41,7 @@ test("Baijimu CLI exclusively owns platform authentication and Partner API calls
   const desktopProduction = desktop.slice(0, desktop.indexOf("#[cfg(test)]"));
   assert.doesNotMatch(
     desktopProduction,
-    /BAIJIMU_AUTH_FILE|BAIJIMU_CURRENT_WORKSPACE_ID|icacls\.exe/,
+    /BAIJIMU_AUTH_FILE|BAIJIMU_CURRENT_WORKSPACE_ID|BaijimuAuthFile|BaijimuCurrentWorkspaceId|\$baijimuAuthFile|\$baijimuCurrentWorkspaceId|icacls\.exe/,
   );
   const cleanupScriptStart = cleanup.indexOf(
     "const REVOKE_LEGACY_SHARED_AUTH_ACL_SCRIPT",

@@ -302,7 +302,7 @@ if ($existing.Count -gt 0) {
   if ($remaining.Count -gt 0) { throw 'ChatGPT/Codex 桌面应用进程未在 15 秒内停止' }
 }
 
-$activatedProcessId = Invoke-CodexDesktopActivation -AppUserModelId $entry[0].appUserModelId -CodexHome $codexHome -BaijimuAuthFile $baijimuAuthFile -BaijimuCurrentWorkspaceId $baijimuCurrentWorkspaceId
+$activatedProcessId = Invoke-CodexDesktopActivation -AppUserModelId $entry[0].appUserModelId -CodexHome $codexHome
 [pscustomobject]@{
   currentVersion = $current.ToString()
   minimumVersion = $minimum.ToString()
@@ -434,6 +434,8 @@ $activatedProcessId = Invoke-CodexDesktopActivation -AppUserModelId $entry[0].ap
             assert!(POWERSHELL_PREAMBLE.contains("BroadcastEnvironmentChange"));
             assert!(!POWERSHELL_PREAMBLE.contains("BAIJIMU_AUTH_FILE"));
             assert!(!POWERSHELL_PREAMBLE.contains("BAIJIMU_CURRENT_WORKSPACE_ID"));
+            assert!(!POWERSHELL_PREAMBLE.contains("BaijimuAuthFile"));
+            assert!(!POWERSHELL_PREAMBLE.contains("BaijimuCurrentWorkspaceId"));
             assert!(!POWERSHELL_PREAMBLE.contains("icacls.exe"));
             assert!(!POWERSHELL_PREAMBLE.contains("CodexSandbox"));
             assert!(LAUNCH_SCRIPT.contains(

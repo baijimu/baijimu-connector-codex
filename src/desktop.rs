@@ -46,6 +46,10 @@ pub fn launch(codex_home: &Path, current_workspace_id: Option<u64>) -> Result<()
     let cli_environment = current_workspace_id
         .map(BaijimuCliEnvironment::resolve)
         .transpose()?;
+    platform::stop_for_codex_home_switch()?;
+    if current_workspace_id.is_some() {
+        crate::credential::apply_workspace_desktop_defaults(codex_home)?;
+    }
     platform::launch(codex_home, cli_environment.as_ref())
 }
 
@@ -58,6 +62,9 @@ impl DesktopSwitch {
         let cli_environment = current_workspace_id
             .map(BaijimuCliEnvironment::resolve)
             .transpose()?;
+        if current_workspace_id.is_some() {
+            crate::credential::apply_workspace_desktop_defaults(codex_home)?;
+        }
         platform::restart_if_needed(self, codex_home, cli_environment.as_ref())
     }
 }
@@ -706,8 +713,6 @@ mod platform {
         let app_path =
             installed_application_path().context("没有找到已安装的 ChatGPT/Codex 桌面应用")?;
         verify_application_compatibility(&app_path)?;
-        let bundle_id = application_bundle_id(&app_path)?;
-        stop_application(&bundle_id)?;
         run_checked(
             open_application_command(&app_path, codex_home, cli_environment),
             "打开 ChatGPT/Codex 桌面应用失败",

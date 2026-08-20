@@ -32,6 +32,8 @@ pub struct CredentialProfile {
     pub codex_home: String,
     #[serde(default)]
     pub credential_status: String,
+    #[serde(default)]
+    pub desktop_defaults_version: u32,
 }
 
 #[derive(Clone, Debug, Serialize)]

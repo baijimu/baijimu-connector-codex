@@ -64,7 +64,7 @@ jobs:
           test "$(jq -r .version package-lock.json)" = "$version"
           test "$(jq -r '.packages[""].version' package-lock.json)" = "$version"
           test "$(jq -r .source.type connector.json)" = github
-          test "$(jq -r .source.repo connector.json)" = baijimu/baijimu-connector-codex
+          test "$(jq -r .source.repo connector.json)" = "$GITHUB_REPOSITORY"
           test "$(jq -r .source.revision connector.json)" = "v$version"
           sha="$(git rev-parse HEAD)"
           publish=false
@@ -309,7 +309,7 @@ jobs:
           const manifest = JSON.parse(fs.readFileSync(path.join(packageDir, "connector.json"), "utf8"));
           if (manifest.version !== expectedVersion) throw new Error("connector package version mismatch");
           if (manifest.id !== "com.baijimu.connector.codex" || manifest.name !== "Codex 桌面管理器") throw new Error("desktop connector identity mismatch");
-          if (manifest.source?.type !== "github" || manifest.source?.repo !== "baijimu/baijimu-connector-codex" || manifest.source?.revision !== `v${expectedVersion}`) throw new Error("connector source identity mismatch");
+          if (manifest.source?.type !== "github" || manifest.source?.repo !== process.env.GITHUB_REPOSITORY || manifest.source?.revision !== `v${expectedVersion}`) throw new Error("connector source identity mismatch");
           const methods = manifest.methods?.map(({ name, path, httpMethod }) => ({ name, path, httpMethod }));
           if (manifest.schemaVersion !== "2.0" || manifest.runtime?.type !== "process" || manifest.runtime?.processOwnership !== "host" || manifest.runtime?.healthCheck?.url !== "http://127.0.0.1:18110/readyz" || manifest.transport?.type !== "http" || JSON.stringify(methods) !== JSON.stringify([{ name: "status", path: "/healthz", httpMethod: "GET" }]) || manifest.remoteCapabilities !== undefined || manifest.events !== undefined || manifest.ui?.type !== "embedded") throw new Error("desktop manager package contract is invalid");
           const entry = path.resolve(packageDir, manifest.ui.entry);

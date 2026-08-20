@@ -5,6 +5,7 @@
 - 安装和验证 ChatGPT/Codex 官方桌面应用；
 - 为已授权的百积木工作区创建桌面专用 LLM credential 和 `CODEX_HOME`；
 - 展示可用工作区，并由用户显式选择后启动桌面应用；
+- 工作区首次受管启动时默认显示 Full access 权限选项，但不替用户选中，当前模式仍由 Codex 的 Ask for approval/Custom 状态决定；
 - 保留原有 ChatGPT 登录和所有工作区目录，切换失败时恢复原选择；
 - 在原 Connector 数据目录中原位升级并继续使用既有桌面档案元数据。
 

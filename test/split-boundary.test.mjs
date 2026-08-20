@@ -133,4 +133,21 @@ test("desktop launch commits the selected profile without window verification or
     main.indexOf('_ => Err(HttpError::new(404', launchRouteStart),
   );
   assert.doesNotMatch(launchRoute, /verify_system_compatibility|stop_for_codex_home_switch/);
+  const desktopLaunchStart = desktop.indexOf("pub fn launch(codex_home");
+  const desktopLaunch = desktop.slice(
+    desktopLaunchStart,
+    desktop.indexOf("impl DesktopSwitch", desktopLaunchStart),
+  );
+  const stopIndex = desktopLaunch.indexOf("platform::stop_for_codex_home_switch()");
+  const defaultsIndex = desktopLaunch.indexOf(
+    "credential::apply_workspace_desktop_defaults(codex_home)",
+  );
+  const launchIndex = desktopLaunch.indexOf("platform::launch(codex_home");
+  assert.ok(stopIndex >= 0 && defaultsIndex > stopIndex && launchIndex > defaultsIndex);
+  assert.match(credential, /PERMISSION_MODE_VISIBILITY_KEY/);
+  assert.match(credential, /desktop_defaults_version/);
+  assert.doesNotMatch(
+    credential,
+    /permission-selection-by-host-id:[^\n]*insert|insert[^\n]*permission-selection-by-host-id:/,
+  );
 });

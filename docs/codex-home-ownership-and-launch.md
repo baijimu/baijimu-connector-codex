@@ -127,6 +127,7 @@ Connector 必须分别管理以下三类状态，不得相互推断：
 5. 启动前移除继承的 `BAIJIMU_*`、`CODEX_CONNECTOR_*` 和父进程既有 `CODEX_HOME`，再显式写入本次选择的 `CODEX_HOME`。百积木工作区档案还必须从平台管理的 CLI `auth status` 实时解析用户级 `sharedAuthPath`，向所有工作区注入相同的 `BAIJIMU_AUTH_FILE`，并仅用 `BAIJIMU_CURRENT_WORKSPACE_ID` 选择本档案工作区；不得复制或拆分 CLI 授权仓库，不得修改 CLI 持久默认工作区。
 6. Windows 必须只向 Codex 已登记的沙箱主体开放共享授权目录和文件的读取权限，使受限工具进程能够读取同一份用户级授权；不得向整个用户目录开放权限，也不得授予沙箱修改、删除或重新授权的能力。沙箱主体或授权路径无法验证时启动失败，不能退回沙箱账户自己的默认授权路径。
 7. 管理页显式切换时，启动命令失败必须使操作失败；这与安装收尾自动打开失败仍保持安装成功是两个不同契约。
+8. 百积木工作区首次受管启动前，Connector 只把 `composer-permission-mode-visibility` 中的 `full-access` 设为可见，不修改 `permission-selection-by-host-id:*`，因此不会把 Ask for approval 自动切换为 Full access。兼容旧版布尔值和新版对象状态；Codex 引导尚未完成时保持迁移待处理，引导完成后再记录一次性迁移版本，后续尊重用户主动修改。
 
 ### 百积木内部切换工作区
 

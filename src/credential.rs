@@ -15,8 +15,14 @@ pub use contract::*;
 mod store;
 use store::*;
 
-const METADATA_VERSION: u32 = 6;
+const METADATA_VERSION: u32 = 7;
 const METADATA_FILE: &str = "codex-credentials.json";
+const CODEX_GLOBAL_STATE_FILE: &str = ".codex-global-state.json";
+const DESKTOP_DEFAULTS_VERSION: u32 = 1;
+const PERSISTED_ATOM_STATE_KEY: &str = "electron-persisted-atom-state";
+const PERMISSION_MODE_VISIBILITY_KEY: &str = "composer-permission-mode-visibility";
+const ONBOARDING_COMPLETED_KEY: &str = "electron:onboarding-projectless-completed";
+const LAST_COMPLETED_ONBOARDING_KEY: &str = "last_completed_onboarding";
 const OWNERSHIP_MARKER_FILE: &str = ".baijimu-owner.json";
 const OWNERSHIP_RESERVATION_FILE: &str = ".baijimu-owner.pending.json";
 const OWNERSHIP_SCHEMA_VERSION: u32 = 2;
@@ -264,6 +270,12 @@ pub fn prepare_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspaceP
         activated_at_epoch_seconds: previous_activation,
         codex_home: profile_home.display().to_string(),
         credential_status: "verified".to_string(),
+        desktop_defaults_version: metadata
+            .profiles
+            .iter()
+            .find(|item| item.profile_id == profile_id)
+            .map(|item| item.desktop_defaults_version)
+            .unwrap_or_default(),
     };
     metadata
         .profiles
@@ -297,6 +309,89 @@ pub fn activate_prepared_workspace_profile(
         .into_iter()
         .find(|item| item.profile_id == prepared.profile_id)
         .context("激活后未找到工作区凭证档案")
+}
+
+/// Applies Baijimu's initial desktop preference to one managed workspace profile.
+///
+/// The migration only exposes the Full access choice. It deliberately does not touch
+/// `permission-selection-by-host-id:*`, so Ask for approval remains the selected mode.
+/// Profiles that have not completed onboarding remain pending because Codex writes its
+/// work-mode defaults at the end of onboarding; the next managed launch reapplies this
+/// initial preference once and then records completion so later user changes are kept.
+pub fn apply_workspace_desktop_defaults(codex_home: &Path) -> Result<()> {
+    let mut metadata = load_metadata()?;
+    let profile = metadata
+        .profiles
+        .iter_mut()
+        .find(|profile| Path::new(&profile.codex_home) == codex_home)
+        .context("当前 CODEX_HOME 不属于百积木工作区档案")?;
+    if profile.desktop_defaults_version >= DESKTOP_DEFAULTS_VERSION {
+        return Ok(());
+    }
+
+    let onboarding_completed = ensure_full_access_choice_visible(codex_home)?;
+    if onboarding_completed {
+        profile.desktop_defaults_version = DESKTOP_DEFAULTS_VERSION;
+        save_metadata(&metadata)?;
+    }
+    Ok(())
+}
+
+fn ensure_full_access_choice_visible(codex_home: &Path) -> Result<bool> {
+    let path = codex_home.join(CODEX_GLOBAL_STATE_FILE);
+    let mut state = if path.exists() {
+        let content = fs::read(&path)
+            .with_context(|| format!("读取 Codex 桌面状态失败: {}", path.display()))?;
+        crate::json_compat::from_slice::<Value>(&content)
+            .with_context(|| format!("解析 Codex 桌面状态失败: {}", path.display()))?
+    } else {
+        json!({})
+    };
+    let root = state
+        .as_object_mut()
+        .context("Codex 桌面状态根节点必须是 JSON 对象")?;
+    let persisted = root
+        .entry(PERSISTED_ATOM_STATE_KEY)
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context("Codex 桌面持久状态节点必须是 JSON 对象")?;
+    let onboarding_completed = persisted
+        .get(ONBOARDING_COMPLETED_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || persisted
+            .get(LAST_COMPLETED_ONBOARDING_KEY)
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value > 0);
+
+    let changed = match persisted.get_mut(PERMISSION_MODE_VISIBILITY_KEY) {
+        Some(Value::Bool(visible)) => {
+            let changed = !*visible;
+            *visible = true;
+            changed
+        }
+        Some(Value::Object(visibility)) => {
+            let changed = visibility.get("full-access").and_then(Value::as_bool) != Some(true);
+            visibility.insert("full-access".to_string(), Value::Bool(true));
+            changed
+        }
+        Some(_) => anyhow::bail!(
+            "Codex 桌面权限菜单可见性状态格式不受支持: {}",
+            path.display()
+        ),
+        None => {
+            persisted.insert(
+                PERMISSION_MODE_VISIBILITY_KEY.to_string(),
+                json!({"guardian-approvals": true, "full-access": true}),
+            );
+            true
+        }
+    };
+    if changed || !path.exists() {
+        atomic_write_private(&path, &serde_json::to_vec_pretty(&state)?)?;
+        verify_private_file(&path)?;
+    }
+    Ok(onboarding_completed)
 }
 
 pub fn activate_chatgpt_profile() -> Result<PathBuf> {
@@ -1483,6 +1578,7 @@ mod tests {
             activated_at_epoch_seconds: 1,
             codex_home: legacy_home.display().to_string(),
             credential_status: "verified".to_string(),
+            desktop_defaults_version: 0,
         };
         fs::create_dir_all(&data_dir).unwrap();
         fs::write(
@@ -1792,6 +1888,7 @@ mod tests {
             activated_at_epoch_seconds: 1,
             codex_home: managed_home.display().to_string(),
             credential_status: "verified".to_string(),
+            desktop_defaults_version: 0,
         };
         fs::create_dir_all(&data_dir).unwrap();
         fs::write(
@@ -1930,6 +2027,7 @@ mod tests {
             activated_at_epoch_seconds: 1,
             codex_home: "/isolated/workspace-1390".to_string(),
             credential_status: "verified".to_string(),
+            desktop_defaults_version: 0,
         };
         let selected = CredentialMetadata {
             version: METADATA_VERSION,
@@ -2077,6 +2175,193 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn legacy_boolean_visibility_is_enabled_without_changing_the_selected_permission() {
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-legacy-permission-visibility-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(CODEX_GLOBAL_STATE_FILE);
+        let selected = json!({"kind": "agent-mode", "agentMode": "auto"});
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "unrelated-root-state": {"keep": true},
+                (PERSISTED_ATOM_STATE_KEY): {
+                    (ONBOARDING_COMPLETED_KEY): true,
+                    (PERMISSION_MODE_VISIBILITY_KEY): false,
+                    "permission-selection-by-host-id:local": selected,
+                    "unrelated-persisted-state": [1, 2, 3]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(ensure_full_access_choice_visible(&root).unwrap());
+
+        let migrated: Value = crate::json_compat::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let persisted = migrated[PERSISTED_ATOM_STATE_KEY].as_object().unwrap();
+        assert_eq!(persisted[PERMISSION_MODE_VISIBILITY_KEY], Value::Bool(true));
+        assert_eq!(persisted["permission-selection-by-host-id:local"], selected);
+        assert_eq!(persisted["unrelated-persisted-state"], json!([1, 2, 3]));
+        assert_eq!(migrated["unrelated-root-state"], json!({"keep": true}));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn object_visibility_preserves_guardian_and_future_fields() {
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-object-permission-visibility-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(CODEX_GLOBAL_STATE_FILE);
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                (PERSISTED_ATOM_STATE_KEY): {
+                    (LAST_COMPLETED_ONBOARDING_KEY): 42,
+                    (PERMISSION_MODE_VISIBILITY_KEY): {
+                        "guardian-approvals": false,
+                        "full-access": false,
+                        "future-mode": "keep"
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(ensure_full_access_choice_visible(&root).unwrap());
+
+        let migrated: Value = crate::json_compat::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let visibility = migrated[PERSISTED_ATOM_STATE_KEY][PERMISSION_MODE_VISIBILITY_KEY]
+            .as_object()
+            .unwrap();
+        assert_eq!(visibility["guardian-approvals"], Value::Bool(false));
+        assert_eq!(visibility["full-access"], Value::Bool(true));
+        assert_eq!(visibility["future-mode"], Value::String("keep".to_string()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn managed_default_is_applied_once_and_later_user_changes_are_kept() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-once-permission-visibility-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let user_home = root.join("user");
+        let data_dir = root.join("connector-data");
+        fs::create_dir_all(&user_home).unwrap();
+        let _home = EnvironmentRestore::set("HOME", &user_home);
+        let _profile = EnvironmentRestore::set("USERPROFILE", &user_home);
+        let _codex = EnvironmentRestore::unset("CODEX_HOME");
+        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let profile = test_workspace_profile(&data_dir, 642);
+        let profile_home = PathBuf::from(&profile.codex_home);
+        fs::create_dir_all(&profile_home).unwrap();
+        let state_path = profile_home.join(CODEX_GLOBAL_STATE_FILE);
+        fs::write(
+            &state_path,
+            serde_json::to_vec_pretty(&json!({
+                (PERSISTED_ATOM_STATE_KEY): {
+                    (ONBOARDING_COMPLETED_KEY): true,
+                    (PERMISSION_MODE_VISIBILITY_KEY): false,
+                    "permission-selection-by-host-id:local": {
+                        "kind": "agent-mode",
+                        "agentMode": "auto"
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        save_metadata(&CredentialMetadata {
+            profiles: vec![profile],
+            ..CredentialMetadata::default()
+        })
+        .unwrap();
+
+        apply_workspace_desktop_defaults(&profile_home).unwrap();
+        assert_eq!(
+            load_metadata().unwrap().profiles[0].desktop_defaults_version,
+            DESKTOP_DEFAULTS_VERSION
+        );
+
+        let mut state: Value =
+            crate::json_compat::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+        state[PERSISTED_ATOM_STATE_KEY][PERMISSION_MODE_VISIBILITY_KEY] = Value::Bool(false);
+        fs::write(&state_path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
+        apply_workspace_desktop_defaults(&profile_home).unwrap();
+        let unchanged: Value =
+            crate::json_compat::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+        assert_eq!(
+            unchanged[PERSISTED_ATOM_STATE_KEY][PERMISSION_MODE_VISIBILITY_KEY],
+            Value::Bool(false)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn onboarding_override_is_reapplied_before_the_migration_is_completed() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-pending-permission-visibility-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let user_home = root.join("user");
+        let data_dir = root.join("connector-data");
+        fs::create_dir_all(&user_home).unwrap();
+        let _home = EnvironmentRestore::set("HOME", &user_home);
+        let _profile = EnvironmentRestore::set("USERPROFILE", &user_home);
+        let _codex = EnvironmentRestore::unset("CODEX_HOME");
+        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let profile = test_workspace_profile(&data_dir, 1390);
+        let profile_home = PathBuf::from(&profile.codex_home);
+        fs::create_dir_all(&profile_home).unwrap();
+        save_metadata(&CredentialMetadata {
+            profiles: vec![profile],
+            ..CredentialMetadata::default()
+        })
+        .unwrap();
+
+        apply_workspace_desktop_defaults(&profile_home).unwrap();
+        assert_eq!(
+            load_metadata().unwrap().profiles[0].desktop_defaults_version,
+            0
+        );
+
+        let state_path = profile_home.join(CODEX_GLOBAL_STATE_FILE);
+        let mut state: Value =
+            crate::json_compat::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+        state[PERSISTED_ATOM_STATE_KEY][ONBOARDING_COMPLETED_KEY] = Value::Bool(true);
+        state[PERSISTED_ATOM_STATE_KEY][PERMISSION_MODE_VISIBILITY_KEY] = json!({
+            "guardian-approvals": true,
+            "full-access": false
+        });
+        fs::write(&state_path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
+
+        apply_workspace_desktop_defaults(&profile_home).unwrap();
+        let migrated: Value =
+            crate::json_compat::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+        assert_eq!(
+            migrated[PERSISTED_ATOM_STATE_KEY][PERMISSION_MODE_VISIBILITY_KEY]["full-access"],
+            Value::Bool(true)
+        );
+        assert_eq!(
+            load_metadata().unwrap().profiles[0].desktop_defaults_version,
+            DESKTOP_DEFAULTS_VERSION
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn test_workspace_profile(data_dir: &Path, workspace_id: u64) -> CredentialProfile {
         let profile_id = format!("prod:user-25:client-device-a:workspace-{workspace_id}");
         let profile_key = profile_short_key(&profile_id);
@@ -2095,6 +2380,7 @@ mod tests {
                 .display()
                 .to_string(),
             credential_status: "verified".to_string(),
+            desktop_defaults_version: 0,
         }
     }
 }

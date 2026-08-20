@@ -102,12 +102,9 @@ test("Windows desktop discovery follows the codex protocol instead of package na
   assert.match(desktopPreamble, /IApplicationActivationManager/);
   assert.match(desktopPreamble, /ActivateApplication/);
   assert.match(desktopPreamble, /DoNotExpandEnvironmentNames/);
-  assert.match(desktopPreamble, /GetValueKind\(\$name\)/);
-  assert.match(desktopPreamble, /DeleteValue\(\$name, \$false\)/);
+  assert.match(desktopPreamble, /GetValueKind\('CODEX_HOME'\)/);
+  assert.match(desktopPreamble, /DeleteValue\('CODEX_HOME', \$false\)/);
   assert.match(desktopPreamble, /BroadcastEnvironmentChange/);
-  assert.match(desktopPreamble, /BAIJIMU_AUTH_FILE/);
-  assert.match(desktopPreamble, /BAIJIMU_CURRENT_WORKSPACE_ID/);
-  assert.match(desktopPreamble, /Grant-BaijimuCliAuthStoreReadAccess/);
   assert.match(desktopLaunch, /Invoke-CodexDesktopActivation/);
   assert.equal(desktopLaunch.match(/Get-CodexDesktopEntries/g)?.length, 1);
   assert.match(desktopLaunch, /currentVersion/);
@@ -126,28 +123,11 @@ test("desktop launch commits the selected profile without window verification or
   assert.doesNotMatch(desktop, /launch_and_verify|restart_and_verify|has_visible_window/);
   assert.doesNotMatch(main, /active_home_snapshot|restore_active_home|启动验证失败|状态指针回滚/);
   assert.doesNotMatch(credential, /pub fn active_home_snapshot|pub fn restore_active_home/);
-  assert.match(main, /desktop::launch\(&selected_home, workspace_id\)/);
+  assert.match(main, /desktop::launch\(&selected_home\)/);
   const launchRouteStart = main.indexOf('(\"POST\", \"/management/v1/codex/launch\")');
   const launchRoute = main.slice(
     launchRouteStart,
     main.indexOf('_ => Err(HttpError::new(404', launchRouteStart),
   );
   assert.doesNotMatch(launchRoute, /verify_system_compatibility|stop_for_codex_home_switch/);
-  const desktopLaunchStart = desktop.indexOf("pub fn launch(codex_home");
-  const desktopLaunch = desktop.slice(
-    desktopLaunchStart,
-    desktop.indexOf("impl DesktopSwitch", desktopLaunchStart),
-  );
-  const stopIndex = desktopLaunch.indexOf("platform::stop_for_codex_home_switch()");
-  const defaultsIndex = desktopLaunch.indexOf(
-    "credential::apply_workspace_desktop_defaults(codex_home)",
-  );
-  const launchIndex = desktopLaunch.indexOf("platform::launch(codex_home");
-  assert.ok(stopIndex >= 0 && defaultsIndex > stopIndex && launchIndex > defaultsIndex);
-  assert.match(credential, /PERMISSION_MODE_VISIBILITY_KEY/);
-  assert.match(credential, /desktop_defaults_version/);
-  assert.doesNotMatch(
-    credential,
-    /permission-selection-by-host-id:[^\n]*insert|insert[^\n]*permission-selection-by-host-id:/,
-  );
 });

@@ -34,8 +34,10 @@ test("Baijimu CLI exclusively owns platform authentication and Partner API calls
   assert.match(platformCli, /"llm-credential",\s*"create"/);
   assert.match(platformCli, /"--json"/);
   assert.match(platformCli, /"--show-secret"/);
+  assert.match(platformCli, /shared_auth_path/);
+  assert.match(platformCli, /auth status\.sharedAuthPath/);
   assert.doesNotMatch(
     platformCli,
-    /reqwest|bearer_auth|fs::read|fs::read_to_string|auth\.json/,
+    /reqwest|bearer_auth|fs::read|fs::read_to_string/,
   );
 });

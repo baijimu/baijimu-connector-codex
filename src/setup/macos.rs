@@ -161,7 +161,7 @@ impl<'a> MacosInstaller<'a> {
             && credential_state.active_workspace_id == Some(self.workspace_id)
             && Path::new(&credential_state.active_codex_home) == profile_home;
         let outcome = if workspace_profile_is_active {
-            launch_desktop_after_setup(&profile_home)
+            launch_desktop_after_setup(&profile_home, self.workspace_id)
         } else {
             SetupCompletion::completed_without_desktop_launch()
         };

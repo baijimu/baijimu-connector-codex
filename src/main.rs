@@ -289,7 +289,10 @@ fn initialize_server() -> Result<(), String> {
     };
     match credential::state() {
         Ok(state) => desktop_switch
-            .restart_if_needed(Path::new(&state.active_codex_home))
+            .restart_if_needed(
+                Path::new(&state.active_codex_home),
+                state.active_workspace_id,
+            )
             .map(|_| ())
             .map_err(|error| format!("旧版 Codex 档案迁移完成，但桌面应用重启失败: {error}")),
         Err(error) => {
@@ -304,7 +307,7 @@ fn initialize_server() -> Result<(), String> {
                         .filter(|path| path.exists())
                 });
             let restart_error =
-                recovery_home.and_then(|path| desktop_switch.restart_if_needed(path).err());
+                recovery_home.and_then(|path| desktop_switch.restart_if_needed(path, None).err());
             let mut message = format!("迁移旧版 Codex 档案失败: {error}");
             if let Some(restart_error) = restart_error {
                 message.push_str(&format!("；恢复桌面应用失败: {restart_error}"));
@@ -533,7 +536,8 @@ fn handle_management(
             let selected_home = credential::active_codex_home();
             if !test_control_enabled() {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
-                desktop::launch(&selected_home).map_err(desktop_compatibility_http_error)?;
+                desktop::launch(&selected_home, workspace_id)
+                    .map_err(desktop_compatibility_http_error)?;
             }
             serde_json::to_value(
                 credential::state().map_err(|error| HttpError::internal(error.to_string()))?,

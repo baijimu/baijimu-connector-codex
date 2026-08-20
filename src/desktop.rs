@@ -1,5 +1,30 @@
-use anyhow::Result;
-use std::path::Path;
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
+
+const BAIJIMU_AUTH_FILE_ENV: &str = "BAIJIMU_AUTH_FILE";
+const BAIJIMU_CURRENT_WORKSPACE_ID_ENV: &str = "BAIJIMU_CURRENT_WORKSPACE_ID";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BaijimuCliEnvironment {
+    auth_file: PathBuf,
+    current_workspace_id: u64,
+}
+
+impl BaijimuCliEnvironment {
+    fn resolve(current_workspace_id: u64) -> Result<Self> {
+        anyhow::ensure!(current_workspace_id > 0, "工作区 ID 必须大于 0");
+        let status = crate::baijimu_cli::auth_status().context("读取共享 baijimu CLI 授权失败")?;
+        anyhow::ensure!(status.authenticated, "baijimu CLI 当前未登录");
+        anyhow::ensure!(
+            status.workspace_ids.contains(&current_workspace_id),
+            "baijimu CLI 授权不包含工作区 {current_workspace_id}"
+        );
+        Ok(Self {
+            auth_file: status.shared_auth_path,
+            current_workspace_id,
+        })
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct DesktopSwitch {
@@ -17,13 +42,23 @@ pub fn verify_system_compatibility() -> Result<()> {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-pub fn launch(codex_home: &Path) -> Result<()> {
-    platform::launch(codex_home)
+pub fn launch(codex_home: &Path, current_workspace_id: Option<u64>) -> Result<()> {
+    let cli_environment = current_workspace_id
+        .map(BaijimuCliEnvironment::resolve)
+        .transpose()?;
+    platform::launch(codex_home, cli_environment.as_ref())
 }
 
 impl DesktopSwitch {
-    pub fn restart_if_needed(&self, codex_home: &Path) -> Result<bool> {
-        platform::restart_if_needed(self, codex_home)
+    pub fn restart_if_needed(
+        &self,
+        codex_home: &Path,
+        current_workspace_id: Option<u64>,
+    ) -> Result<bool> {
+        let cli_environment = current_workspace_id
+            .map(BaijimuCliEnvironment::resolve)
+            .transpose()?;
+        platform::restart_if_needed(self, codex_home, cli_environment.as_ref())
     }
 }
 
@@ -110,6 +145,56 @@ function New-CodexDesktopPackageNotFoundMessage {
   return "当前 Windows 账户未发现可信 Publisher 签名、声明 $codexDesktopProtocol 协议且具有 FullTrust 可执行入口的桌面应用包（可见 AppX 包：$visiblePackageCount，开始菜单应用：$startAppCount）。请确认百积木与 ChatGPT/Codex 在同一 Windows 账户下运行，然后重试安装"
 }
 
+function Grant-BaijimuCliAuthStoreReadAccess {
+  param(
+    [Parameter(Mandatory = $true)][string]$CodexHome,
+    [Parameter(Mandatory = $true)][string]$AuthFile
+  )
+  if (-not [System.IO.Path]::IsPathRooted($AuthFile)) {
+    throw 'baijimu CLI 共享授权文件必须是绝对路径'
+  }
+  if (-not (Test-Path -LiteralPath $AuthFile -PathType Leaf)) {
+    throw "baijimu CLI 共享授权文件不存在：$AuthFile"
+  }
+  $authDirectory = Split-Path -Parent $AuthFile
+  $sandboxPrincipalNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  $markerPath = Join-Path $CodexHome '.sandbox\setup_marker.json'
+  if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
+    try {
+      $marker = Get-Content -Raw -LiteralPath $markerPath | ConvertFrom-Json
+      @($marker.offline_username, $marker.online_username) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object {
+        [void]$sandboxPrincipalNames.Add(([string]$_).Trim())
+      }
+    } catch {
+      throw "读取 Codex Windows 沙箱主体登记失败：$markerPath"
+    }
+  }
+  @('CodexSandboxOffline', 'CodexSandboxOnline') | ForEach-Object {
+    [void]$sandboxPrincipalNames.Add($_)
+  }
+
+  $sandboxSids = @($sandboxPrincipalNames | ForEach-Object {
+    try {
+      ([System.Security.Principal.NTAccount]::new($env:COMPUTERNAME, $_)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+    } catch { $null }
+  } | Where-Object { $_ } | Sort-Object -Unique)
+  if ($sandboxSids.Count -eq 0) {
+    throw '当前设备尚未登记 Codex Windows 沙箱主体，无法安全开放 baijimu CLI 共享授权读取权限'
+  }
+  foreach ($sid in $sandboxSids) {
+    $grant = "*${sid}:(OI)(CI)(RX)"
+    $output = @(& icacls.exe $authDirectory '/grant:r' $grant 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+      throw "无法向 Codex Windows 沙箱开放 baijimu CLI 共享授权目录读取权限：$($output -join ' ')"
+    }
+    $fileGrant = "*${sid}:(R)"
+    $output = @(& icacls.exe $AuthFile '/grant:r' $fileGrant 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+      throw "无法向 Codex Windows 沙箱开放 baijimu CLI 共享授权文件读取权限：$($output -join ' ')"
+    }
+  }
+}
+
 if (-not ('BaijimuCodexPackageActivator' -as [type])) {
   Add-Type -TypeDefinition @'
 using System;
@@ -185,7 +270,9 @@ public static class BaijimuCodexPackageActivator {
 function Invoke-CodexDesktopActivation {
   param(
     [Parameter(Mandatory = $true)][string]$AppUserModelId,
-    [Parameter(Mandatory = $true)][string]$CodexHome
+    [Parameter(Mandatory = $true)][string]$CodexHome,
+    [string]$BaijimuAuthFile,
+    [string]$BaijimuCurrentWorkspaceId
   )
   if ([string]::IsNullOrWhiteSpace($AppUserModelId)) {
     throw 'ChatGPT/Codex 桌面应用包未登记 AUMID，无法通过 Windows 应用激活器启动'
@@ -193,24 +280,42 @@ function Invoke-CodexDesktopActivation {
 
   $environmentKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment', $true)
   if (-not $environmentKey) { throw '无法打开当前用户环境变量注册表' }
-  $hadOriginal = @($environmentKey.GetValueNames()) -contains 'CODEX_HOME'
-  $originalValue = if ($hadOriginal) {
-    $environmentKey.GetValue('CODEX_HOME', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-  } else {
-    $null
+  $launchEnvironment = [ordered]@{ CODEX_HOME = $CodexHome }
+  if (-not [string]::IsNullOrWhiteSpace($BaijimuAuthFile)) {
+    if ([string]::IsNullOrWhiteSpace($BaijimuCurrentWorkspaceId)) {
+      throw '提供 BAIJIMU_AUTH_FILE 时必须同时提供 BAIJIMU_CURRENT_WORKSPACE_ID'
+    }
+    $launchEnvironment['BAIJIMU_AUTH_FILE'] = $BaijimuAuthFile
+    $launchEnvironment['BAIJIMU_CURRENT_WORKSPACE_ID'] = $BaijimuCurrentWorkspaceId
   }
-  $originalKind = if ($hadOriginal) { $environmentKey.GetValueKind('CODEX_HOME') } else { $null }
+  $originalEnvironment = @{}
+  $knownNames = @($environmentKey.GetValueNames())
+  foreach ($name in $launchEnvironment.Keys) {
+    $hadOriginal = $knownNames -contains $name
+    $originalEnvironment[$name] = [pscustomobject]@{
+      hadOriginal = $hadOriginal
+      value = if ($hadOriginal) {
+        $environmentKey.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+      } else { $null }
+      kind = if ($hadOriginal) { $environmentKey.GetValueKind($name) } else { $null }
+    }
+  }
   $activatedProcessId = $null
   try {
-    $environmentKey.SetValue('CODEX_HOME', $CodexHome, [Microsoft.Win32.RegistryValueKind]::String)
+    foreach ($name in $launchEnvironment.Keys) {
+      $environmentKey.SetValue($name, $launchEnvironment[$name], [Microsoft.Win32.RegistryValueKind]::String)
+    }
     [BaijimuCodexPackageActivator]::BroadcastEnvironmentChange()
     $activatedProcessId = [BaijimuCodexPackageActivator]::Activate($AppUserModelId)
   } finally {
     try {
-      if ($hadOriginal) {
-        $environmentKey.SetValue('CODEX_HOME', $originalValue, $originalKind)
-      } else {
-        $environmentKey.DeleteValue('CODEX_HOME', $false)
+      foreach ($name in $launchEnvironment.Keys) {
+        $original = $originalEnvironment[$name]
+        if ($original.hadOriginal) {
+          $environmentKey.SetValue($name, $original.value, $original.kind)
+        } else {
+          $environmentKey.DeleteValue($name, $false)
+        }
       }
       [BaijimuCodexPackageActivator]::BroadcastEnvironmentChange()
     } finally {
@@ -247,6 +352,14 @@ if ($wasRunning) {
     const LAUNCH_SCRIPT: &str = r#"
 $codexHome = $env:CODEX_HOME
 if (-not $codexHome) { throw '隔离启动桌面应用时必须显式提供 CODEX_HOME' }
+$baijimuAuthFile = $env:BAIJIMU_AUTH_FILE
+$baijimuCurrentWorkspaceId = $env:BAIJIMU_CURRENT_WORKSPACE_ID
+if ([string]::IsNullOrWhiteSpace($baijimuAuthFile) -ne [string]::IsNullOrWhiteSpace($baijimuCurrentWorkspaceId)) {
+  throw 'BAIJIMU_AUTH_FILE 与 BAIJIMU_CURRENT_WORKSPACE_ID 必须同时提供'
+}
+if (-not [string]::IsNullOrWhiteSpace($baijimuAuthFile)) {
+  Grant-BaijimuCliAuthStoreReadAccess -CodexHome $codexHome -AuthFile $baijimuAuthFile
+}
 $entry = @(Get-CodexDesktopEntries | Select-Object -First 1)
 if ($entry.Count -eq 0) { throw (New-CodexDesktopPackageNotFoundMessage) }
 $package = $entry[0].package
@@ -284,7 +397,7 @@ if ($existing.Count -gt 0) {
   if ($remaining.Count -gt 0) { throw 'ChatGPT/Codex 桌面应用进程未在 15 秒内停止' }
 }
 
-$activatedProcessId = Invoke-CodexDesktopActivation -AppUserModelId $entry[0].appUserModelId -CodexHome $codexHome
+$activatedProcessId = Invoke-CodexDesktopActivation -AppUserModelId $entry[0].appUserModelId -CodexHome $codexHome -BaijimuAuthFile $baijimuAuthFile -BaijimuCurrentWorkspaceId $baijimuCurrentWorkspaceId
 [pscustomobject]@{
   currentVersion = $current.ToString()
   minimumVersion = $minimum.ToString()
@@ -299,7 +412,7 @@ $activatedProcessId = Invoke-CodexDesktopActivation -AppUserModelId $entry[0].ap
 "#;
 
     pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
-        let output = run_powershell(STOP_SCRIPT, None)?;
+        let output = run_powershell(STOP_SCRIPT, None, None)?;
         let result: StopResult = crate::json_compat::from_slice(&output)
             .context("解析 ChatGPT/Codex 桌面停止结果失败")?;
         Ok(DesktopSwitch {
@@ -307,8 +420,11 @@ $activatedProcessId = Invoke-CodexDesktopActivation -AppUserModelId $entry[0].ap
         })
     }
 
-    pub fn launch(codex_home: &Path) -> Result<()> {
-        let output = run_powershell(LAUNCH_SCRIPT, Some(codex_home))?;
+    pub fn launch(
+        codex_home: &Path,
+        cli_environment: Option<&BaijimuCliEnvironment>,
+    ) -> Result<()> {
+        let output = run_powershell(LAUNCH_SCRIPT, Some(codex_home), cli_environment)?;
         let result: LaunchResult = crate::json_compat::from_slice(&output)
             .context("解析 ChatGPT/Codex Windows 启动结果失败")?;
         crate::system_compatibility::ensure_supported(
@@ -324,19 +440,35 @@ $activatedProcessId = Invoke-CodexDesktopActivation -AppUserModelId $entry[0].ap
         Ok(())
     }
 
-    pub fn restart_if_needed(state: &DesktopSwitch, codex_home: &Path) -> Result<bool> {
+    pub fn restart_if_needed(
+        state: &DesktopSwitch,
+        codex_home: &Path,
+        cli_environment: Option<&BaijimuCliEnvironment>,
+    ) -> Result<bool> {
         if !state.was_running {
             return Ok(false);
         }
-        launch(codex_home)?;
+        launch(codex_home, cli_environment)?;
         Ok(true)
     }
 
-    fn run_powershell(script: &str, codex_home: Option<&Path>) -> Result<Vec<u8>> {
+    fn run_powershell(
+        script: &str,
+        codex_home: Option<&Path>,
+        cli_environment: Option<&BaijimuCliEnvironment>,
+    ) -> Result<Vec<u8>> {
         let mut command = Command::new("powershell.exe");
         crate::child_process::isolate_from_connector_environment(&mut command);
         if let Some(codex_home) = codex_home {
             command.env("CODEX_HOME", codex_home);
+        }
+        if let Some(cli_environment) = cli_environment {
+            command
+                .env(BAIJIMU_AUTH_FILE_ENV, &cli_environment.auth_file)
+                .env(
+                    BAIJIMU_CURRENT_WORKSPACE_ID_ENV,
+                    cli_environment.current_workspace_id.to_string(),
+                );
         }
         let product_config = crate::product_config::get();
         let trusted_publishers = product_config.windows_desktop_trusted_publishers.join("\n");
@@ -411,9 +543,15 @@ $activatedProcessId = Invoke-CodexDesktopActivation -AppUserModelId $entry[0].ap
             assert!(POWERSHELL_PREAMBLE.contains("IApplicationActivationManager"));
             assert!(POWERSHELL_PREAMBLE.contains("ActivateApplication"));
             assert!(POWERSHELL_PREAMBLE.contains("DoNotExpandEnvironmentNames"));
-            assert!(POWERSHELL_PREAMBLE.contains("GetValueKind('CODEX_HOME')"));
-            assert!(POWERSHELL_PREAMBLE.contains("DeleteValue('CODEX_HOME', $false)"));
+            assert!(POWERSHELL_PREAMBLE.contains("GetValueKind($name)"));
+            assert!(POWERSHELL_PREAMBLE.contains("DeleteValue($name, $false)"));
             assert!(POWERSHELL_PREAMBLE.contains("BroadcastEnvironmentChange"));
+            assert!(POWERSHELL_PREAMBLE.contains("BAIJIMU_AUTH_FILE"));
+            assert!(POWERSHELL_PREAMBLE.contains("BAIJIMU_CURRENT_WORKSPACE_ID"));
+            assert!(POWERSHELL_PREAMBLE.contains("Grant-BaijimuCliAuthStoreReadAccess"));
+            assert!(POWERSHELL_PREAMBLE.contains("CodexSandboxOffline"));
+            assert!(POWERSHELL_PREAMBLE.contains("CodexSandboxOnline"));
+            assert!(POWERSHELL_PREAMBLE.contains("(OI)(CI)(RX)"));
             assert!(LAUNCH_SCRIPT.contains(
                 "Invoke-CodexDesktopActivation -AppUserModelId $entry[0].appUserModelId"
             ));
@@ -434,7 +572,7 @@ $activatedProcessId = Invoke-CodexDesktopActivation -AppUserModelId $entry[0].ap
             assert!(!POWERSHELL_PREAMBLE.contains("OpenAI.ChatGPT-Desktop"));
             assert!(!POWERSHELL_PREAMBLE.contains("Get-AppxPackage -Name"));
 
-            let error = run_powershell("throw '当前账户未发现桌面应用包'", None).unwrap_err();
+            let error = run_powershell("throw '当前账户未发现桌面应用包'", None, None).unwrap_err();
             let message = error.to_string();
             assert!(message.contains("当前账户未发现桌面应用包"), "{message}");
             assert!(!message.contains('\u{fffd}'), "{message}");
@@ -482,7 +620,7 @@ if ($entry.Count -ne 1) { throw "expected one entry, got $($entry.Count)" }
 } | ConvertTo-Json -Compress
 "#;
 
-            let output = run_powershell(script, Some(&root)).unwrap();
+            let output = run_powershell(script, Some(&root), None).unwrap();
             let value: serde_json::Value = crate::json_compat::from_slice(&output).unwrap();
             assert_eq!(
                 value["packageFullName"],
@@ -543,11 +681,15 @@ mod platform {
         anyhow::bail!("ChatGPT/Codex 桌面应用未在 15 秒内退出")
     }
 
-    pub fn restart_if_needed(state: &DesktopSwitch, codex_home: &Path) -> Result<bool> {
+    pub fn restart_if_needed(
+        state: &DesktopSwitch,
+        codex_home: &Path,
+        cli_environment: Option<&BaijimuCliEnvironment>,
+    ) -> Result<bool> {
         if !state.was_running {
             return Ok(false);
         }
-        launch(codex_home)?;
+        launch(codex_home, cli_environment)?;
         Ok(true)
     }
 
@@ -557,14 +699,17 @@ mod platform {
         verify_application_compatibility(&app_path)
     }
 
-    pub fn launch(codex_home: &Path) -> Result<()> {
+    pub fn launch(
+        codex_home: &Path,
+        cli_environment: Option<&BaijimuCliEnvironment>,
+    ) -> Result<()> {
         let app_path =
             installed_application_path().context("没有找到已安装的 ChatGPT/Codex 桌面应用")?;
         verify_application_compatibility(&app_path)?;
         let bundle_id = application_bundle_id(&app_path)?;
         stop_application(&bundle_id)?;
         run_checked(
-            open_application_command(&app_path, codex_home),
+            open_application_command(&app_path, codex_home, cli_environment),
             "打开 ChatGPT/Codex 桌面应用失败",
         )
     }
@@ -634,14 +779,37 @@ mod platform {
         })
     }
 
-    fn open_application_command(app_path: &Path, codex_home: &Path) -> Command {
+    fn open_application_command(
+        app_path: &Path,
+        codex_home: &Path,
+        cli_environment: Option<&BaijimuCliEnvironment>,
+    ) -> Command {
         let mut command = Command::new("/usr/bin/open");
         crate::child_process::isolate_from_connector_environment(&mut command);
-        let mut assignment = std::ffi::OsString::from("CODEX_HOME=");
-        assignment.push(codex_home);
-        command.arg("--env").arg(assignment);
+        command
+            .arg("--env")
+            .arg(environment_assignment("CODEX_HOME", codex_home));
+        if let Some(cli_environment) = cli_environment {
+            command
+                .arg("--env")
+                .arg(environment_assignment(
+                    BAIJIMU_AUTH_FILE_ENV,
+                    &cli_environment.auth_file,
+                ))
+                .arg("--env")
+                .arg(format!(
+                    "{BAIJIMU_CURRENT_WORKSPACE_ID_ENV}={}",
+                    cli_environment.current_workspace_id
+                ));
+        }
         command.arg(app_path);
         command
+    }
+
+    fn environment_assignment(name: &str, value: &Path) -> std::ffi::OsString {
+        let mut assignment = std::ffi::OsString::from(format!("{name}="));
+        assignment.push(value);
+        assignment
     }
 
     fn run_checked(mut command: Command, context: &str) -> Result<()> {
@@ -673,6 +841,31 @@ mod platform {
             let missing = "Application not found\n";
             assert!(!has_running_process(missing));
         }
+
+        #[test]
+        fn workspace_launch_injects_one_shared_cli_store_and_one_workspace_context() {
+            let app = Path::new("/Applications/Codex.app");
+            let codex_home = Path::new("/Users/example/.baijimu/codex/p/profile");
+            let cli_environment = BaijimuCliEnvironment {
+                auth_file: PathBuf::from("/Users/example/.config/baijimu/auth.json"),
+                current_workspace_id: 1430,
+            };
+            let command = open_application_command(app, codex_home, Some(&cli_environment));
+            let args = command
+                .get_args()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+
+            assert!(args.contains(&"CODEX_HOME=/Users/example/.baijimu/codex/p/profile".into()));
+            assert!(
+                args.contains(&"BAIJIMU_AUTH_FILE=/Users/example/.config/baijimu/auth.json".into())
+            );
+            assert!(args.contains(&"BAIJIMU_CURRENT_WORKSPACE_ID=1430".into()));
+            assert_eq!(
+                args.last().map(String::as_str),
+                Some("/Applications/Codex.app")
+            );
+        }
     }
 }
 
@@ -684,7 +877,11 @@ mod platform {
         Ok(DesktopSwitch::default())
     }
 
-    pub fn restart_if_needed(_state: &DesktopSwitch, _codex_home: &Path) -> Result<bool> {
+    pub fn restart_if_needed(
+        _state: &DesktopSwitch,
+        _codex_home: &Path,
+        _cli_environment: Option<&BaijimuCliEnvironment>,
+    ) -> Result<bool> {
         Ok(false)
     }
 }

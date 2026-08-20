@@ -102,9 +102,12 @@ test("Windows desktop discovery follows the codex protocol instead of package na
   assert.match(desktopPreamble, /IApplicationActivationManager/);
   assert.match(desktopPreamble, /ActivateApplication/);
   assert.match(desktopPreamble, /DoNotExpandEnvironmentNames/);
-  assert.match(desktopPreamble, /GetValueKind\('CODEX_HOME'\)/);
-  assert.match(desktopPreamble, /DeleteValue\('CODEX_HOME', \$false\)/);
+  assert.match(desktopPreamble, /GetValueKind\(\$name\)/);
+  assert.match(desktopPreamble, /DeleteValue\(\$name, \$false\)/);
   assert.match(desktopPreamble, /BroadcastEnvironmentChange/);
+  assert.match(desktopPreamble, /BAIJIMU_AUTH_FILE/);
+  assert.match(desktopPreamble, /BAIJIMU_CURRENT_WORKSPACE_ID/);
+  assert.match(desktopPreamble, /Grant-BaijimuCliAuthStoreReadAccess/);
   assert.match(desktopLaunch, /Invoke-CodexDesktopActivation/);
   assert.equal(desktopLaunch.match(/Get-CodexDesktopEntries/g)?.length, 1);
   assert.match(desktopLaunch, /currentVersion/);
@@ -123,7 +126,7 @@ test("desktop launch commits the selected profile without window verification or
   assert.doesNotMatch(desktop, /launch_and_verify|restart_and_verify|has_visible_window/);
   assert.doesNotMatch(main, /active_home_snapshot|restore_active_home|启动验证失败|状态指针回滚/);
   assert.doesNotMatch(credential, /pub fn active_home_snapshot|pub fn restore_active_home/);
-  assert.match(main, /desktop::launch\(&selected_home\)/);
+  assert.match(main, /desktop::launch\(&selected_home, workspace_id\)/);
   const launchRouteStart = main.indexOf('(\"POST\", \"/management/v1/codex/launch\")');
   const launchRoute = main.slice(
     launchRouteStart,

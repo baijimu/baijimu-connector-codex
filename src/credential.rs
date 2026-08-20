@@ -15,7 +15,7 @@ pub use contract::*;
 mod store;
 use store::*;
 
-const METADATA_VERSION: u32 = 7;
+const METADATA_VERSION: u32 = 8;
 const METADATA_FILE: &str = "codex-credentials.json";
 const CODEX_GLOBAL_STATE_FILE: &str = ".codex-global-state.json";
 const DESKTOP_DEFAULTS_VERSION: u32 = 1;
@@ -49,6 +49,10 @@ struct CredentialMetadata {
     original_codex_home_state: OriginalCodexHomeState,
     #[serde(default)]
     legacy_global_codex_home_restored_at_epoch_seconds: Option<u64>,
+    #[serde(default)]
+    legacy_shared_auth_acl_revoked_at_epoch_seconds: Option<u64>,
+    #[serde(default)]
+    legacy_shared_auth_acl_cleanup_required: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -81,8 +85,39 @@ impl Default for CredentialMetadata {
             active_workspace_id: None,
             original_codex_home_state: OriginalCodexHomeState::default(),
             legacy_global_codex_home_restored_at_epoch_seconds: None,
+            legacy_shared_auth_acl_revoked_at_epoch_seconds: None,
+            legacy_shared_auth_acl_cleanup_required: false,
         }
     }
+}
+
+#[cfg(windows)]
+pub fn legacy_shared_auth_acl_cleanup_required() -> Result<bool> {
+    Ok(load_metadata()?.legacy_shared_auth_acl_cleanup_required)
+}
+
+#[cfg(windows)]
+pub fn managed_codex_homes_for_legacy_acl_cleanup() -> Result<Vec<PathBuf>> {
+    let metadata = load_metadata()?;
+    Ok(metadata
+        .profiles
+        .into_iter()
+        .map(|profile| PathBuf::from(profile.codex_home))
+        .collect())
+}
+
+#[cfg(windows)]
+pub fn record_legacy_shared_auth_acl_cleanup() -> Result<()> {
+    let mut metadata = load_metadata()?;
+    if metadata
+        .legacy_shared_auth_acl_revoked_at_epoch_seconds
+        .is_none()
+    {
+        metadata.legacy_shared_auth_acl_revoked_at_epoch_seconds = Some(now_epoch_seconds());
+    }
+    metadata.legacy_shared_auth_acl_cleanup_required = false;
+    save_metadata(&metadata)?;
+    Ok(())
 }
 
 pub fn state() -> Result<CredentialManagerState> {
@@ -1389,6 +1424,35 @@ mod tests {
         assert!(metadata_path().exists());
         assert!(!legacy_metadata_path().exists());
         verify_private_file(&metadata_path()).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_acl_cleanup_is_required_only_for_preexisting_metadata() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-acl-cleanup-migration-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let new_data_dir = root.join("new-install");
+        let upgraded_data_dir = root.join("upgraded-install");
+        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &new_data_dir);
+
+        let new_metadata = load_metadata().unwrap();
+        assert!(!new_metadata.legacy_shared_auth_acl_cleanup_required);
+
+        std::env::set_var("BAIJIMU_CONNECTOR_DATA_DIR", &upgraded_data_dir);
+        fs::create_dir_all(&upgraded_data_dir).unwrap();
+        fs::write(
+            metadata_path(),
+            serde_json::to_vec_pretty(&json!({"version": 7})).unwrap(),
+        )
+        .unwrap();
+        let upgraded_metadata = load_metadata().unwrap();
+        assert!(upgraded_metadata.legacy_shared_auth_acl_cleanup_required);
+        assert_eq!(upgraded_metadata.version, METADATA_VERSION);
+
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -4,6 +4,8 @@ mod cli;
 mod credential;
 mod desktop;
 mod json_compat;
+#[cfg(windows)]
+mod legacy_auth_cleanup;
 mod process_runtime;
 mod product_config;
 mod setup;
@@ -276,6 +278,9 @@ fn initialize_server() -> Result<(), String> {
             }
         }
     }
+    #[cfg(windows)]
+    legacy_auth_cleanup::run_once()
+        .map_err(|error| format!("回收旧版 Codex 沙箱全局授权失败: {error}"))?;
     let Some(migration) = credential::pending_profile_home_migration()
         .map_err(|error| format!("检查旧版 Codex 档案迁移状态失败: {error}"))?
     else {
@@ -291,7 +296,7 @@ fn initialize_server() -> Result<(), String> {
         Ok(state) => desktop_switch
             .restart_if_needed(
                 Path::new(&state.active_codex_home),
-                state.active_workspace_id,
+                state.active_workspace_id.is_some(),
             )
             .map(|_| ())
             .map_err(|error| format!("旧版 Codex 档案迁移完成，但桌面应用重启失败: {error}")),
@@ -307,7 +312,7 @@ fn initialize_server() -> Result<(), String> {
                         .filter(|path| path.exists())
                 });
             let restart_error =
-                recovery_home.and_then(|path| desktop_switch.restart_if_needed(path, None).err());
+                recovery_home.and_then(|path| desktop_switch.restart_if_needed(path, false).err());
             let mut message = format!("迁移旧版 Codex 档案失败: {error}");
             if let Some(restart_error) = restart_error {
                 message.push_str(&format!("；恢复桌面应用失败: {restart_error}"));
@@ -536,7 +541,7 @@ fn handle_management(
             let selected_home = credential::active_codex_home();
             if !test_control_enabled() {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
-                desktop::launch(&selected_home, workspace_id)
+                desktop::launch(&selected_home, workspace_id.is_some())
                     .map_err(desktop_compatibility_http_error)?;
             }
             serde_json::to_value(

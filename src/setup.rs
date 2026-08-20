@@ -587,7 +587,7 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
         anyhow::bail!("安装脚本执行成功，但独立工作区凭证归属回查失败");
     }
     let completion = match activated_profile_home {
-        Some(profile_home) => launch_desktop_after_setup(&profile_home, workspace_id),
+        Some(profile_home) => launch_desktop_after_setup(&profile_home),
         None => SetupCompletion::completed_without_desktop_launch(),
     };
     Ok(SetupInstallation {
@@ -596,17 +596,14 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
     })
 }
 
-fn launch_desktop_after_setup(profile_home: &Path, workspace_id: u64) -> SetupCompletion {
+fn launch_desktop_after_setup(profile_home: &Path) -> SetupCompletion {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        SetupCompletion::from_desktop_activation(crate::desktop::launch(
-            profile_home,
-            Some(workspace_id),
-        ))
+        SetupCompletion::from_desktop_activation(crate::desktop::launch(profile_home, true))
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let _ = (profile_home, workspace_id);
+        let _ = profile_home;
         SetupCompletion::completed_without_desktop_launch()
     }
 }

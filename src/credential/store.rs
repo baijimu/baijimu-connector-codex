@@ -19,6 +19,14 @@ pub(super) fn load_metadata() -> Result<CredentialMetadata> {
     };
     let previous_version = metadata.version;
     let needs_version_migration = previous_version < METADATA_VERSION;
+    if source.is_some()
+        && needs_version_migration
+        && metadata
+            .legacy_shared_auth_acl_revoked_at_epoch_seconds
+            .is_none()
+    {
+        metadata.legacy_shared_auth_acl_cleanup_required = true;
+    }
     for profile in &mut metadata.profiles {
         normalize_profile(profile);
     }

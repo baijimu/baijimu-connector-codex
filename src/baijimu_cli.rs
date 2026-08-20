@@ -14,7 +14,6 @@ pub struct AuthStatus {
     pub authenticated: bool,
     pub base_url: String,
     pub current_workspace_id: Option<u64>,
-    pub shared_auth_path: PathBuf,
     pub workspace_ids: Vec<u64>,
 }
 
@@ -30,7 +29,9 @@ struct AuthStatusContract {
     authenticated: bool,
     base_url: String,
     current_workspace_id: Option<u64>,
-    shared_auth_path: String,
+    #[cfg(windows)]
+    #[serde(default, rename = "sharedAuthPath")]
+    legacy_auth_cleanup_path: String,
     workspace_ids: Vec<u64>,
 }
 
@@ -119,23 +120,28 @@ pub fn auth_status() -> Result<AuthStatus> {
     if contract.authenticated && contract.workspace_ids.is_empty() {
         bail!("baijimu CLI 报告已认证，但授权工作区为空");
     }
-    let shared_auth_path = PathBuf::from(required_text(
-        contract.shared_auth_path,
-        "auth status.sharedAuthPath",
-    )?);
-    if !shared_auth_path.is_absolute() {
-        bail!(
-            "baijimu CLI auth status.sharedAuthPath 必须是绝对路径：{}",
-            shared_auth_path.display()
-        );
-    }
     Ok(AuthStatus {
         authenticated: contract.authenticated,
         base_url: required_text(contract.base_url, "auth status.baseUrl")?,
         current_workspace_id: contract.current_workspace_id.filter(|id| *id > 0),
-        shared_auth_path,
         workspace_ids: positive_unique_ids(contract.workspace_ids, "auth status.workspaceIds")?,
     })
+}
+
+#[cfg(windows)]
+pub fn legacy_shared_auth_path_for_acl_cleanup() -> Result<PathBuf> {
+    let contract: AuthStatusContract = run_json("auth status", &["auth", "status"])?;
+    let path = PathBuf::from(required_text(
+        contract.legacy_auth_cleanup_path,
+        "auth status.sharedAuthPath",
+    )?);
+    if !path.is_absolute() {
+        bail!(
+            "baijimu CLI auth status.sharedAuthPath 必须是绝对路径：{}",
+            path.display()
+        );
+    }
+    Ok(path)
 }
 
 pub fn list_workspaces() -> Result<Vec<Workspace>> {
@@ -327,15 +333,10 @@ mod tests {
             authenticated: contract.authenticated,
             base_url: required_text(contract.base_url, "baseUrl").unwrap(),
             current_workspace_id: contract.current_workspace_id,
-            shared_auth_path: PathBuf::from(contract.shared_auth_path),
             workspace_ids: positive_unique_ids(contract.workspace_ids, "workspaceIds").unwrap(),
         };
         assert_eq!(status.workspace_ids, vec![642, 1390]);
         assert_eq!(status.current_workspace_id, Some(642));
-        assert_eq!(
-            status.shared_auth_path,
-            PathBuf::from("/owned/by/baijimu-cli/auth.json")
-        );
     }
 
     #[test]

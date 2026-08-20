@@ -2,10 +2,10 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex 桌面管理器",
-  "version": "1.3.17",
+  "version": "1.3.18",
   "description": "安装 Codex 桌面应用，并管理相互隔离的百积木工作区桌面档案。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.3.17"},
+  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.3.18"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
@@ -52,7 +52,7 @@
     }
   ],
   "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex 桌面管理器", "defaultView": true},
-  "releaseNotes": ["百积木工作区首次受管启动默认显示 Full access 选项，但不自动选中，现有权限模式保持不变。", "兼容旧版布尔值与新版对象形式的 Codex 桌面可见性状态；引导完成后只迁移一次，保留用户后续选择。", "切换 Codex 档案前先停止旧桌面进程，再写入本次工作区状态和启动环境。"],
+  "releaseNotes": ["移除向 Codex 桌面进程注入用户级 baijimu CLI 授权文件和当前工作区环境的逻辑。", "Windows 升级时一次性回收 1.3.16 写入的 Codex 沙箱显式读取 ACL；清理完成后不再读取或修改全局授权权限。", "百积木工作区首次受管启动仍默认显示 Full access 选项，但不自动选中，现有权限模式保持不变。"],
   "configSchema": {
     "type": "object",
     "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},

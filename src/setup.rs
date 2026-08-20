@@ -516,7 +516,7 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
     let auto_activate = credential::should_auto_activate_workspace_after_setup()?;
 
     let install_result = (|| -> Result<(Option<PathBuf>, String)> {
-        let prepared = credential::prepare_workspace_profile(workspace_id)?;
+        let prepared = credential::initialize_workspace_profile(workspace_id)?;
         let profile_home = PathBuf::from(&prepared.profile.codex_home);
         atomic_write_private(&script_path, &windows_install_script_bytes())?;
         let state_dir = installer_state_dir();
@@ -599,7 +599,7 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
 fn launch_desktop_after_setup(profile_home: &Path) -> SetupCompletion {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        SetupCompletion::from_desktop_activation(crate::desktop::launch(profile_home, true))
+        SetupCompletion::from_desktop_activation(crate::desktop::launch(profile_home))
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {

@@ -78,7 +78,10 @@ function clearNotices() {
 
 function renderContentVisibility() {
   const capability = codexCapabilityMeta(setupState);
-  elements["management-workspace-panel"].hidden = !capability.available;
+  const hasAuthorizedWorkspace = credentialState?.workspaces?.some(
+    (workspace) => workspace.authorized,
+  );
+  elements["management-workspace-panel"].hidden = !capability.available && !hasAuthorizedWorkspace;
   elements["integration-unavailable-panel"].hidden = capability.available;
 }
 
@@ -103,12 +106,12 @@ function setAccountBusy(value) {
   elements["restore-external-home-button"].disabled = value;
   const action = setupActionMeta(setupState);
   elements["setup-action-button"].textContent = value ? "正在处理…" : action.label;
-  document.querySelectorAll(".auth-switch").forEach((button) => {
+  document.querySelectorAll(".profile-action").forEach((button) => {
     button.disabled = value || button.dataset.profileDisabled === "true";
   });
 }
 
-function profileRow({ title, badges, active, disabled, actionLabel, onSwitch }) {
+function profileRow({ title, badges, active, disabled, actions }) {
   const row = document.createElement("div");
   row.className = `profile-row${active ? " active" : ""}${disabled ? " unavailable" : ""}`;
   const heading = document.createElement("div");
@@ -122,15 +125,20 @@ function profileRow({ title, badges, active, disabled, actionLabel, onSwitch }) 
     label.textContent = badge.label;
     heading.append(label);
   }
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = `button ${active ? "secondary" : "primary"} compact auth-switch`;
-  button.textContent = actionLabel || (active ? "重启" : "启动");
-  button.setAttribute("aria-label", `${button.textContent}${title}`);
-  button.dataset.profileDisabled = String(disabled);
-  button.disabled = accountBusy || disabled;
-  button.addEventListener("click", onSwitch);
-  row.append(heading, button);
+  const actionGroup = document.createElement("div");
+  actionGroup.className = "profile-actions";
+  for (const action of actions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `button ${action.tone || "secondary"} compact profile-action`;
+    button.textContent = action.label;
+    button.setAttribute("aria-label", `${action.label}${title}`);
+    button.dataset.profileDisabled = String(disabled || action.disabled === true);
+    button.disabled = accountBusy || disabled || action.disabled === true;
+    button.addEventListener("click", action.onClick);
+    actionGroup.append(button);
+  }
+  row.append(heading, actionGroup);
   return row;
 }
 
@@ -149,8 +157,11 @@ function authProfiles() {
       badges: profileBadgeMeta({ active, systemDefault }),
       active,
       disabled: false,
-      actionLabel: active ? "重启" : "启动",
-      request: { mode: "chatgpt" },
+      actions: [{
+        label: active ? "重启" : "启动",
+        tone: active ? "secondary" : "primary",
+        onClick: () => openAuthSwitchModal({ mode: "chatgpt" }),
+      }],
     });
   }
   for (const workspace of state?.workspaces || []) {
@@ -159,14 +170,41 @@ function authProfiles() {
     const usesDefaultHome = profile?.codexHome
       && profile.codexHome === state.originalCodexHome
       && state?.chatgpt?.available === false;
+    const needsReauthorization = workspace.configured
+      && !["configured", "verified"].includes(profile?.credentialStatus);
+    const request = { mode: "baijimu", workspaceId: workspace.workspaceId };
+    const actions = workspace.configured
+      ? [
+          {
+            label: "重新授权",
+            tone: "secondary",
+            onClick: () => reauthorizeWorkspace(workspace.workspaceId),
+          },
+          {
+            label: active ? "重启" : "启动",
+            tone: active ? "secondary" : "primary",
+            disabled: needsReauthorization,
+            onClick: () => openAuthSwitchModal(request),
+          },
+        ]
+      : [{
+          label: "初始化",
+          tone: "primary",
+          onClick: () => initializeWorkspace(workspace.workspaceId),
+        }];
     profiles.push({
       key: `workspace-${workspace.workspaceId}`,
       title: `${workspace.name || `工作区 ${workspace.workspaceId}`}（${workspace.workspaceId}）`,
-      badges: profileBadgeMeta({ active, systemDefault: usesDefaultHome, disabled: !workspace.authorized }),
+      badges: profileBadgeMeta({
+        active,
+        systemDefault: usesDefaultHome,
+        disabled: !workspace.authorized,
+        configured: workspace.configured,
+        credentialStatus: profile?.credentialStatus,
+      }),
       active,
       disabled: !workspace.authorized,
-      actionLabel: active ? "重启" : "启动",
-      request: { mode: "baijimu", workspaceId: workspace.workspaceId },
+      actions,
     });
   }
   return profiles.sort((left, right) => {
@@ -180,10 +218,7 @@ function renderAuthProfiles() {
   const list = elements["auth-profile-list"];
   list.replaceChildren();
   for (const profile of authProfiles()) {
-    list.append(profileRow({
-      ...profile,
-      onSwitch: () => openAuthSwitchModal(profile.request),
-    }));
+    list.append(profileRow(profile));
   }
   if (!list.children.length) {
     const empty = document.createElement("div");
@@ -276,6 +311,42 @@ async function launchCodex(request, progressMessage) {
     });
   } finally {
     elements["switch-progress"].hidden = true;
+    setAccountBusy(false);
+  }
+}
+
+async function initializeWorkspace(workspaceId) {
+  clearNotices();
+  setAccountBusy(true);
+  try {
+    setupState = await invokeManagement("initializeWorkspace", { workspaceId });
+    renderSetupState();
+    setMessage("message", `已开始初始化工作区 ${workspaceId}；已有配置文件不会被覆盖。`);
+    void monitorSetup();
+  } catch (error) {
+    setAccountBusy(false);
+    showError(errorMessage(error), {
+      action: () => initializeWorkspace(workspaceId),
+      label: "重试初始化",
+    });
+  }
+}
+
+async function reauthorizeWorkspace(workspaceId) {
+  clearNotices();
+  setAccountBusy(true);
+  try {
+    credentialState = normalizeCredentialState(
+      await invokeManagement("reauthorizeWorkspace", { workspaceId }),
+    );
+    renderCredentialState();
+    setMessage("message", `工作区 ${workspaceId} 已重新授权；config.toml 保持不变。`);
+  } catch (error) {
+    showError(errorMessage(error), {
+      action: () => reauthorizeWorkspace(workspaceId),
+      label: "重试授权",
+    });
+  } finally {
     setAccountBusy(false);
   }
 }

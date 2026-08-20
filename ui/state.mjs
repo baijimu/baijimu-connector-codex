@@ -94,11 +94,21 @@ export function normalizeProfile(value) {
   };
 }
 
-export function profileBadgeMeta({ active = false, systemDefault = false, disabled = false } = {}) {
+export function profileBadgeMeta({
+  active = false,
+  systemDefault = false,
+  disabled = false,
+  configured = true,
+  credentialStatus = "",
+} = {}) {
   const badges = [];
   if (active) badges.push({ label: "当前", tone: "current" });
   if (systemDefault) badges.push({ label: "系统默认", tone: "default" });
   if (disabled) badges.push({ label: "未授权", tone: "warning" });
+  else if (!configured) badges.push({ label: "未初始化", tone: "warning" });
+  else if (["missing", "invalid"].includes(credentialStatus)) {
+    badges.push({ label: "需重新授权", tone: "danger" });
+  }
   return badges;
 }
 

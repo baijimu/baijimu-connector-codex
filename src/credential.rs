@@ -17,12 +17,6 @@ use store::*;
 
 const METADATA_VERSION: u32 = 8;
 const METADATA_FILE: &str = "codex-credentials.json";
-const CODEX_GLOBAL_STATE_FILE: &str = ".codex-global-state.json";
-const DESKTOP_DEFAULTS_VERSION: u32 = 1;
-const PERSISTED_ATOM_STATE_KEY: &str = "electron-persisted-atom-state";
-const PERMISSION_MODE_VISIBILITY_KEY: &str = "composer-permission-mode-visibility";
-const ONBOARDING_COMPLETED_KEY: &str = "electron:onboarding-projectless-completed";
-const LAST_COMPLETED_ONBOARDING_KEY: &str = "last_completed_onboarding";
 const OWNERSHIP_MARKER_FILE: &str = ".baijimu-owner.json";
 const OWNERSHIP_RESERVATION_FILE: &str = ".baijimu-owner.pending.json";
 const OWNERSHIP_SCHEMA_VERSION: u32 = 2;
@@ -49,10 +43,6 @@ struct CredentialMetadata {
     original_codex_home_state: OriginalCodexHomeState,
     #[serde(default)]
     legacy_global_codex_home_restored_at_epoch_seconds: Option<u64>,
-    #[serde(default)]
-    legacy_shared_auth_acl_revoked_at_epoch_seconds: Option<u64>,
-    #[serde(default)]
-    legacy_shared_auth_acl_cleanup_required: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -85,39 +75,8 @@ impl Default for CredentialMetadata {
             active_workspace_id: None,
             original_codex_home_state: OriginalCodexHomeState::default(),
             legacy_global_codex_home_restored_at_epoch_seconds: None,
-            legacy_shared_auth_acl_revoked_at_epoch_seconds: None,
-            legacy_shared_auth_acl_cleanup_required: false,
         }
     }
-}
-
-#[cfg(windows)]
-pub fn legacy_shared_auth_acl_cleanup_required() -> Result<bool> {
-    Ok(load_metadata()?.legacy_shared_auth_acl_cleanup_required)
-}
-
-#[cfg(windows)]
-pub fn managed_codex_homes_for_legacy_acl_cleanup() -> Result<Vec<PathBuf>> {
-    let metadata = load_metadata()?;
-    Ok(metadata
-        .profiles
-        .into_iter()
-        .map(|profile| PathBuf::from(profile.codex_home))
-        .collect())
-}
-
-#[cfg(windows)]
-pub fn record_legacy_shared_auth_acl_cleanup() -> Result<()> {
-    let mut metadata = load_metadata()?;
-    if metadata
-        .legacy_shared_auth_acl_revoked_at_epoch_seconds
-        .is_none()
-    {
-        metadata.legacy_shared_auth_acl_revoked_at_epoch_seconds = Some(now_epoch_seconds());
-    }
-    metadata.legacy_shared_auth_acl_cleanup_required = false;
-    save_metadata(&metadata)?;
-    Ok(())
 }
 
 pub fn state() -> Result<CredentialManagerState> {
@@ -166,11 +125,12 @@ pub fn state() -> Result<CredentialManagerState> {
         {
             profile.workspace_name = workspace.name.clone();
         }
-        profile.credential_status = if Path::new(&profile.codex_home).join("auth.json").is_file() {
-            "configured".to_string()
-        } else {
-            "missing".to_string()
-        };
+        profile.credential_status =
+            match read_codex_api_key(&Path::new(&profile.codex_home).join("auth.json")) {
+                Ok(Some(_)) => "configured".to_string(),
+                Ok(None) => "missing".to_string(),
+                Err(_) => "invalid".to_string(),
+            };
     }
 
     let mut active_profile = metadata
@@ -207,7 +167,7 @@ pub fn state() -> Result<CredentialManagerState> {
 
     if metadata.active_mode == AuthMode::Baijimu {
         if let Some(profile) = active_profile.as_mut() {
-            let has_credential = read_codex_api_key(&auth_path)?.is_some();
+            let has_credential = read_codex_api_key(&auth_path).ok().flatten().is_some();
             codex_configured = has_credential && managed_config_ready(&config_path);
             if codex_configured {
                 credential_status = "verified".to_string();
@@ -240,78 +200,50 @@ pub fn state() -> Result<CredentialManagerState> {
     })
 }
 
-pub fn prepare_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspaceProfile> {
+pub fn initialize_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspaceProfile> {
     let product = crate::product_config::get();
-    if workspace_id == 0 {
-        anyhow::bail!("工作区 ID 必须大于 0");
-    }
-    let auth_status = baijimu_cli::auth_status().context("读取 baijimu CLI 授权状态失败")?;
-    if !auth_status.authenticated || !auth_status.workspace_ids.contains(&workspace_id) {
-        anyhow::bail!("baijimu CLI 授权不包含该工作区，请先重新完成设备授权");
-    }
-    let workspace =
-        baijimu_cli::get_workspace(workspace_id).context("baijimu CLI 无法确认当前工作区授权")?;
+    let workspace = authorized_workspace(workspace_id)?;
     let mut metadata = load_metadata()?;
-    let existing_profile = metadata
-        .profiles
-        .iter()
-        .filter(|profile| profile.workspace_id == workspace_id)
-        .max_by_key(|profile| {
-            (
-                metadata.active_profile_id.as_deref() == Some(profile.profile_id.as_str()),
-                profile.activated_at_epoch_seconds,
-            )
-        })
-        .cloned();
-    let (profile_id, environment, user_id, client_id, profile_home) =
-        if let Some(profile) = existing_profile {
-            (
-                profile.profile_id,
-                profile.environment,
-                profile.user_id,
-                profile.client_id,
-                PathBuf::from(profile.codex_home),
-            )
-        } else {
-            let environment = auth_status.base_url.clone();
-            let profile_id = profile_id(&environment, None, None, workspace_id);
-            let profile_home =
-                select_new_profile_home(&metadata, &environment, None, None, workspace_id)?;
-            if profile_home == default_original_codex_home() {
-                reserve_default_home(&profile_home, &profile_id)?;
-            }
-            (profile_id, environment, None, None, profile_home)
-        };
-    let auth_path = profile_home.join("auth.json");
-    let credential = baijimu_cli::create_llm_credential(workspace_id)
-        .context("baijimu CLI 签发工作区 LLM credential 失败")?;
-    write_workspace_auth(&auth_path, &credential)?;
-    write_workspace_config(&profile_home.join("config.toml"))?;
-
-    let previous_activation = metadata
-        .profiles
-        .iter()
-        .find(|item| item.profile_id == profile_id)
-        .map(|item| item.activated_at_epoch_seconds)
-        .unwrap_or_default();
-    let profile = CredentialProfile {
-        profile_id: profile_id.clone(),
-        environment,
-        user_id,
-        client_id,
-        workspace_id,
-        workspace_name: workspace.name,
-        model: product.default_model.clone(),
-        activated_at_epoch_seconds: previous_activation,
-        codex_home: profile_home.display().to_string(),
-        credential_status: "verified".to_string(),
-        desktop_defaults_version: metadata
-            .profiles
-            .iter()
-            .find(|item| item.profile_id == profile_id)
-            .map(|item| item.desktop_defaults_version)
-            .unwrap_or_default(),
+    let existing_profile = select_workspace_profile(&metadata, workspace_id).cloned();
+    let profile_preexisting = existing_profile.is_some();
+    let (mut profile, profile_home) = if let Some(mut profile) = existing_profile {
+        profile.workspace_name = workspace.name;
+        let profile_home = PathBuf::from(&profile.codex_home);
+        (profile, profile_home)
+    } else {
+        let auth_status = baijimu_cli::auth_status().context("读取 baijimu CLI 授权状态失败")?;
+        let environment = auth_status.base_url;
+        let profile_id = profile_id(&environment, None, None, workspace_id);
+        let profile_home =
+            select_new_profile_home(&metadata, &environment, None, None, workspace_id)?;
+        if profile_home == default_original_codex_home() {
+            reserve_default_home(&profile_home, &profile_id)?;
+        }
+        (
+            CredentialProfile {
+                profile_id,
+                environment,
+                user_id: None,
+                client_id: None,
+                workspace_id,
+                workspace_name: workspace.name,
+                model: product.default_model.clone(),
+                activated_at_epoch_seconds: 0,
+                codex_home: profile_home.display().to_string(),
+                credential_status: "verified".to_string(),
+            },
+            profile_home,
+        )
     };
+    let may_issue_initial_credential =
+        !profile_preexisting || !profile_home.join("config.toml").is_file();
+    let credential =
+        initialize_workspace_files(&profile_home, may_issue_initial_credential, || {
+            baijimu_cli::create_llm_credential(workspace_id)
+                .context("baijimu CLI 签发工作区 LLM credential 失败")
+        })?;
+    profile.credential_status = "verified".to_string();
+    let profile_id = profile.profile_id.clone();
     metadata
         .profiles
         .retain(|item| item.profile_id != profile_id);
@@ -322,6 +254,107 @@ pub fn prepare_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspaceP
         profile,
         credential,
     })
+}
+
+pub fn activate_workspace_profile(workspace_id: u64) -> Result<CredentialProfile> {
+    authorized_workspace(workspace_id)?;
+    activate_existing_workspace_profile(workspace_id)
+}
+
+fn activate_existing_workspace_profile(workspace_id: u64) -> Result<CredentialProfile> {
+    let metadata = load_metadata()?;
+    let profile = select_workspace_profile(&metadata, workspace_id)
+        .cloned()
+        .context("该工作区尚未初始化，请先初始化后再启动")?;
+    let home = Path::new(&profile.codex_home);
+    if !home.join("config.toml").is_file() {
+        anyhow::bail!("该工作区缺少 config.toml，请先重新初始化");
+    }
+    if read_codex_api_key(&home.join("auth.json"))
+        .context("该工作区 auth.json 无法读取，请先重新授权")?
+        .is_none()
+    {
+        anyhow::bail!("该工作区授权已缺失，请先重新授权");
+    }
+    activate_prepared_workspace_profile(&profile)
+}
+
+fn initialize_workspace_files<F>(
+    profile_home: &Path,
+    may_issue_initial_credential: bool,
+    issue_credential: F,
+) -> Result<String>
+where
+    F: FnOnce() -> Result<String>,
+{
+    let auth_path = profile_home.join("auth.json");
+    let credential = match read_codex_api_key(&auth_path) {
+        Ok(Some(credential)) => credential,
+        Ok(None) if may_issue_initial_credential => {
+            let credential = issue_credential()?;
+            write_workspace_auth(&auth_path, &credential)?;
+            credential
+        }
+        Ok(None) => anyhow::bail!("该工作区授权已缺失，请使用重新授权，不得通过初始化覆盖"),
+        Err(error) if !may_issue_initial_credential => {
+            return Err(error).context("该工作区 auth.json 已损坏，请使用重新授权")
+        }
+        Err(error) => return Err(error),
+    };
+    let config_path = profile_home.join("config.toml");
+    if !config_path.is_file() {
+        write_workspace_config(&config_path)?;
+    }
+    Ok(credential)
+}
+
+pub fn reauthorize_workspace_profile(workspace_id: u64) -> Result<CredentialProfile> {
+    authorized_workspace(workspace_id)?;
+    let mut metadata = load_metadata()?;
+    let mut profile = select_workspace_profile(&metadata, workspace_id)
+        .cloned()
+        .context("该工作区尚未初始化，不能重新授权")?;
+    let credential = baijimu_cli::create_llm_credential(workspace_id)
+        .context("baijimu CLI 重新签发工作区 LLM credential 失败")?;
+    write_workspace_auth(
+        &Path::new(&profile.codex_home).join("auth.json"),
+        &credential,
+    )?;
+    profile.credential_status = "verified".to_string();
+    metadata
+        .profiles
+        .retain(|item| item.profile_id != profile.profile_id);
+    metadata.profiles.push(profile.clone());
+    sort_profiles(&mut metadata.profiles);
+    save_metadata(&metadata)?;
+    Ok(profile)
+}
+
+fn authorized_workspace(workspace_id: u64) -> Result<baijimu_cli::Workspace> {
+    if workspace_id == 0 {
+        anyhow::bail!("工作区 ID 必须大于 0");
+    }
+    let auth_status = baijimu_cli::auth_status().context("读取 baijimu CLI 授权状态失败")?;
+    if !auth_status.authenticated || !auth_status.workspace_ids.contains(&workspace_id) {
+        anyhow::bail!("baijimu CLI 授权不包含该工作区，请先重新完成设备授权");
+    }
+    baijimu_cli::get_workspace(workspace_id).context("baijimu CLI 无法确认当前工作区授权")
+}
+
+fn select_workspace_profile(
+    metadata: &CredentialMetadata,
+    workspace_id: u64,
+) -> Option<&CredentialProfile> {
+    metadata
+        .profiles
+        .iter()
+        .filter(|profile| profile.workspace_id == workspace_id)
+        .max_by_key(|profile| {
+            (
+                metadata.active_profile_id.as_deref() == Some(profile.profile_id.as_str()),
+                profile.activated_at_epoch_seconds,
+            )
+        })
 }
 
 pub fn activate_prepared_workspace_profile(
@@ -346,89 +379,6 @@ pub fn activate_prepared_workspace_profile(
         .context("激活后未找到工作区凭证档案")
 }
 
-/// Applies Baijimu's initial desktop preference to one managed workspace profile.
-///
-/// The migration only exposes the Full access choice. It deliberately does not touch
-/// `permission-selection-by-host-id:*`, so Ask for approval remains the selected mode.
-/// Profiles that have not completed onboarding remain pending because Codex writes its
-/// work-mode defaults at the end of onboarding; the next managed launch reapplies this
-/// initial preference once and then records completion so later user changes are kept.
-pub fn apply_workspace_desktop_defaults(codex_home: &Path) -> Result<()> {
-    let mut metadata = load_metadata()?;
-    let profile = metadata
-        .profiles
-        .iter_mut()
-        .find(|profile| Path::new(&profile.codex_home) == codex_home)
-        .context("当前 CODEX_HOME 不属于百积木工作区档案")?;
-    if profile.desktop_defaults_version >= DESKTOP_DEFAULTS_VERSION {
-        return Ok(());
-    }
-
-    let onboarding_completed = ensure_full_access_choice_visible(codex_home)?;
-    if onboarding_completed {
-        profile.desktop_defaults_version = DESKTOP_DEFAULTS_VERSION;
-        save_metadata(&metadata)?;
-    }
-    Ok(())
-}
-
-fn ensure_full_access_choice_visible(codex_home: &Path) -> Result<bool> {
-    let path = codex_home.join(CODEX_GLOBAL_STATE_FILE);
-    let mut state = if path.exists() {
-        let content = fs::read(&path)
-            .with_context(|| format!("读取 Codex 桌面状态失败: {}", path.display()))?;
-        crate::json_compat::from_slice::<Value>(&content)
-            .with_context(|| format!("解析 Codex 桌面状态失败: {}", path.display()))?
-    } else {
-        json!({})
-    };
-    let root = state
-        .as_object_mut()
-        .context("Codex 桌面状态根节点必须是 JSON 对象")?;
-    let persisted = root
-        .entry(PERSISTED_ATOM_STATE_KEY)
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-        .context("Codex 桌面持久状态节点必须是 JSON 对象")?;
-    let onboarding_completed = persisted
-        .get(ONBOARDING_COMPLETED_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        || persisted
-            .get(LAST_COMPLETED_ONBOARDING_KEY)
-            .and_then(Value::as_u64)
-            .is_some_and(|value| value > 0);
-
-    let changed = match persisted.get_mut(PERMISSION_MODE_VISIBILITY_KEY) {
-        Some(Value::Bool(visible)) => {
-            let changed = !*visible;
-            *visible = true;
-            changed
-        }
-        Some(Value::Object(visibility)) => {
-            let changed = visibility.get("full-access").and_then(Value::as_bool) != Some(true);
-            visibility.insert("full-access".to_string(), Value::Bool(true));
-            changed
-        }
-        Some(_) => anyhow::bail!(
-            "Codex 桌面权限菜单可见性状态格式不受支持: {}",
-            path.display()
-        ),
-        None => {
-            persisted.insert(
-                PERMISSION_MODE_VISIBILITY_KEY.to_string(),
-                json!({"guardian-approvals": true, "full-access": true}),
-            );
-            true
-        }
-    };
-    if changed || !path.exists() {
-        atomic_write_private(&path, &serde_json::to_vec_pretty(&state)?)?;
-        verify_private_file(&path)?;
-    }
-    Ok(onboarding_completed)
-}
-
 pub fn activate_chatgpt_profile() -> Result<PathBuf> {
     let previous = load_metadata()?;
     let home = original_home_from_metadata(&previous);
@@ -447,6 +397,7 @@ pub fn activate_chatgpt_profile() -> Result<PathBuf> {
     Ok(home)
 }
 
+#[cfg(test)]
 pub fn active_codex_home() -> PathBuf {
     load_metadata()
         .ok()
@@ -708,14 +659,18 @@ fn merge_workspace_options(
                 name,
                 authorized: discovered.is_some()
                     && authorized_workspace_ids.contains(&workspace_id),
-                configured: metadata
-                    .profiles
-                    .iter()
-                    .any(|item| item.workspace_id == workspace_id),
+                configured: metadata.profiles.iter().any(|item| {
+                    item.workspace_id == workspace_id && workspace_profile_initialized(item)
+                }),
                 user_ids,
             }
         })
         .collect()
+}
+
+fn workspace_profile_initialized(profile: &CredentialProfile) -> bool {
+    let home = Path::new(&profile.codex_home);
+    home.join("config.toml").is_file()
 }
 
 pub fn pending_profile_home_migration() -> Result<Option<PendingProfileHomeMigration>> {
@@ -836,6 +791,7 @@ fn original_home_from_metadata(metadata: &CredentialMetadata) -> PathBuf {
         .unwrap_or_else(default_original_codex_home)
 }
 
+#[cfg(test)]
 fn active_home_from_metadata(metadata: &CredentialMetadata) -> PathBuf {
     if metadata.active_mode == AuthMode::Chatgpt {
         return original_home_from_metadata(metadata);
@@ -1428,35 +1384,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_acl_cleanup_is_required_only_for_preexisting_metadata() {
-        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!(
-            "baijimu-codex-acl-cleanup-migration-{}-{}",
-            std::process::id(),
-            now_epoch_seconds()
-        ));
-        let new_data_dir = root.join("new-install");
-        let upgraded_data_dir = root.join("upgraded-install");
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &new_data_dir);
-
-        let new_metadata = load_metadata().unwrap();
-        assert!(!new_metadata.legacy_shared_auth_acl_cleanup_required);
-
-        std::env::set_var("BAIJIMU_CONNECTOR_DATA_DIR", &upgraded_data_dir);
-        fs::create_dir_all(&upgraded_data_dir).unwrap();
-        fs::write(
-            metadata_path(),
-            serde_json::to_vec_pretty(&json!({"version": 7})).unwrap(),
-        )
-        .unwrap();
-        let upgraded_metadata = load_metadata().unwrap();
-        assert!(upgraded_metadata.legacy_shared_auth_acl_cleanup_required);
-        assert_eq!(upgraded_metadata.version, METADATA_VERSION);
-
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn profile_identity_is_scoped_by_environment_user_and_workspace() {
         assert_eq!(
             profile_id("prod", Some(25), Some("device-a"), 1390),
@@ -1642,7 +1569,6 @@ mod tests {
             activated_at_epoch_seconds: 1,
             codex_home: legacy_home.display().to_string(),
             credential_status: "verified".to_string(),
-            desktop_defaults_version: 0,
         };
         fs::create_dir_all(&data_dir).unwrap();
         fs::write(
@@ -1952,7 +1878,6 @@ mod tests {
             activated_at_epoch_seconds: 1,
             codex_home: managed_home.display().to_string(),
             credential_status: "verified".to_string(),
-            desktop_defaults_version: 0,
         };
         fs::create_dir_all(&data_dir).unwrap();
         fs::write(
@@ -2091,7 +2016,6 @@ mod tests {
             activated_at_epoch_seconds: 1,
             codex_home: "/isolated/workspace-1390".to_string(),
             credential_status: "verified".to_string(),
-            desktop_defaults_version: 0,
         };
         let selected = CredentialMetadata {
             version: METADATA_VERSION,
@@ -2240,189 +2164,117 @@ mod tests {
     }
 
     #[test]
-    fn legacy_boolean_visibility_is_enabled_without_changing_the_selected_permission() {
-        let root = std::env::temp_dir().join(format!(
-            "baijimu-codex-legacy-permission-visibility-{}-{}",
-            std::process::id(),
-            now_epoch_seconds()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        let path = root.join(CODEX_GLOBAL_STATE_FILE);
-        let selected = json!({"kind": "agent-mode", "agentMode": "auto"});
-        fs::write(
-            &path,
-            serde_json::to_vec_pretty(&json!({
-                "unrelated-root-state": {"keep": true},
-                (PERSISTED_ATOM_STATE_KEY): {
-                    (ONBOARDING_COMPLETED_KEY): true,
-                    (PERMISSION_MODE_VISIBILITY_KEY): false,
-                    "permission-selection-by-host-id:local": selected,
-                    "unrelated-persisted-state": [1, 2, 3]
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        assert!(ensure_full_access_choice_visible(&root).unwrap());
-
-        let migrated: Value = crate::json_compat::from_slice(&fs::read(&path).unwrap()).unwrap();
-        let persisted = migrated[PERSISTED_ATOM_STATE_KEY].as_object().unwrap();
-        assert_eq!(persisted[PERMISSION_MODE_VISIBILITY_KEY], Value::Bool(true));
-        assert_eq!(persisted["permission-selection-by-host-id:local"], selected);
-        assert_eq!(persisted["unrelated-persisted-state"], json!([1, 2, 3]));
-        assert_eq!(migrated["unrelated-root-state"], json!({"keep": true}));
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn object_visibility_preserves_guardian_and_future_fields() {
-        let root = std::env::temp_dir().join(format!(
-            "baijimu-codex-object-permission-visibility-{}-{}",
-            std::process::id(),
-            now_epoch_seconds()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        let path = root.join(CODEX_GLOBAL_STATE_FILE);
-        fs::write(
-            &path,
-            serde_json::to_vec_pretty(&json!({
-                (PERSISTED_ATOM_STATE_KEY): {
-                    (LAST_COMPLETED_ONBOARDING_KEY): 42,
-                    (PERMISSION_MODE_VISIBILITY_KEY): {
-                        "guardian-approvals": false,
-                        "full-access": false,
-                        "future-mode": "keep"
-                    }
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        assert!(ensure_full_access_choice_visible(&root).unwrap());
-
-        let migrated: Value = crate::json_compat::from_slice(&fs::read(&path).unwrap()).unwrap();
-        let visibility = migrated[PERSISTED_ATOM_STATE_KEY][PERMISSION_MODE_VISIBILITY_KEY]
-            .as_object()
-            .unwrap();
-        assert_eq!(visibility["guardian-approvals"], Value::Bool(false));
-        assert_eq!(visibility["full-access"], Value::Bool(true));
-        assert_eq!(visibility["future-mode"], Value::String("keep".to_string()));
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn managed_default_is_applied_once_and_later_user_changes_are_kept() {
+    fn repeated_initialization_reuses_existing_credential_and_preserves_user_config_bytes() {
         let _guard = ENVIRONMENT_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!(
-            "baijimu-codex-once-permission-visibility-{}-{}",
+            "baijimu-codex-idempotent-initialization-{}-{}",
             std::process::id(),
             now_epoch_seconds()
         ));
-        let user_home = root.join("user");
+        fs::create_dir_all(&root).unwrap();
+        let auth = br#"{"OPENAI_API_KEY":"existing-key","auth_mode":"apikey","userField":"keep"}"#;
+        let config = b"model = \"user-model\"\ncustom_setting = \"keep\"\n";
+        fs::write(root.join("auth.json"), auth).unwrap();
+        fs::write(root.join("config.toml"), config).unwrap();
+        let issued = std::cell::Cell::new(false);
+
+        let credential = initialize_workspace_files(&root, false, || {
+            issued.set(true);
+            Ok("new-key".to_string())
+        })
+        .unwrap();
+
+        assert_eq!(credential, "existing-key");
+        assert!(!issued.get());
+        assert_eq!(fs::read(root.join("auth.json")).unwrap(), auth);
+        assert_eq!(fs::read(root.join("config.toml")).unwrap(), config);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn initialized_workspace_with_missing_auth_requires_explicit_reauthorization() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-missing-auth-initialization-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config = b"model = \"user-model\"\ncustom_setting = \"keep\"\n";
+        fs::write(root.join("config.toml"), config).unwrap();
+
+        let issued = std::cell::Cell::new(false);
+        let error = initialize_workspace_files(&root, false, || {
+            issued.set(true);
+            Ok("new-key".to_string())
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("重新授权"));
+        assert!(!issued.get());
+        assert_eq!(fs::read(root.join("config.toml")).unwrap(), config);
+        assert!(!root.join("auth.json").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn incomplete_initialization_creates_missing_auth_and_default_config_once() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-new-profile-files-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let personal_home = root.join("personal");
+        let profile_home = root.join("profile");
+        fs::create_dir_all(&personal_home).unwrap();
+        let _codex = EnvironmentRestore::set("CODEX_HOME", &personal_home);
+
+        let credential =
+            initialize_workspace_files(&profile_home, true, || Ok("initial-key".to_string()))
+                .unwrap();
+
+        assert_eq!(credential, "initial-key");
+        assert_eq!(
+            read_codex_api_key(&profile_home.join("auth.json"))
+                .unwrap()
+                .as_deref(),
+            Some("initial-key")
+        );
+        assert!(managed_config_ready(&profile_home.join("config.toml")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn activating_existing_workspace_does_not_touch_auth_or_config() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-pure-launch-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
         let data_dir = root.join("connector-data");
-        fs::create_dir_all(&user_home).unwrap();
-        let _home = EnvironmentRestore::set("HOME", &user_home);
-        let _profile = EnvironmentRestore::set("USERPROFILE", &user_home);
-        let _codex = EnvironmentRestore::unset("CODEX_HOME");
         let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
         let profile = test_workspace_profile(&data_dir, 642);
-        let profile_home = PathBuf::from(&profile.codex_home);
-        fs::create_dir_all(&profile_home).unwrap();
-        let state_path = profile_home.join(CODEX_GLOBAL_STATE_FILE);
-        fs::write(
-            &state_path,
-            serde_json::to_vec_pretty(&json!({
-                (PERSISTED_ATOM_STATE_KEY): {
-                    (ONBOARDING_COMPLETED_KEY): true,
-                    (PERMISSION_MODE_VISIBILITY_KEY): false,
-                    "permission-selection-by-host-id:local": {
-                        "kind": "agent-mode",
-                        "agentMode": "auto"
-                    }
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
+        let home = PathBuf::from(&profile.codex_home);
+        fs::create_dir_all(&home).unwrap();
+        let auth = br#"{"OPENAI_API_KEY":"existing-key","auth_mode":"apikey","userField":"keep"}"#;
+        let config = b"model = \"user-model\"\ncustom_setting = \"keep\"\n";
+        fs::write(home.join("auth.json"), auth).unwrap();
+        fs::write(home.join("config.toml"), config).unwrap();
         save_metadata(&CredentialMetadata {
             profiles: vec![profile],
             ..CredentialMetadata::default()
         })
         .unwrap();
 
-        apply_workspace_desktop_defaults(&profile_home).unwrap();
-        assert_eq!(
-            load_metadata().unwrap().profiles[0].desktop_defaults_version,
-            DESKTOP_DEFAULTS_VERSION
-        );
+        activate_existing_workspace_profile(642).unwrap();
 
-        let mut state: Value =
-            crate::json_compat::from_slice(&fs::read(&state_path).unwrap()).unwrap();
-        state[PERSISTED_ATOM_STATE_KEY][PERMISSION_MODE_VISIBILITY_KEY] = Value::Bool(false);
-        fs::write(&state_path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
-        apply_workspace_desktop_defaults(&profile_home).unwrap();
-        let unchanged: Value =
-            crate::json_compat::from_slice(&fs::read(&state_path).unwrap()).unwrap();
-        assert_eq!(
-            unchanged[PERSISTED_ATOM_STATE_KEY][PERMISSION_MODE_VISIBILITY_KEY],
-            Value::Bool(false)
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn onboarding_override_is_reapplied_before_the_migration_is_completed() {
-        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!(
-            "baijimu-codex-pending-permission-visibility-{}-{}",
-            std::process::id(),
-            now_epoch_seconds()
-        ));
-        let user_home = root.join("user");
-        let data_dir = root.join("connector-data");
-        fs::create_dir_all(&user_home).unwrap();
-        let _home = EnvironmentRestore::set("HOME", &user_home);
-        let _profile = EnvironmentRestore::set("USERPROFILE", &user_home);
-        let _codex = EnvironmentRestore::unset("CODEX_HOME");
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
-        let profile = test_workspace_profile(&data_dir, 1390);
-        let profile_home = PathBuf::from(&profile.codex_home);
-        fs::create_dir_all(&profile_home).unwrap();
-        save_metadata(&CredentialMetadata {
-            profiles: vec![profile],
-            ..CredentialMetadata::default()
-        })
-        .unwrap();
-
-        apply_workspace_desktop_defaults(&profile_home).unwrap();
-        assert_eq!(
-            load_metadata().unwrap().profiles[0].desktop_defaults_version,
-            0
-        );
-
-        let state_path = profile_home.join(CODEX_GLOBAL_STATE_FILE);
-        let mut state: Value =
-            crate::json_compat::from_slice(&fs::read(&state_path).unwrap()).unwrap();
-        state[PERSISTED_ATOM_STATE_KEY][ONBOARDING_COMPLETED_KEY] = Value::Bool(true);
-        state[PERSISTED_ATOM_STATE_KEY][PERMISSION_MODE_VISIBILITY_KEY] = json!({
-            "guardian-approvals": true,
-            "full-access": false
-        });
-        fs::write(&state_path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
-
-        apply_workspace_desktop_defaults(&profile_home).unwrap();
-        let migrated: Value =
-            crate::json_compat::from_slice(&fs::read(&state_path).unwrap()).unwrap();
-        assert_eq!(
-            migrated[PERSISTED_ATOM_STATE_KEY][PERMISSION_MODE_VISIBILITY_KEY]["full-access"],
-            Value::Bool(true)
-        );
-        assert_eq!(
-            load_metadata().unwrap().profiles[0].desktop_defaults_version,
-            DESKTOP_DEFAULTS_VERSION
-        );
+        assert_eq!(fs::read(home.join("auth.json")).unwrap(), auth);
+        assert_eq!(fs::read(home.join("config.toml")).unwrap(), config);
+        let metadata = load_metadata().unwrap();
+        assert_eq!(metadata.active_mode, AuthMode::Baijimu);
+        assert_eq!(metadata.active_workspace_id, Some(642));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2444,7 +2296,6 @@ mod tests {
                 .display()
                 .to_string(),
             credential_status: "verified".to_string(),
-            desktop_defaults_version: 0,
         }
     }
 }

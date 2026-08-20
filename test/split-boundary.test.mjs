@@ -27,6 +27,14 @@ test("desktop manager exposes only its required read-only status method", async 
     [{ name: "status", path: "/healthz", httpMethod: "GET" }],
   );
   assert.ok(manifest.management.operations.launchCodex);
+  assert.deepEqual(manifest.management.operations.initializeWorkspace, {
+    method: "POST",
+    path: "/management/v1/codex/initialize",
+  });
+  assert.deepEqual(manifest.management.operations.reauthorizeWorkspace, {
+    method: "POST",
+    path: "/management/v1/codex/reauthorize",
+  });
   assert.deepEqual(manifest.management.operations.verifyRouter, {
     method: "POST",
     path: "/management/v1/setup/verify-router",
@@ -59,7 +67,7 @@ test("desktop manager neither installs CLI nor exposes invoke routes", async () 
   assert.match(windows, /Rust 凭证管理器未生成 Codex 授权文件/);
   assert.match(windows, /Rust 凭证管理器未生成 Codex 配置文件/);
   assert.doesNotMatch(setup, /CODEX_LLM_CREDENTIAL_FILE|credential-\{unique\}/);
-  assert.match(setup, /credential::prepare_workspace_profile\(workspace_id\)/);
+  assert.match(setup, /credential::initialize_workspace_profile\(workspace_id\)/);
   assert.match(setup, /prepared\.credential/);
   assert.match(setup, /mod router;/);
   assert.doesNotMatch(macosScript, /install_cli|install-cli/);
@@ -118,7 +126,7 @@ test("Windows desktop discovery follows the codex protocol instead of package na
   assert.doesNotMatch(desktopLaunch, /Start-Process/);
 });
 
-test("desktop launch commits the selected profile without window verification or rollback", async () => {
+test("desktop launch only activates an existing profile and starts the desktop app", async () => {
   const [main, desktop, credential] = await Promise.all([
     read("src/main.rs"),
     read("src/desktop.rs"),
@@ -127,28 +135,47 @@ test("desktop launch commits the selected profile without window verification or
   assert.doesNotMatch(desktop, /launch_and_verify|restart_and_verify|has_visible_window/);
   assert.doesNotMatch(main, /active_home_snapshot|restore_active_home|启动验证失败|状态指针回滚/);
   assert.doesNotMatch(credential, /pub fn active_home_snapshot|pub fn restore_active_home/);
-  assert.match(main, /desktop::launch\(&selected_home, workspace_id\.is_some\(\)\)/);
+  assert.match(main, /desktop::launch\(&selected_home\)/);
   const launchRouteStart = main.indexOf('(\"POST\", \"/management/v1/codex/launch\")');
   const launchRoute = main.slice(
     launchRouteStart,
     main.indexOf('_ => Err(HttpError::new(404', launchRouteStart),
   );
   assert.doesNotMatch(launchRoute, /verify_system_compatibility|stop_for_codex_home_switch/);
+  assert.match(launchRoute, /activate_workspace_profile/);
+  assert.doesNotMatch(
+    launchRoute,
+    /initialize_workspace_profile|reauthorize_workspace_profile|create_llm_credential|write_workspace_auth|write_workspace_config/,
+  );
   const desktopLaunchStart = desktop.indexOf("pub fn launch(codex_home");
   const desktopLaunch = desktop.slice(
     desktopLaunchStart,
     desktop.indexOf("impl DesktopSwitch", desktopLaunchStart),
   );
   const stopIndex = desktopLaunch.indexOf("platform::stop_for_codex_home_switch()");
-  const defaultsIndex = desktopLaunch.indexOf(
-    "credential::apply_workspace_desktop_defaults(codex_home)",
-  );
   const launchIndex = desktopLaunch.indexOf("platform::launch(codex_home");
-  assert.ok(stopIndex >= 0 && defaultsIndex > stopIndex && launchIndex > defaultsIndex);
-  assert.match(credential, /PERMISSION_MODE_VISIBILITY_KEY/);
-  assert.match(credential, /desktop_defaults_version/);
-  assert.doesNotMatch(
-    credential,
-    /permission-selection-by-host-id:[^\n]*insert|insert[^\n]*permission-selection-by-host-id:/,
+  assert.ok(stopIndex >= 0 && launchIndex > stopIndex);
+  assert.doesNotMatch(credential, /PERMISSION_MODE_VISIBILITY_KEY|desktop_defaults_version/);
+});
+
+test("initialization is idempotent and reauthorization only replaces auth", async () => {
+  const [main, credential, app] = await Promise.all([
+    read("src/main.rs"),
+    read("src/credential.rs"),
+    read("ui/app.js"),
+  ]);
+  assert.match(credential, /initialize_workspace_files/);
+  assert.match(credential, /if !config_path\.is_file\(\)/);
+  assert.match(credential, /reauthorize_workspace_profile/);
+  const reauthorizeStart = credential.indexOf("pub fn reauthorize_workspace_profile");
+  const reauthorize = credential.slice(
+    reauthorizeStart,
+    credential.indexOf("fn authorized_workspace", reauthorizeStart),
   );
+  assert.match(reauthorize, /write_workspace_auth/);
+  assert.doesNotMatch(reauthorize, /write_workspace_config/);
+  assert.match(main, /\/management\/v1\/codex\/initialize/);
+  assert.match(main, /\/management\/v1\/codex\/reauthorize/);
+  assert.match(app, /label: "重新授权"/);
+  assert.match(app, /label: "初始化"/);
 });

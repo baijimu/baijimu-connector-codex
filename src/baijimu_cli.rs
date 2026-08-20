@@ -29,9 +29,6 @@ struct AuthStatusContract {
     authenticated: bool,
     base_url: String,
     current_workspace_id: Option<u64>,
-    #[cfg(windows)]
-    #[serde(default, rename = "sharedAuthPath")]
-    legacy_auth_cleanup_path: String,
     workspace_ids: Vec<u64>,
 }
 
@@ -126,22 +123,6 @@ pub fn auth_status() -> Result<AuthStatus> {
         current_workspace_id: contract.current_workspace_id.filter(|id| *id > 0),
         workspace_ids: positive_unique_ids(contract.workspace_ids, "auth status.workspaceIds")?,
     })
-}
-
-#[cfg(windows)]
-pub fn legacy_shared_auth_path_for_acl_cleanup() -> Result<PathBuf> {
-    let contract: AuthStatusContract = run_json("auth status", &["auth", "status"])?;
-    let path = PathBuf::from(required_text(
-        contract.legacy_auth_cleanup_path,
-        "auth status.sharedAuthPath",
-    )?);
-    if !path.is_absolute() {
-        bail!(
-            "baijimu CLI auth status.sharedAuthPath 必须是绝对路径：{}",
-            path.display()
-        );
-    }
-    Ok(path)
 }
 
 pub fn list_workspaces() -> Result<Vec<Workspace>> {

@@ -20,6 +20,14 @@ test("workspace rows expose only compact status badges", () => {
     profileBadgeMeta({ disabled: true }),
     [{ label: "未授权", tone: "warning" }],
   );
+  assert.deepEqual(
+    profileBadgeMeta({ configured: false }),
+    [{ label: "未初始化", tone: "warning" }],
+  );
+  assert.deepEqual(
+    profileBadgeMeta({ credentialStatus: "missing" }),
+    [{ label: "需重新授权", tone: "danger" }],
+  );
 });
 
 test("a running route verification keeps Codex available", () => {

@@ -4,8 +4,6 @@ mod cli;
 mod credential;
 mod desktop;
 mod json_compat;
-#[cfg(windows)]
-mod legacy_auth_cleanup;
 mod process_runtime;
 mod product_config;
 mod setup;
@@ -278,9 +276,6 @@ fn initialize_server() -> Result<(), String> {
             }
         }
     }
-    #[cfg(windows)]
-    legacy_auth_cleanup::run_once()
-        .map_err(|error| format!("回收旧版 Codex 沙箱全局授权失败: {error}"))?;
     let Some(migration) = credential::pending_profile_home_migration()
         .map_err(|error| format!("检查旧版 Codex 档案迁移状态失败: {error}"))?
     else {
@@ -294,10 +289,7 @@ fn initialize_server() -> Result<(), String> {
     };
     match credential::state() {
         Ok(state) => desktop_switch
-            .restart_if_needed(
-                Path::new(&state.active_codex_home),
-                state.active_workspace_id.is_some(),
-            )
+            .restart_if_needed(Path::new(&state.active_codex_home))
             .map(|_| ())
             .map_err(|error| format!("旧版 Codex 档案迁移完成，但桌面应用重启失败: {error}")),
         Err(error) => {
@@ -312,7 +304,7 @@ fn initialize_server() -> Result<(), String> {
                         .filter(|path| path.exists())
                 });
             let restart_error =
-                recovery_home.and_then(|path| desktop_switch.restart_if_needed(path, false).err());
+                recovery_home.and_then(|path| desktop_switch.restart_if_needed(path).err());
             let mut message = format!("迁移旧版 Codex 档案失败: {error}");
             if let Some(restart_error) = restart_error {
                 message.push_str(&format!("；恢复桌面应用失败: {restart_error}"));
@@ -499,6 +491,44 @@ fn handle_management(
             )
             .map_err(|error| HttpError::internal(error.to_string()))
         }
+        ("POST", "/management/v1/codex/initialize") => {
+            let _credential_guard = state
+                .credential_management
+                .lock()
+                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
+            let workspace_id = body
+                .get("workspaceId")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0)
+                .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?;
+            serde_json::to_value(
+                state
+                    .setup
+                    .start(workspace_id, false)
+                    .map_err(|error| HttpError::new(409, error.to_string()))?,
+            )
+            .map_err(|error| HttpError::internal(error.to_string()))
+        }
+        ("POST", "/management/v1/codex/reauthorize") => {
+            let _credential_guard = state
+                .credential_management
+                .lock()
+                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
+            if state.setup.state().status == "running" {
+                return Err(HttpError::new(409, "Codex 正在初始化，完成后再重新授权"));
+            }
+            let workspace_id = body
+                .get("workspaceId")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0)
+                .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?;
+            credential::reauthorize_workspace_profile(workspace_id)
+                .map_err(|error| HttpError::new(409, error.to_string()))?;
+            serde_json::to_value(
+                credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
+            )
+            .map_err(|error| HttpError::internal(error.to_string()))
+        }
         ("POST", "/management/v1/codex/launch") => {
             let _credential_guard = state
                 .credential_management
@@ -514,36 +544,26 @@ fn handle_management(
                 .get("mode")
                 .and_then(Value::as_str)
                 .ok_or_else(|| HttpError::new(400, "必须提供 mode"))?;
-            let workspace_id = match mode {
-                "chatgpt" => None,
-                "baijimu" => Some(
-                    body.get("workspaceId")
+            let selected_home = match mode {
+                "chatgpt" => credential::activate_chatgpt_profile(),
+                "baijimu" => {
+                    let workspace_id = body
+                        .get("workspaceId")
                         .and_then(Value::as_u64)
                         .filter(|value| *value > 0)
-                        .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?,
-                ),
+                        .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?;
+                    credential::activate_workspace_profile(workspace_id)
+                        .map(|profile| PathBuf::from(profile.codex_home))
+                }
                 _ => return Err(HttpError::new(400, "mode 必须是 chatgpt 或 baijimu")),
-            };
-            let prepared_workspace = workspace_id
-                .map(credential::prepare_workspace_profile)
-                .transpose()
-                .map_err(|error| HttpError::new(409, error.to_string()))?;
-            match mode {
-                "chatgpt" => credential::activate_chatgpt_profile().map(|_| ()),
-                "baijimu" => credential::activate_prepared_workspace_profile(
-                    &prepared_workspace.expect("prepared above").profile,
-                )
-                .map(|_| ()),
-                _ => unreachable!("mode validated above"),
             }
             .map_err(|error| HttpError::new(409, error.to_string()))?;
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            let selected_home = credential::active_codex_home();
             if !test_control_enabled() {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
-                desktop::launch(&selected_home, workspace_id.is_some())
-                    .map_err(desktop_compatibility_http_error)?;
+                desktop::launch(&selected_home).map_err(desktop_compatibility_http_error)?;
             }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            let _ = selected_home;
             serde_json::to_value(
                 credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
             )

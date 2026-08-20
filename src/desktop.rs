@@ -17,19 +17,13 @@ pub fn verify_system_compatibility() -> Result<()> {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-pub fn launch(codex_home: &Path, managed_workspace: bool) -> Result<()> {
+pub fn launch(codex_home: &Path) -> Result<()> {
     platform::stop_for_codex_home_switch()?;
-    if managed_workspace {
-        crate::credential::apply_workspace_desktop_defaults(codex_home)?;
-    }
     platform::launch(codex_home)
 }
 
 impl DesktopSwitch {
-    pub fn restart_if_needed(&self, codex_home: &Path, managed_workspace: bool) -> Result<bool> {
-        if managed_workspace {
-            crate::credential::apply_workspace_desktop_defaults(codex_home)?;
-        }
+    pub fn restart_if_needed(&self, codex_home: &Path) -> Result<bool> {
         platform::restart_if_needed(self, codex_home)
     }
 }

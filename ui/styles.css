@@ -201,6 +201,8 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .profile-label.current { color: var(--green-dark); background: white; }
 .profile-label.default { color: #305e4b; background: #d7eee3; }
 .profile-label.warning { color: var(--amber); background: var(--amber-soft); }
+.profile-label.danger { color: var(--red); background: var(--red-soft); }
+.profile-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .profile-row .button { min-width: 70px; flex: 0 0 auto; }
 .empty-state { padding: 24px; border: 1px dashed #cfd9d4; border-radius: 13px; color: var(--muted); text-align: center; font-size: 13px; }
 
@@ -310,6 +312,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .status-grid { grid-template-columns: 1fr; }
   .active-actions { align-items: stretch; flex-direction: column; }
   .profile-row { align-items: stretch; flex-direction: column; }
+  .profile-actions { width: 100%; align-items: stretch; flex-direction: column; }
   .profile-row .button { width: 100%; }
 }
 

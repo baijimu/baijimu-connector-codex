@@ -7,11 +7,10 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 test("Baijimu CLI exclusively owns platform authentication and Partner API calls", async () => {
-  const [credential, platformCli, desktop, cleanup] = await Promise.all([
+  const [credential, platformCli, desktop] = await Promise.all([
     readFile(join(root, "src", "credential.rs"), "utf8"),
     readFile(join(root, "src", "baijimu_cli.rs"), "utf8"),
     readFile(join(root, "src", "desktop.rs"), "utf8"),
-    readFile(join(root, "src", "legacy_auth_cleanup.rs"), "utf8"),
   ]);
 
   for (const forbidden of [
@@ -37,22 +36,17 @@ test("Baijimu CLI exclusively owns platform authentication and Partner API calls
   assert.match(platformCli, /"--json"/);
   assert.match(platformCli, /"--show-secret"/);
   assert.doesNotMatch(platformCli, /pub\s+shared_auth_path\s*:/);
-  assert.match(platformCli, /legacy_shared_auth_path_for_acl_cleanup/);
+  const platformCliProduction = platformCli.slice(0, platformCli.indexOf("#[cfg(test)]"));
+  assert.doesNotMatch(
+    platformCliProduction,
+    /sharedAuthPath|legacy_shared_auth_path_for_acl_cleanup/,
+  );
   const desktopProduction = desktop.slice(0, desktop.indexOf("#[cfg(test)]"));
   assert.doesNotMatch(
     desktopProduction,
     /BAIJIMU_AUTH_FILE|BAIJIMU_CURRENT_WORKSPACE_ID|BaijimuAuthFile|BaijimuCurrentWorkspaceId|\$baijimuAuthFile|\$baijimuCurrentWorkspaceId|icacls\.exe/,
   );
-  const cleanupScriptStart = cleanup.indexOf(
-    "const REVOKE_LEGACY_SHARED_AUTH_ACL_SCRIPT",
-  );
-  const cleanupScript = cleanup.slice(
-    cleanupScriptStart,
-    cleanup.indexOf('"#;', cleanupScriptStart),
-  );
-  assert.match(cleanupScript, /RemoveAccessRuleSpecific/);
-  assert.match(cleanupScript, /ReadAndExecute/);
-  assert.doesNotMatch(cleanupScript, /AddAccessRule|SetAccessRule|\/grant/);
+  assert.doesNotMatch(desktopProduction, /CodexSandbox|setup_marker|RemoveAccessRule/);
   assert.doesNotMatch(
     platformCli,
     /reqwest|bearer_auth|fs::read|fs::read_to_string/,

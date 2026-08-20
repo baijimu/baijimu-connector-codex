@@ -122,7 +122,7 @@ impl<'a> MacosInstaller<'a> {
             None,
         )?;
         let auto_activate = credential::should_auto_activate_workspace_after_setup()?;
-        let prepared = credential::prepare_workspace_profile(self.workspace_id)?;
+        let prepared = credential::initialize_workspace_profile(self.workspace_id)?;
         let profile_home = PathBuf::from(&prepared.profile.codex_home);
         self.result.codex_home = profile_home.display().to_string();
         self.result.llm_credential_created = true;

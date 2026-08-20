@@ -11,7 +11,7 @@ pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
     platform::stop_for_codex_home_switch()
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 pub fn verify_system_compatibility() -> Result<()> {
     platform::verify_system_compatibility()
 }
@@ -38,13 +38,6 @@ mod platform {
     #[serde(rename_all = "camelCase")]
     struct StopResult {
         was_running: bool,
-    }
-
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct CompatibilityResult {
-        current_version: String,
-        minimum_version: String,
     }
 
     #[derive(Deserialize)]
@@ -305,22 +298,6 @@ $activatedProcessId = Invoke-CodexDesktopActivation -AppUserModelId $entry[0].ap
 } | ConvertTo-Json -Compress
 "#;
 
-    const COMPATIBILITY_SCRIPT: &str = r#"
-$entry = @(Get-CodexDesktopEntries | Select-Object -First 1)
-if ($entry.Count -eq 0) { throw (New-CodexDesktopPackageNotFoundMessage) }
-$package = $entry[0].package
-$manifestPath = Join-Path $package.InstallLocation 'AppxManifest.xml'
-if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'ChatGPT/Codex 应用包缺少 AppxManifest.xml' }
-[xml]$manifest = Get-Content -LiteralPath $manifestPath
-$minimumVersions = @($manifest.SelectNodes("/*[local-name()='Package']/*[local-name()='Dependencies']/*[local-name()='TargetDeviceFamily']") | ForEach-Object { [string]$_.MinVersion } | Where-Object { $_ })
-if ($minimumVersions.Count -eq 0) { throw 'ChatGPT/Codex 应用包未声明最低 Windows 版本' }
-$minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -Descending | Select-Object -First 1)[0]
-[pscustomobject]@{
-  currentVersion = [System.Environment]::OSVersion.Version.ToString()
-  minimumVersion = $minimum.ToString()
-} | ConvertTo-Json -Compress
-"#;
-
     pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
         let output = run_powershell(STOP_SCRIPT, None)?;
         let result: StopResult = crate::json_compat::from_slice(&output)
@@ -328,18 +305,6 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
         Ok(DesktopSwitch {
             was_running: result.was_running,
         })
-    }
-
-    pub fn verify_system_compatibility() -> Result<()> {
-        let output = run_powershell(COMPATIBILITY_SCRIPT, None)?;
-        let compatibility: CompatibilityResult = crate::json_compat::from_slice(&output)
-            .context("解析 ChatGPT/Codex Windows 系统兼容性失败")?;
-        crate::system_compatibility::ensure_supported(
-            "Windows",
-            &compatibility.current_version,
-            &compatibility.minimum_version,
-            "ChatGPT/Codex",
-        )
     }
 
     pub fn launch(codex_home: &Path) -> Result<()> {
@@ -411,7 +376,7 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
 
         #[test]
         fn desktop_management_scripts_parse_in_windows_powershell() {
-            for script in [STOP_SCRIPT, COMPATIBILITY_SCRIPT, LAUNCH_SCRIPT] {
+            for script in [STOP_SCRIPT, LAUNCH_SCRIPT] {
                 let complete_script = format!("{POWERSHELL_PREAMBLE}\n{script}");
                 let mut child = Command::new("powershell.exe")
                     .args([
@@ -717,10 +682,6 @@ mod platform {
 
     pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
         Ok(DesktopSwitch::default())
-    }
-
-    pub fn verify_system_compatibility() -> Result<()> {
-        anyhow::bail!("当前平台不支持 ChatGPT/Codex 桌面应用")
     }
 
     pub fn restart_if_needed(_state: &DesktopSwitch, _codex_home: &Path) -> Result<bool> {

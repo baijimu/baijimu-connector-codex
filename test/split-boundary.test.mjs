@@ -86,7 +86,7 @@ test("Windows desktop discovery follows the codex protocol instead of package na
   );
   const desktopLaunch = desktop.slice(
     desktop.indexOf("const LAUNCH_SCRIPT"),
-    desktop.indexOf("const COMPATIBILITY_SCRIPT"),
+    desktop.indexOf("pub fn stop_for_codex_home_switch", desktop.indexOf("const LAUNCH_SCRIPT")),
   );
   for (const source of [desktopPreamble, installer]) {
     assert.match(source, /local-name\(\)='Protocol'/);

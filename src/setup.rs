@@ -67,7 +67,7 @@ pub struct SetupStatus {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SetupCompletion {
-    Verified,
+    Activated,
     Warning(String),
     NotRequested,
 }
@@ -108,11 +108,11 @@ impl SetupCompletion {
         Self::NotRequested
     }
 
-    fn from_desktop_launch(result: Result<()>) -> Self {
+    fn from_desktop_activation(result: Result<()>) -> Self {
         match result {
-            Ok(()) => Self::Verified,
+            Ok(()) => Self::Activated,
             Err(error) => Self::Warning(format!(
-                    "ChatGPT/Codex 已完成安装配置，但自动打开桌面窗口的校验未通过。请到系统应用列表中手动找到并打开 ChatGPT 应用（部分版本名称为 Codex）。自动打开校验错误：{}",
+                    "ChatGPT/Codex 已完成安装配置，但系统桌面应用启动请求失败。请到系统应用列表中手动找到并打开 ChatGPT 应用（部分版本名称为 Codex）。自动启动错误：{}",
                     compact_error(&format!("{error:#}"))
                 )),
         }
@@ -120,8 +120,8 @@ impl SetupCompletion {
 
     fn message(&self) -> String {
         match self {
-            Self::Verified => {
-                "Codex 应用初始化已完成，并已确认当前工作区桌面窗口打开。".to_string()
+            Self::Activated => {
+                "Codex 应用初始化已完成，系统已接受当前工作区桌面应用启动请求。".to_string()
             }
             Self::Warning(warning) => warning.clone(),
             Self::NotRequested => {
@@ -599,7 +599,7 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
 fn launch_desktop_after_setup(profile_home: &Path) -> SetupCompletion {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        SetupCompletion::from_desktop_launch(crate::desktop::launch_and_verify(profile_home))
+        SetupCompletion::from_desktop_activation(crate::desktop::launch(profile_home))
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -808,13 +808,13 @@ mod tests {
 
     #[test]
     fn desktop_auto_launch_failure_keeps_setup_successful_and_requires_manual_open() {
-        let outcome = SetupCompletion::from_desktop_launch(Err(anyhow::anyhow!(
+        let outcome = SetupCompletion::from_desktop_activation(Err(anyhow::anyhow!(
             "operating system rejected automatic launch"
         )));
 
         assert!(matches!(&outcome, SetupCompletion::Warning(_)));
         assert!(outcome.message().contains("已完成安装配置"));
-        assert!(outcome.message().contains("桌面窗口的校验未通过"));
+        assert!(outcome.message().contains("桌面应用启动请求失败"));
         assert!(outcome.message().contains("手动找到并打开 ChatGPT"));
         assert!(outcome
             .warning()
@@ -855,11 +855,13 @@ mod tests {
     }
 
     #[test]
-    fn successful_desktop_auto_launch_reports_the_opened_workspace() {
-        let outcome = SetupCompletion::from_desktop_launch(Ok(()));
+    fn successful_desktop_auto_launch_reports_the_accepted_activation() {
+        let outcome = SetupCompletion::from_desktop_activation(Ok(()));
 
-        assert_eq!(outcome, SetupCompletion::Verified);
-        assert!(outcome.message().contains("已确认当前工作区桌面窗口打开"));
+        assert_eq!(outcome, SetupCompletion::Activated);
+        assert!(outcome
+            .message()
+            .contains("已接受当前工作区桌面应用启动请求"));
         assert_eq!(outcome.warning(), None);
     }
 

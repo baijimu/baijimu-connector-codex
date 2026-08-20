@@ -17,13 +17,13 @@ pub fn verify_system_compatibility() -> Result<()> {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-pub fn launch_and_verify(codex_home: &Path) -> Result<()> {
-    platform::launch_and_verify(codex_home)
+pub fn launch(codex_home: &Path) -> Result<()> {
+    platform::launch(codex_home)
 }
 
 impl DesktopSwitch {
-    pub fn restart_and_verify(&self, codex_home: &Path) -> Result<bool> {
-        platform::restart_and_verify(self, codex_home)
+    pub fn restart_if_needed(&self, codex_home: &Path) -> Result<bool> {
+        platform::restart_if_needed(self, codex_home)
     }
 }
 
@@ -243,7 +243,7 @@ if ($wasRunning) {
 [pscustomobject]@{ wasRunning = $wasRunning } | ConvertTo-Json -Compress
 "#;
 
-    const LAUNCH_AND_VERIFY_SCRIPT: &str = r#"
+    const LAUNCH_SCRIPT: &str = r#"
 $codexHome = $env:CODEX_HOME
 if (-not $codexHome) { throw '隔离启动桌面应用时必须显式提供 CODEX_HOME' }
 $entry = @(Get-CodexDesktopEntries | Select-Object -First 1)
@@ -267,61 +267,9 @@ if ($existing.Count -gt 0) {
   if ($remaining.Count -gt 0) { throw 'ChatGPT/Codex 桌面应用进程未在 15 秒内停止' }
 }
 
-if (-not ('BaijimuCodexVisibleWindowProbe' -as [type])) {
-  Add-Type -TypeDefinition @'
-using System;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-
-public static class BaijimuCodexVisibleWindowProbe {
-    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-    [DllImport("user32.dll")]
-    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
-    [DllImport("user32.dll")]
-    private static extern bool IsWindowVisible(IntPtr hWnd);
-    [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
-
-    public static uint[] ProcessIds() {
-        var processIds = new HashSet<uint>();
-        EnumWindows(delegate(IntPtr hWnd, IntPtr lParam) {
-            if (IsWindowVisible(hWnd)) {
-                uint processId;
-                GetWindowThreadProcessId(hWnd, out processId);
-                if (processId != 0) processIds.Add(processId);
-            }
-            return true;
-        }, IntPtr.Zero);
-        var result = new uint[processIds.Count];
-        processIds.CopyTo(result);
-        return result;
-    }
-}
-'@
-}
-
 $activatedProcessId = Invoke-CodexDesktopActivation -AppUserModelId $entry[0].appUserModelId -CodexHome $codexHome
-$deadline = (Get-Date).AddSeconds(45)
-do {
-  $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
-    try {
-      $path = $_.Path
-      if (-not $path) { return $false }
-      return $path.StartsWith($selectedRoot, [System.StringComparison]::OrdinalIgnoreCase)
-    } catch { return $false }
-  })
-  $runningIds = @($running | ForEach-Object { [uint32]$_.Id })
-  $visibleIds = @([BaijimuCodexVisibleWindowProbe]::ProcessIds())
-  $visible = @($runningIds | Where-Object { $visibleIds -contains $_ })
-  if ($visible.Count -eq 0) { Start-Sleep -Milliseconds 500 }
-} while ($visible.Count -eq 0 -and (Get-Date) -lt $deadline)
-if ($running.Count -eq 0) { throw 'ChatGPT/Codex 桌面应用未在 45 秒内启动进程' }
-if ($visible.Count -eq 0) { throw 'ChatGPT/Codex 桌面应用已启动进程，但未在 45 秒内显示可见窗口' }
 [pscustomobject]@{
-  running = $true
-  visibleWindow = $true
-  processCount = $running.Count
-  visibleWindowCount = $visible.Count
+  activationAccepted = $true
   packageFullName = [string]$entry[0].package.PackageFullName
   applicationId = $entry[0].applicationId
   appUserModelId = $entry[0].appUserModelId
@@ -368,17 +316,17 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
         )
     }
 
-    pub fn launch_and_verify(codex_home: &Path) -> Result<()> {
+    pub fn launch(codex_home: &Path) -> Result<()> {
         verify_system_compatibility()?;
-        run_powershell(LAUNCH_AND_VERIFY_SCRIPT, Some(codex_home))?;
+        run_powershell(LAUNCH_SCRIPT, Some(codex_home))?;
         Ok(())
     }
 
-    pub fn restart_and_verify(state: &DesktopSwitch, codex_home: &Path) -> Result<bool> {
+    pub fn restart_if_needed(state: &DesktopSwitch, codex_home: &Path) -> Result<bool> {
         if !state.was_running {
             return Ok(false);
         }
-        launch_and_verify(codex_home)?;
+        launch(codex_home)?;
         Ok(true)
     }
 
@@ -426,7 +374,7 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
 
         #[test]
         fn desktop_management_scripts_parse_in_windows_powershell() {
-            for script in [STOP_SCRIPT, COMPATIBILITY_SCRIPT, LAUNCH_AND_VERIFY_SCRIPT] {
+            for script in [STOP_SCRIPT, COMPATIBILITY_SCRIPT, LAUNCH_SCRIPT] {
                 let complete_script = format!("{POWERSHELL_PREAMBLE}\n{script}");
                 let mut child = Command::new("powershell.exe")
                     .args([
@@ -464,11 +412,14 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
             assert!(POWERSHELL_PREAMBLE.contains("GetValueKind('CODEX_HOME')"));
             assert!(POWERSHELL_PREAMBLE.contains("DeleteValue('CODEX_HOME', $false)"));
             assert!(POWERSHELL_PREAMBLE.contains("BroadcastEnvironmentChange"));
-            assert!(LAUNCH_AND_VERIFY_SCRIPT.contains(
+            assert!(LAUNCH_SCRIPT.contains(
                 "Invoke-CodexDesktopActivation -AppUserModelId $entry[0].appUserModelId"
             ));
-            assert!(!LAUNCH_AND_VERIFY_SCRIPT.contains("Start-Process"));
-            assert!(!LAUNCH_AND_VERIFY_SCRIPT.contains("-WorkingDirectory"));
+            assert!(LAUNCH_SCRIPT.contains("activationAccepted = $true"));
+            assert!(!LAUNCH_SCRIPT.contains("VisibleWindow"));
+            assert!(!LAUNCH_SCRIPT.contains("AddSeconds(45)"));
+            assert!(!LAUNCH_SCRIPT.contains("Start-Process"));
+            assert!(!LAUNCH_SCRIPT.contains("-WorkingDirectory"));
         }
 
         #[test]
@@ -548,21 +499,12 @@ if ($entry.Count -ne 1) { throw "expected one entry, got $($entry.Count)" }
 mod platform {
     use super::*;
     use anyhow::Context;
-    use core_foundation::base::{CFType, TCFType};
-    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
-    use core_foundation::number::CFNumber;
-    use core_foundation::string::CFString;
-    use core_graphics::window::{
-        copy_window_info, kCGNullWindowID, kCGWindowListExcludeDesktopElements,
-        kCGWindowListOptionOnScreenOnly, kCGWindowOwnerPID,
-    };
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output};
     use std::thread;
     use std::time::{Duration, Instant};
 
     const APPLICATION_PATHS: [&str; 2] = ["/Applications/ChatGPT.app", "/Applications/Codex.app"];
-    const LAUNCH_TIMEOUT: Duration = Duration::from_secs(45);
     const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
     pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
@@ -594,11 +536,11 @@ mod platform {
         anyhow::bail!("ChatGPT/Codex 桌面应用未在 15 秒内退出")
     }
 
-    pub fn restart_and_verify(state: &DesktopSwitch, codex_home: &Path) -> Result<bool> {
+    pub fn restart_if_needed(state: &DesktopSwitch, codex_home: &Path) -> Result<bool> {
         if !state.was_running {
             return Ok(false);
         }
-        launch_and_verify(codex_home)?;
+        launch(codex_home)?;
         Ok(true)
     }
 
@@ -608,36 +550,14 @@ mod platform {
         verify_application_compatibility(&app_path)
     }
 
-    pub fn launch_and_verify(codex_home: &Path) -> Result<()> {
+    pub fn launch(codex_home: &Path) -> Result<()> {
         let app_path =
             installed_application_path().context("没有找到已安装的 ChatGPT/Codex 桌面应用")?;
         verify_application_compatibility(&app_path)?;
-        let bundle_id = application_bundle_id(&app_path)?;
-
         run_checked(
             open_application_command(&app_path, codex_home),
             "打开 ChatGPT/Codex 桌面应用失败",
-        )?;
-
-        let started = Instant::now();
-        let mut running_process_seen = false;
-        while started.elapsed() < LAUNCH_TIMEOUT {
-            let info = application_info(&bundle_id)?;
-            if has_running_process(&info) {
-                running_process_seen = true;
-                verify_application_codex_home(&info, codex_home)?;
-                let pid = application_pid(&info).context("无法读取 ChatGPT/Codex 桌面进程 PID")?;
-                if has_visible_window(pid)? {
-                    return Ok(());
-                }
-            }
-            thread::sleep(POLL_INTERVAL);
-        }
-
-        if running_process_seen {
-            anyhow::bail!("ChatGPT/Codex 桌面应用已启动进程，但未在 45 秒内显示可见窗口");
-        }
-        anyhow::bail!("ChatGPT/Codex 桌面应用未在 45 秒内启动进程");
+        )
     }
 
     fn installed_application_path() -> Option<PathBuf> {
@@ -705,59 +625,6 @@ mod platform {
         })
     }
 
-    fn application_pid(info: &str) -> Option<u32> {
-        info.lines().find_map(|line| {
-            let line = line.trim();
-            let value = line.strip_prefix("\"pid\"=")?.trim();
-            value.parse().ok()
-        })
-    }
-
-    fn has_visible_window(pid: u32) -> Result<bool> {
-        let expected_pid =
-            i32::try_from(pid).context("ChatGPT/Codex 桌面进程 PID 超出系统窗口接口范围")?;
-        let windows = copy_window_info(
-            kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
-            kCGNullWindowID,
-        )
-        .context("读取 macOS 可见窗口列表失败")?;
-        let owner_pid_key = unsafe { CFString::wrap_under_get_rule(kCGWindowOwnerPID) };
-
-        for value in windows.get_all_values() {
-            let dictionary = unsafe {
-                CFDictionary::<CFString, CFType>::wrap_under_get_rule(value as CFDictionaryRef)
-            };
-            let owner_pid = dictionary
-                .find(&owner_pid_key)
-                .and_then(|value| value.downcast::<CFNumber>())
-                .and_then(|value| value.to_i32());
-            if owner_pid == Some(expected_pid) {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    fn verify_application_codex_home(info: &str, codex_home: &Path) -> Result<()> {
-        let pid = application_pid(info).context("无法读取 ChatGPT/Codex 桌面进程 PID")?;
-        let output = Command::new("/bin/ps")
-            .args(["eww", "-p", &pid.to_string()])
-            .output()
-            .context("读取 ChatGPT/Codex 桌面进程环境失败")?;
-        if !output.status.success() {
-            anyhow::bail!(
-                "读取 ChatGPT/Codex 桌面进程环境失败：{}",
-                command_error(&output)
-            );
-        }
-        let process = String::from_utf8_lossy(&output.stdout);
-        let expected = format!("CODEX_HOME={}", codex_home.to_string_lossy());
-        if !process.contains(&expected) {
-            anyhow::bail!("ChatGPT/Codex 已启动，但没有使用所选工作区状态目录");
-        }
-        Ok(())
-    }
-
     fn open_application_command(app_path: &Path, codex_home: &Path) -> Command {
         let mut command = Command::new("/usr/bin/open");
         crate::child_process::isolate_from_connector_environment(&mut command);
@@ -790,24 +657,12 @@ mod platform {
         use super::*;
 
         #[test]
-        fn parses_lsappinfo_process_state_independently_from_window_verification() {
+        fn parses_lsappinfo_process_state() {
             let hidden = "\"pid\"=682\n\"visible\"=[ NULL ]\n\"windows\"=[ NULL ]\n";
             assert!(has_running_process(hidden));
-            assert_eq!(application_pid(hidden), Some(682));
 
             let missing = "Application not found\n";
             assert!(!has_running_process(missing));
-        }
-
-        #[test]
-        #[ignore = "requires a running ChatGPT/Codex app with an on-screen window"]
-        fn detects_a_real_visible_codex_window() {
-            let app_path = installed_application_path().expect("desktop app must be installed");
-            let bundle_id = application_bundle_id(&app_path).unwrap();
-            let info = application_info(&bundle_id).unwrap();
-            let pid = application_pid(&info).expect("desktop app must be running");
-
-            assert!(has_visible_window(pid).unwrap());
         }
     }
 }
@@ -824,7 +679,7 @@ mod platform {
         anyhow::bail!("当前平台不支持 ChatGPT/Codex 桌面应用")
     }
 
-    pub fn restart_and_verify(_state: &DesktopSwitch, _codex_home: &Path) -> Result<bool> {
+    pub fn restart_if_needed(_state: &DesktopSwitch, _codex_home: &Path) -> Result<bool> {
         Ok(false)
     }
 }

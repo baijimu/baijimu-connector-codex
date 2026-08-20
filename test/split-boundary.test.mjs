@@ -85,7 +85,7 @@ test("Windows desktop discovery follows the codex protocol instead of package na
     desktop.indexOf("const STOP_SCRIPT"),
   );
   const desktopLaunch = desktop.slice(
-    desktop.indexOf("const LAUNCH_AND_VERIFY_SCRIPT"),
+    desktop.indexOf("const LAUNCH_SCRIPT"),
     desktop.indexOf("const COMPATIBILITY_SCRIPT"),
   );
   for (const source of [desktopPreamble, installer]) {
@@ -106,5 +106,19 @@ test("Windows desktop discovery follows the codex protocol instead of package na
   assert.match(desktopPreamble, /DeleteValue\('CODEX_HOME', \$false\)/);
   assert.match(desktopPreamble, /BroadcastEnvironmentChange/);
   assert.match(desktopLaunch, /Invoke-CodexDesktopActivation/);
+  assert.match(desktopLaunch, /activationAccepted = \$true/);
+  assert.doesNotMatch(desktopLaunch, /VisibleWindow|EnumWindows|IsWindowVisible|AddSeconds\(45\)/);
   assert.doesNotMatch(desktopLaunch, /Start-Process/);
+});
+
+test("desktop launch commits the selected profile without window verification or rollback", async () => {
+  const [main, desktop, credential] = await Promise.all([
+    read("src/main.rs"),
+    read("src/desktop.rs"),
+    read("src/credential.rs"),
+  ]);
+  assert.doesNotMatch(desktop, /launch_and_verify|restart_and_verify|has_visible_window/);
+  assert.doesNotMatch(main, /active_home_snapshot|restore_active_home|启动验证失败|状态指针回滚/);
+  assert.doesNotMatch(credential, /pub fn active_home_snapshot|pub fn restore_active_home/);
+  assert.match(main, /desktop::launch\(&selected_home\)/);
 });

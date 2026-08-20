@@ -225,7 +225,7 @@ function codexLaunchCopy(request) {
   return {
     title: `使用${name}启动 Codex`,
     message: `将关闭当前 Codex，使用“${name}”已绑定的状态目录重新启动。不会删除个人或其他工作区数据。`,
-    progress: `正在使用${name}启动并验证 Codex…`,
+    progress: `正在使用${name}提交 Codex 启动请求…`,
   };
 }
 
@@ -264,8 +264,8 @@ async function launchCodex(request, progressMessage) {
     setMessage(
       "message",
       request.mode === "chatgpt"
-        ? "个人 Codex 已启动并验证。"
-        : "Codex 已使用所选百积木工作区启动并验证。",
+        ? "个人 Codex 启动请求已提交。"
+        : "已使用所选百积木工作区提交 Codex 启动请求。",
     );
   } catch (error) {
     const message = errorMessage(error);

@@ -289,7 +289,7 @@ fn initialize_server() -> Result<(), String> {
     };
     match credential::state() {
         Ok(state) => desktop_switch
-            .restart_and_verify(Path::new(&state.active_codex_home))
+            .restart_if_needed(Path::new(&state.active_codex_home))
             .map(|_| ())
             .map_err(|error| format!("旧版 Codex 档案迁移完成，但桌面应用重启失败: {error}")),
         Err(error) => {
@@ -304,7 +304,7 @@ fn initialize_server() -> Result<(), String> {
                         .filter(|path| path.exists())
                 });
             let restart_error =
-                recovery_home.and_then(|path| desktop_switch.restart_and_verify(path).err());
+                recovery_home.and_then(|path| desktop_switch.restart_if_needed(path).err());
             let mut message = format!("迁移旧版 Codex 档案失败: {error}");
             if let Some(restart_error) = restart_error {
                 message.push_str(&format!("；恢复桌面应用失败: {restart_error}"));
@@ -524,60 +524,30 @@ fn handle_management(
                 .map(credential::prepare_workspace_profile)
                 .transpose()
                 .map_err(|error| HttpError::new(409, error.to_string()))?;
-            let snapshot = credential::active_home_snapshot()
-                .map_err(|error| HttpError::internal(error.to_string()))?;
-            let previous_home = snapshot.codex_home.clone();
-            let desktop_switch = if test_control_enabled() {
-                desktop::DesktopSwitch::default()
-            } else {
+            if !test_control_enabled() {
                 desktop::stop_for_codex_home_switch()
-                    .map_err(|error| HttpError::new(409, error.to_string()))?
-            };
-            let activation = match mode {
+                    .map_err(|error| HttpError::new(409, error.to_string()))?;
+            }
+            match mode {
                 "chatgpt" => credential::activate_chatgpt_profile().map(|_| ()),
                 "baijimu" => credential::activate_prepared_workspace_profile(
                     &prepared_workspace.expect("prepared above").profile,
                 )
                 .map(|_| ()),
                 _ => unreachable!("mode validated above"),
-            };
-            if let Err(error) = activation {
-                let _ = desktop_switch.restart_and_verify(&previous_home);
-                return Err(HttpError::new(409, error.to_string()));
             }
+            .map_err(|error| HttpError::new(409, error.to_string()))?;
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             let selected_home = credential::active_codex_home();
-            let verification = (|| {
-                if test_control_enabled() {
-                    return Ok(());
-                }
+            if !test_control_enabled() {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
-                {
-                    desktop::launch_and_verify(&selected_home).map_err(|error| error.to_string())
-                }
-                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-                {
-                    Ok(())
-                }
-            })()
-            .and_then(|_| credential::state().map_err(|error| error.to_string()));
-            match verification {
-                Ok(credential_state) => serde_json::to_value(credential_state)
-                    .map_err(|error| HttpError::internal(error.to_string())),
-                Err(error) => {
-                    let _ = desktop::stop_for_codex_home_switch();
-                    let rollback = credential::restore_active_home(snapshot);
-                    let desktop_rollback = desktop_switch.restart_and_verify(&previous_home).err();
-                    let mut message = format!("Codex 启动验证失败，已恢复原有档案：{error}");
-                    if let Err(rollback) = rollback {
-                        message.push_str(&format!("；状态指针回滚失败：{rollback}"));
-                    }
-                    if let Some(rollback) = desktop_rollback {
-                        message.push_str(&format!("；桌面应用回滚验证失败：{rollback}"));
-                    }
-                    Err(HttpError::new(409, message))
-                }
+                desktop::launch(&selected_home)
+                    .map_err(|error| HttpError::new(409, error.to_string()))?;
             }
+            serde_json::to_value(
+                credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
+            )
+            .map_err(|error| HttpError::internal(error.to_string()))
         }
         _ => Err(HttpError::new(404, format!("未知的管理接口路径：{path}"))),
     }

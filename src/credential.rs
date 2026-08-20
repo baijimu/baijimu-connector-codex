@@ -330,19 +330,6 @@ pub fn original_codex_home() -> PathBuf {
         .unwrap_or_else(|_| default_original_codex_home())
 }
 
-pub fn active_home_snapshot() -> Result<ActiveHomeSnapshot> {
-    let metadata = load_metadata()?;
-    let codex_home = active_home_from_metadata(&metadata);
-    Ok(ActiveHomeSnapshot {
-        metadata,
-        codex_home,
-    })
-}
-
-pub fn restore_active_home(snapshot: ActiveHomeSnapshot) -> Result<()> {
-    save_metadata(&snapshot.metadata)
-}
-
 pub fn restore_legacy_global_codex_home() -> Result<CredentialManagerState> {
     let mut metadata = load_metadata()?;
     let current = user_environment::read_codex_home()?;

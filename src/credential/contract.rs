@@ -82,12 +82,6 @@ pub struct PreparedWorkspaceProfile {
     pub credential: String,
 }
 
-#[derive(Clone, Debug)]
-pub struct ActiveHomeSnapshot {
-    pub(super) metadata: CredentialMetadata,
-    pub codex_home: PathBuf,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingProfileHomeMigration {
     pub active_home_before: Option<PathBuf>,

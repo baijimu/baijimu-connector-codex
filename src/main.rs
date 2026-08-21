@@ -501,16 +501,25 @@ fn handle_management(
             if state.setup.state().status == "running" {
                 return Err(HttpError::new(
                     409,
-                    "Codex 正在安装配置，完成后再切换授权档案",
+                    "Codex 正在安装配置，完成后再启动所选工作区",
                 ));
             }
-            let profile_id = body
-                .get("authProfileId")
+            let mode = body
+                .get("mode")
                 .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| HttpError::new(400, "必须提供 authProfileId"))?;
-            let prepared = credential::prepare_profile_activation(profile_id)
+                .ok_or_else(|| HttpError::new(400, "必须提供 mode"))?;
+            if mode != "baijimu" {
+                return Err(HttpError::new(
+                    400,
+                    "安装后默认 .codex 由百积木管理，mode 只允许 baijimu",
+                ));
+            }
+            let workspace_id = body
+                .get("workspaceId")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0)
+                .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?;
+            let prepared = credential::prepare_workspace_activation(workspace_id)
                 .map_err(|error| HttpError::new(409, error.to_string()))?;
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             let desktop_switch = if !test_control_enabled() {
@@ -521,36 +530,19 @@ fn handle_management(
             } else {
                 None
             };
-            let transaction = match credential::activate_prepared_profile(&prepared) {
-                Ok(transaction) => transaction,
-                Err(error) => {
-                    #[cfg(any(target_os = "macos", target_os = "windows"))]
-                    if let Some(desktop_switch) = desktop_switch {
-                        desktop_switch
-                            .restart_if_needed()
-                            .map_err(desktop_compatibility_http_error)?;
-                    }
-                    return Err(HttpError::new(409, error.to_string()));
+            if let Err(error) = credential::activate_prepared_workspace_profile(&prepared) {
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                if let Some(desktop_switch) = desktop_switch {
+                    desktop_switch
+                        .restart_if_needed()
+                        .map_err(desktop_compatibility_http_error)?;
                 }
-            };
+                return Err(HttpError::new(409, error.to_string()));
+            }
             if !test_control_enabled() {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
-                if let Err(error) = desktop::launch() {
-                    transaction.rollback().map_err(|rollback| {
-                        HttpError::new(
-                            500,
-                            format!("Codex 启动失败，且授权档案回滚失败：{rollback}"),
-                        )
-                    })?;
-                    if let Some(desktop_switch) = desktop_switch {
-                        desktop_switch
-                            .restart_if_needed()
-                            .map_err(desktop_compatibility_http_error)?;
-                    }
-                    return Err(desktop_compatibility_http_error(error));
-                }
+                desktop::launch().map_err(desktop_compatibility_http_error)?;
             }
-            transaction.commit();
             serde_json::to_value(
                 credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
             )

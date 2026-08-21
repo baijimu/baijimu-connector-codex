@@ -121,7 +121,7 @@ impl SetupCompletion {
     fn message(&self) -> String {
         match self {
             Self::Activated => {
-                "Codex 应用初始化已完成，系统已接受当前授权档案的桌面应用启动请求。".to_string()
+                "Codex 应用初始化已完成，系统已接受当前工作区桌面应用启动请求。".to_string()
             }
             Self::Warning(warning) => warning.clone(),
             Self::NotRequested => {
@@ -532,20 +532,16 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
         let trusted_publishers = product_config.windows_desktop_trusted_publishers.join("\n");
         command
             .env("CODEX_WORKSPACE_ID", workspace_id.to_string())
-            .env(
-                "CODEX_AUTH_PROFILE_ACTIVATED",
-                if auto_activate { "1" } else { "0" },
-            )
             .env("CODEX_ARTIFACT_MANIFEST_URL", source::manifest_url()?)
             .env("CODEX_INSTALL_STATE_DIR", &state_dir)
             .env("CODEX_INSTALL_QUIET", "1")
             .env("CODEX_UI_LOCALE", &product_config.default_ui_locale)
-            .env("CODEX_HOME", &profile_home)
             .env(
                 "CODEX_DESKTOP_PROTOCOL",
                 &product_config.windows_desktop_protocol,
             )
             .env("CODEX_DESKTOP_TRUSTED_PUBLISHERS", trusted_publishers)
+            .env_remove("CODEX_HOME")
             .env_remove("CODEX_PROJECT_ID")
             .env_remove("BAIJIMU_PROJECT_ID")
             .env_remove("PROJECT_ID");
@@ -903,7 +899,7 @@ mod tests {
         assert_eq!(outcome, SetupCompletion::Activated);
         assert!(outcome
             .message()
-            .contains("已接受当前授权档案的桌面应用启动请求"));
+            .contains("已接受当前工作区桌面应用启动请求"));
         assert_eq!(outcome.warning(), None);
     }
 

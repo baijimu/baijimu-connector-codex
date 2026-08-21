@@ -2,65 +2,61 @@
 
 ## 结论
 
-当前版本只有一个有效 Codex Home：尊重用户级 `CODEX_HOME`，未设置时使用系统账户默认的 `~/.codex`。百积木工作区、Codex Home 和授权档案是三个不同维度：百积木工作区只是授权来源，Codex Home 承载会话和运行状态，授权档案保存可切换的登录信息。当前版本只实现授权档案选择，不提供 Codex 环境或 Codex Home 选择，也不替用户改写合法的 `CODEX_HOME`。
+安装 `com.baijimu.connector.codex` 即表示当前系统账户的默认 `~/.codex` 由百积木管理。当前版本不提供个人 Codex 环境或第二套 Codex Home；如果以后需要完全独立的 Codex 工作区，应作为单独产品能力设计和授权，不能复用工作区切换入口隐式实现。
 
 ## 所有权边界
 
-Connector 只管理当前有效 Codex Home 中与当前授权直接耦合的内容：
+百积木管理默认 `.codex` 中的：
 
-- `auth.json`：当前生效授权档案的文件凭证；个人档案也可以改为引用系统凭据库；
-- `config.toml` 中的 `model`、`model_provider`、`forced_login_method`、`cli_auth_credentials_store` 和百积木 router provider；
-- `.baijimu-owner.json`：授权切换能力的审计标记。
+- `auth.json`：当前生效工作区的 LLM credential；
+- `config.toml` 中的百积木模型、路由、认证存储、审批和桌面语言配置项；
+- `.baijimu-owner.json`：目录所有权与受管文件声明。
 
-以下内容始终属于当前有效 Codex Home，授权初始化、切换和重新授权均不得移动、删除或重建：
+以下内容在所有百积木工作区之间共享，初始化、切换和重新授权均不得移动、删除或重建：
 
 - 会话、任务和历史记录；
 - SQLite 与其他 Codex 状态数据库；
 - 日志、技能、缓存和用户自定义文件；
 - `config.toml` 中不属于百积木的配置项。
 
-每个授权档案保存在 Connector 私有数据目录的哈希键目录中。百积木档案保存完整 `auth.json`；安装前授权保存原始 `auth.json` 和认证相关配置快照，或保存对系统凭据库的引用配置。运行时路径不得暴露工作区 ID，也不得把 credential 写入进程参数、日志或用户环境变量。
+每个工作区自己的 credential 保存在 Connector 私有数据目录的哈希键目录中。运行时路径不得暴露工作区 ID，也不得把 credential 写入进程参数、日志或用户环境变量。
 
 ## 初始化
 
-1. 在任何百积木写入前检查当前有效 Codex Home 的原授权：文件凭证原样复制；已有配置使用 `keyring`、`auto` 或未覆盖客户端默认存储策略时保存系统凭据库引用配置。明确配置为 `file` 却没有 `auth.json` 时视为未登录，不伪造备份。
-2. 验证当前设备确实获得目标百积木工作区授权。
-3. 已有有效私有 credential 时幂等复用；缺失时只在首次初始化中签发。
-4. 新建百积木授权档案，但已有个人档案时不改写当前 `auth.json` 或 `config.toml`，也不停止或启动 Codex。
-5. 只有本机没有任何可用授权档案时，首个新档案才自动激活。
-6. 安装器使用用户当前有效的 Codex Home，不设置或切换合法的用户级 `CODEX_HOME`。
+1. 验证当前设备确实获得目标工作区授权。
+2. 已有有效的私有 credential 时幂等复用；缺失时只在首次初始化中签发。
+3. 合并写入默认 `.codex/config.toml` 的受管配置项，保留其他合法 TOML 配置。
+4. 写入目录所有权标记。
+5. 首个已初始化工作区自动成为当前工作区，并把它的 credential 原子写入默认 `.codex/auth.json`。
+6. 安装器只检查 Rust 凭证管理器生成的默认 `.codex`，不设置 `CODEX_HOME`。
 
-无法解析的现有 `auth.json` 或 `config.toml` 必须明确标记或失败，不得静默覆盖。旧会话和状态永不因创建授权档案而迁移。
+安装接管既有 `.codex` 时不迁移或删除已有状态，只替换受管认证文件并更新受管配置项。无法解析的现有 `config.toml` 必须明确失败，不得静默覆盖。
 
-## 授权档案切换
+## 工作区切换
 
 切换必须遵循固定顺序：
 
-1. 通过 `authProfileId` 选择已经存在的授权档案；切换不再以 `workspaceId` 为主键，也不要求百积木设备授权仍包含原工作区。
+1. 验证工作区仍被当前设备授权，且私有 credential 可读。
 2. 停止当前 ChatGPT/Codex 桌面进程，等待进程退出。
-3. 把当前默认 `.codex` 中可能已刷新的授权回写到当前档案；类型异常时拒绝切换，避免污染备份。
-4. 对当前 `auth.json`、`config.toml` 和活动档案元数据建立事务快照。
-5. 在同一个有效 Codex Home 中原子写入目标授权，并只应用目标档案的认证相关配置；会话、历史和非认证配置保持不变。
-6. 更新活动档案元数据并启动官方桌面应用。
-7. 任一步或桌面启动失败时恢复三个事务快照；原桌面此前正在运行时按原授权重启。
+3. 使用同目录临时文件和原子替换更新默认 `.codex/auth.json`；凭证内容相同时不重写。
+4. 更新当前工作区元数据。
+5. 启动官方桌面应用。
 
-Windows 使用可信 Publisher、`codex` 协议和 FullTrust 清单能力发现应用包，然后直接启动包内可执行入口。该路径不得写 `HKCU\Environment`，不得调用 `SendMessageTimeout` 或发送 `WM_SETTINGCHANGE`；只向启动进程传入已经解析的当前有效 `CODEX_HOME`。
+Windows 使用可信 Publisher、`codex` 协议和 FullTrust 清单能力发现应用包，然后直接启动包内可执行入口。该路径不得写 `HKCU\Environment`，不得调用 `SendMessageTimeout` 或发送 `WM_SETTINGCHANGE`，不得依赖 AUMID 激活继承调用方临时环境。
 
-macOS 使用系统安装的 ChatGPT/Codex 应用路径启动，移除 Connector 私有变量，并向启动进程传入已经解析的当前有效 `CODEX_HOME`。
+macOS 使用系统安装的 ChatGPT/Codex 应用路径启动，并从子进程环境中移除 Connector 私有变量和继承的 `CODEX_HOME`。
 
 ## 重新授权
 
-重新授权是百积木工作区对某个授权档案的维护动作，不是授权切换主键。它只签发并更新目标档案的私有 credential。目标档案当前生效时，先停止桌面应用，再同步默认 `.codex/auth.json`，最后仅在原来正在运行时重启；非活动档案不得影响当前桌面进程或默认认证文件。
+重新授权只签发并更新目标工作区的私有 credential。目标工作区当前生效时，先停止桌面应用，再同步默认 `.codex/auth.json`，最后仅在原来正在运行时重启；非活动工作区不得影响当前桌面进程或默认认证文件。
 
 ## 旧版本升级
 
 元数据版本升级时：
 
-- 在覆盖默认 `.codex` 前先归档安装前授权和认证相关配置；
-- 从每个旧工作区 Home 的 `auth.json` 读取 credential 并写入独立授权档案；
-- 旧元数据中的 `codexHome` 只用于迁移定位，统一归一化为当前有效 Codex Home，管理 API 不再将其作为授权档案字段；
-- 旧版活动百积木档案保持活动；旧版个人模式映射到原授权档案；
-- 已经由 1.4.0/1.4.1 覆盖且无法从文件或系统凭据库证明存在的原授权，不得伪造为个人备份；
+- 从每个旧工作区 Home 的 `auth.json` 读取 credential 并写入 Connector 私有凭证库；
+- 所有工作区元数据的 `codexHome` 统一归一化为默认 `.codex`；
+- 活动工作区 credential 同步到默认 `.codex/auth.json`；
 - 旧隔离目录、会话、数据库、日志和配置全部保留原位；
 - 不自动合并多个状态库，避免主键、任务和 SQLite 状态冲突。
 

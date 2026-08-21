@@ -64,13 +64,10 @@ test("desktop manager neither installs CLI nor exposes invoke routes", async () 
   assert.doesNotMatch(windows, /RouterBaseUrl|New-BaijimuLlmCredential|ConvertTo-CodexConfigContent|Write-CodexConfig|CODEX_LLM_CREDENTIAL_FILE/);
   assert.doesNotMatch(windows, /gpt-5\.6-sol|baijimu-router|base_url\s*=/);
   assert.match(windows, /function Confirm-CodexConfiguration/);
-  assert.match(windows, /\$AuthProfileActivated/);
-  assert.match(windows, /Rust 凭证管理器未生成当前 Codex 授权文件/);
-  assert.match(windows, /Rust 凭证管理器未生成当前 Codex 配置文件/);
-  assert.match(windows, /当前 Codex 登录保持不变/);
+  assert.match(windows, /Rust 凭证管理器未生成 Codex 授权文件/);
+  assert.match(windows, /Rust 凭证管理器未生成 Codex 配置文件/);
   assert.doesNotMatch(setup, /CODEX_LLM_CREDENTIAL_FILE|credential-\{unique\}/);
   assert.match(setup, /credential::initialize_workspace_profile\(workspace_id\)/);
-  assert.match(setup, /CODEX_AUTH_PROFILE_ACTIVATED/);
   assert.match(setup, /prepared\.credential/);
   assert.match(setup, /mod router;/);
   assert.doesNotMatch(macosScript, /install_cli|install-cli/);
@@ -128,21 +125,17 @@ test("Windows desktop discovery follows the codex protocol instead of package na
   assert.match(desktopLaunch, /currentVersion/);
   assert.match(desktopLaunch, /minimumVersion/);
   assert.match(desktopLaunch, /activationAccepted = \$true/);
-  assert.match(desktopLaunch, /Get-CodexDesktopProcesses/);
-  assert.match(desktopLaunch, /AddSeconds\(15\)/);
-  assert.match(desktopLaunch, /processReady = \$true/);
   assert.doesNotMatch(desktopLaunch, /VisibleWindow|EnumWindows|IsWindowVisible|AddSeconds\(45\)/);
   assert.doesNotMatch(desktopLaunch, /CODEX_HOME|appUserModelId/);
 });
 
-test("desktop launch switches an existing auth profile transactionally and verifies the desktop app", async () => {
+test("desktop launch only activates an existing profile and starts the desktop app", async () => {
   const [main, desktop, credential] = await Promise.all([
     read("src/main.rs"),
     read("src/desktop.rs"),
     read("src/credential.rs"),
   ]);
-  assert.doesNotMatch(desktop, /has_visible_window/);
-  assert.match(desktop, /启动后未在 15 秒内进入运行状态/);
+  assert.doesNotMatch(desktop, /launch_and_verify|restart_and_verify|has_visible_window/);
   assert.doesNotMatch(main, /active_home_snapshot|restore_active_home|启动验证失败|状态指针回滚/);
   assert.doesNotMatch(credential, /pub fn active_home_snapshot|pub fn restore_active_home/);
   assert.match(main, /desktop::launch\(\)/);
@@ -153,18 +146,14 @@ test("desktop launch switches an existing auth profile transactionally and verif
   );
   assert.doesNotMatch(launchRoute, /verify_system_compatibility|stop_for_codex_home_switch/);
   assert.match(launchRoute, /stop_for_workspace_switch/);
-  assert.match(launchRoute, /authProfileId/);
-  assert.match(launchRoute, /prepare_profile_activation/);
-  assert.match(launchRoute, /activate_prepared_profile/);
-  assert.match(launchRoute, /transaction\.rollback/);
-  assert.match(launchRoute, /transaction\.commit/);
-  assert.match(desktop, /credential::effective_codex_home/);
+  assert.match(launchRoute, /prepare_workspace_activation/);
+  assert.match(launchRoute, /activate_prepared_workspace_profile/);
   assert.doesNotMatch(
     launchRoute,
     /initialize_workspace_profile|prepare_workspace_reauthorization|create_llm_credential|write_workspace_auth|write_workspace_config/,
   );
   const stopIndex = launchRoute.indexOf("desktop::stop_for_workspace_switch()");
-  const credentialIndex = launchRoute.indexOf("credential::activate_prepared_profile(&prepared)");
+  const credentialIndex = launchRoute.indexOf("credential::activate_prepared_workspace_profile(&prepared)");
   const launchIndex = launchRoute.indexOf("desktop::launch()");
   assert.ok(stopIndex >= 0 && credentialIndex > stopIndex && launchIndex > credentialIndex);
   assert.doesNotMatch(credential, /PERMISSION_MODE_VISIBILITY_KEY|desktop_defaults_version/);
@@ -193,6 +182,5 @@ test("initialization preserves shared state and reauthorization only rotates cre
   assert.match(main, /\/management\/v1\/codex\/initialize/);
   assert.match(main, /\/management\/v1\/codex\/reauthorize/);
   assert.match(app, /label: "重新授权"/);
-  assert.match(app, /label: "创建授权档案"/);
-  assert.match(app, /authProfileId: profile\.profileId/);
+  assert.match(app, /label: "初始化"/);
 });

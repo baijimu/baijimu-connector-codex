@@ -3,10 +3,9 @@
 `com.baijimu.connector.codex` 是线上 `codex` 应用的后继版本，产品名称为 Codex 桌面管理器，负责：
 
 - 安装和验证 ChatGPT/Codex 官方桌面应用；
-- 初始化已授权工作区的桌面专用 LLM credential，并保存为独立授权档案；
-- 展示全部授权档案，包括安装前个人授权备份和已经创建的百积木档案；
-- 固定使用用户当前有效的 Codex Home（尊重 `CODEX_HOME`，否则为 `~/.codex`）；授权档案、百积木工作区和 Codex Home 不再混为一个选择维度；
-- 切换前保存当前可能已刷新的授权，原子替换 `auth.json` 和认证相关配置，启动失败则完整回滚；
+- 初始化已授权工作区的桌面专用 LLM credential，并接管默认 `~/.codex` 的认证与百积木路由配置；
+- 展示可用工作区；已初始化工作区可直接启动或显式重新授权；
+- 所有工作区共享默认 `.codex` 中的会话、历史和状态；启动时只原子替换 `auth.json` 中的工作区凭证；
 - Windows 直接启动可信 AppX 包的 FullTrust 可执行入口，macOS 通过 LaunchServices 启动，不写用户环境变量、不广播环境变化；
 - 从旧版隔离档案升级时只迁移工作区凭证，旧会话目录原样保留，不自动合并状态数据库。
 
@@ -16,7 +15,7 @@
 
 ## 状态所有权
 
-Bridge Agent 继续按 `com.baijimu.connector.codex` 注入原有 `BAIJIMU_CONNECTOR_DATA_DIR`。授权档案保存在该 Connector 私有目录；百积木工作区只负责提供和刷新百积木授权。默认 `~/.codex` 中的会话、历史、技能和状态文件不随授权切换。
+Bridge Agent 继续按 `com.baijimu.connector.codex` 注入原有 `BAIJIMU_CONNECTOR_DATA_DIR`。各工作区凭证保存在该 Connector 私有目录；默认 `~/.codex` 由本应用管理 `auth.json` 和百积木路由配置，其余会话、历史、技能和状态文件不随工作区切换。
 
 ## 本地运行
 

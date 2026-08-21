@@ -90,8 +90,11 @@ struct FileSnapshot {
 
 #[derive(Debug)]
 pub struct ActivationTransaction {
+    #[cfg(test)]
     previous_metadata: CredentialMetadata,
+    #[cfg(test)]
     previous_auth: FileSnapshot,
+    #[cfg(test)]
     previous_config: FileSnapshot,
     profile: CredentialProfile,
 }
@@ -101,6 +104,7 @@ impl ActivationTransaction {
         self.profile
     }
 
+    #[cfg(test)]
     pub fn rollback(self) -> Result<()> {
         restore_file_snapshot(&self.previous_auth)?;
         restore_file_snapshot(&self.previous_config)?;
@@ -470,8 +474,11 @@ pub fn activate_prepared_profile(prepared: &CredentialProfile) -> Result<Activat
         .cloned()
         .context("激活后未找到授权档案")?;
     Ok(ActivationTransaction {
+        #[cfg(test)]
         previous_metadata,
+        #[cfg(test)]
         previous_auth,
+        #[cfg(test)]
         previous_config,
         profile: active_profile,
     })

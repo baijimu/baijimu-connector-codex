@@ -73,7 +73,7 @@ test("desktop manager neither installs CLI nor exposes invoke routes", async () 
   assert.doesNotMatch(macosScript, /install_cli|install-cli/);
 });
 
-test("desktop manager upgrades its inherited metadata in place and omits redundant cards", async () => {
+test("desktop manager separates the default workspace from installation status", async () => {
   const [store, html] = await Promise.all([
     read("src/credential/store.rs"),
     read("ui/index.html"),
@@ -81,6 +81,11 @@ test("desktop manager upgrades its inherited metadata in place and omits redunda
   assert.doesNotMatch(store, /legacy_connector_metadata_path/);
   assert.doesNotMatch(html, /百积木接入/);
   assert.doesNotMatch(html, /当前生效/);
+  assert.match(html, /Codex 默认工作区/);
+  assert.match(html, /当前认证通道/);
+  assert.match(html, /auth-channel-selector[^>]+hidden/);
+  assert.match(html, /Codex 安装状态/);
+  assert.doesNotMatch(html, /integration-unavailable-panel/);
 });
 
 test("Windows runtime uses codex protocol activation without AppX discovery", async () => {
@@ -184,7 +189,7 @@ test("initialization preserves shared state and reauthorization only rotates cre
   assert.match(main, /\/management\/v1\/codex\/initialize/);
   assert.match(main, /\/management\/v1\/codex\/reauthorize/);
   assert.match(app, /label: "重新授权"/);
-  assert.match(app, /label: "创建授权档案"/);
+  assert.match(app, /label: "创建认证通道"/);
   assert.match(app, /label: loginRequired \? "使用 ChatGPT 登录"/);
   assert.match(app, /移除百积木 API 授权与 provider 选择/);
 });

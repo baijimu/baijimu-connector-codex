@@ -116,6 +116,56 @@ export function profileBadgeMeta({
   return badges;
 }
 
+export function defaultWorkspaceMeta(value) {
+  const state = value && typeof value === "object" ? value : {};
+  const activeProfile = normalizeProfile(state.activeProfile);
+  const codexHome = String(
+    state.activeCodexHome || state.originalCodexHome || state.externalCodexHome || "",
+  ).trim() || "系统默认 .codex";
+  const selectableChannelCount = (Array.isArray(state.profiles) ? state.profiles.length : 0)
+    + (Array.isArray(state.workspaces)
+      ? state.workspaces.filter((workspace) => workspace?.authorized && !workspace?.configured).length
+      : 0);
+
+  if (activeProfile?.kind === "baijimu") {
+    const requiresAuthorization = ["missing", "invalid"].includes(activeProfile.credentialStatus);
+    return {
+      name: activeProfile.name || activeProfile.workspaceName || `工作区 ${activeProfile.workspaceId}`,
+      detail: requiresAuthorization
+        ? "当前百积木工作区凭证需要重新授权。"
+        : `百积木工作区 ${activeProfile.workspaceId} 提供模型访问授权。`,
+      badge: requiresAuthorization
+        ? { label: "需重新授权", tone: "danger" }
+        : { label: "百积木授权", tone: "success" },
+      codexHome,
+      selectableChannelCount,
+    };
+  }
+
+  if (activeProfile?.kind === "personal" || state.activeMode === "chatgpt") {
+    const loginRequired = activeProfile?.credentialStatus === "login_required";
+    return {
+      name: "ChatGPT 登录",
+      detail: loginRequired
+        ? "启动 Codex 后使用官方 ChatGPT 登录完成认证。"
+        : "使用官方 ChatGPT 账号提供模型访问授权。",
+      badge: loginRequired
+        ? { label: "ChatGPT · 需登录", tone: "warning" }
+        : { label: "ChatGPT 登录", tone: "success" },
+      codexHome,
+      selectableChannelCount,
+    };
+  }
+
+  return {
+    name: "未选择认证通道",
+    detail: "展开认证通道后选择 ChatGPT 登录或百积木工作区授权。",
+    badge: { label: "未选择", tone: "neutral" },
+    codexHome,
+    selectableChannelCount,
+  };
+}
+
 export function credentialStatusMeta(status) {
   switch (status) {
     case "verified":

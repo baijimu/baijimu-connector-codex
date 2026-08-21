@@ -1,6 +1,7 @@
 import {
   codexCapabilityMeta,
   connectorStartupRetryable,
+  defaultWorkspaceMeta,
   normalizeCredentialState,
   normalizeSetupProgress,
   profileBadgeMeta,
@@ -10,12 +11,13 @@ import {
 } from "./state.mjs";
 
 const elementIds = [
-  "refresh-button", "integration-unavailable-panel", "capability-message",
-  "go-to-runtime-button", "runtime-status-badge",
+  "refresh-button", "runtime-status-badge",
   "message", "error", "error-text",
   "error-retry-button", "warning",
   "legacy-home-migration", "legacy-home-message", "restore-external-home-button",
-  "auth-profile-list",
+  "auth-profile-list", "workspace-auth-badge", "current-auth-channel",
+  "current-auth-detail", "workspace-codex-home", "auth-channel-toggle",
+  "auth-channel-selector",
   "setup-message", "setup-action-button", "setup-progress", "setup-progress-label",
   "setup-progress-percent", "setup-progress-track", "setup-progress-bar", "setup-step-list",
   "switch-progress", "switch-progress-message", "auth-switch-modal",
@@ -32,6 +34,7 @@ let setupMonitorGeneration = 0;
 let pendingCodexLaunch = null;
 let accountBusy = false;
 let errorRetryAction = null;
+let authChannelSelectorExpanded = false;
 const STARTUP_RETRY_ATTEMPTS = 20;
 
 function bridge() {
@@ -76,23 +79,11 @@ function clearNotices() {
   showError("");
 }
 
-function renderContentVisibility() {
+function renderInstallationState() {
   const capability = codexCapabilityMeta(setupState);
-  const hasAuthorizedWorkspace = credentialState?.workspaces?.some(
-    (workspace) => workspace.authorized,
-  );
-  const hasProfile = (credentialState?.profiles?.length || 0) > 0;
-  elements["management-workspace-panel"].hidden = !capability.available && !hasAuthorizedWorkspace && !hasProfile;
-  elements["integration-unavailable-panel"].hidden = capability.available;
-}
-
-function renderIntegrationState() {
-  const capability = codexCapabilityMeta(setupState);
-  elements["capability-message"].textContent = capability.message;
   elements["runtime-status-badge"].textContent = capability.label;
   elements["runtime-status-badge"].className = `status-badge ${capability.tone}`;
   elements["refresh-button"].hidden = false;
-  renderContentVisibility();
 }
 
 function errorMessage(error) {
@@ -103,6 +94,7 @@ function setAccountBusy(value) {
   accountBusy = value;
   elements["refresh-button"].disabled = value;
   elements["setup-action-button"].disabled = value;
+  elements["auth-channel-toggle"].disabled = value;
   elements["error-retry-button"].disabled = value || !errorRetryAction;
   elements["restore-external-home-button"].disabled = value;
   const action = setupActionMeta(setupState);
@@ -194,7 +186,7 @@ function authProfiles() {
       active: false,
       disabled: false,
       actions: [{
-        label: "创建授权档案",
+        label: "创建认证通道",
         tone: "primary",
         onClick: () => initializeWorkspace(workspace.workspaceId),
       }],
@@ -216,13 +208,30 @@ function renderAuthProfiles() {
   if (!list.children.length) {
     const empty = document.createElement("div");
     empty.className = "empty-state";
-    empty.textContent = "没有可用的授权档案。完成个人登录或百积木工作区授权后即可创建。";
+    empty.textContent = "没有可用的认证通道。可使用 ChatGPT 登录，或先完成百积木工作区授权。";
     list.append(empty);
   }
 }
 
+function renderAuthChannelSelector() {
+  elements["auth-channel-selector"].hidden = !authChannelSelectorExpanded;
+  elements["auth-channel-toggle"].setAttribute(
+    "aria-expanded",
+    String(authChannelSelectorExpanded),
+  );
+  elements["auth-channel-toggle"].textContent = authChannelSelectorExpanded
+    ? "收起认证通道"
+    : "切换认证通道";
+}
+
 function renderCredentialState() {
   const state = credentialState;
+  const workspace = defaultWorkspaceMeta(state);
+  elements["workspace-auth-badge"].textContent = workspace.badge.label;
+  elements["workspace-auth-badge"].className = `status-badge ${workspace.badge.tone}`;
+  elements["current-auth-channel"].textContent = workspace.name;
+  elements["current-auth-detail"].textContent = workspace.detail;
+  elements["workspace-codex-home"].textContent = workspace.codexHome;
   setMessage("warning", state?.discoveryWarning || "");
   const migration = state?.legacyGlobalCodexHome;
   elements["legacy-home-migration"].hidden = !migration?.restoreRequired;
@@ -234,6 +243,7 @@ function renderCredentialState() {
     elements["restore-external-home-button"].hidden = !migration.canRestore;
   }
   renderAuthProfiles();
+  renderAuthChannelSelector();
 }
 
 function codexLaunchCopy(request) {
@@ -246,13 +256,13 @@ function codexLaunchCopy(request) {
   if (profile?.kind === "personal" && profile.credentialStatus === "login_required") {
     return {
       title: "使用 ChatGPT 登录启动 Codex",
-      message: "将关闭当前 Codex，保存当前工作区授权档案，移除百积木 API 授权与 provider 选择，再以官方 ChatGPT 登录方式启动 Codex。会话、历史记录和其他状态不会切换或移动。",
+      message: "将关闭当前 Codex，保存当前工作区认证通道，移除百积木 API 授权与 provider 选择，再以官方 ChatGPT 登录方式启动 Codex。会话、历史记录和其他状态不会切换或移动。",
       progress: "正在切换到 ChatGPT 登录并启动 Codex…",
     };
   }
   return {
     title: `使用${name}启动 Codex`,
-    message: `将关闭当前 Codex，保存当前档案可能已刷新的授权，再把“${name}”的授权与认证配置原子写入固定 .codex 后重新启动。会话、历史记录和其他状态不会切换或移动。`,
+    message: `将关闭当前 Codex，保存当前通道可能已刷新的授权，再把“${name}”的授权与认证配置原子写入固定 .codex 后重新启动。会话、历史记录和其他状态不会切换或移动。`,
     progress: `正在切换到${name}的凭证并启动 Codex…`,
   };
 }
@@ -288,10 +298,11 @@ async function launchCodex(request, progressMessage) {
   try {
     const response = await invokeManagement("launchCodex", request);
     credentialState = normalizeCredentialState(response);
+    authChannelSelectorExpanded = false;
     renderCredentialState();
     setMessage(
       "message",
-      "已切换到所选授权档案并提交 Codex 启动请求。",
+      "已切换到所选认证通道并提交 Codex 启动请求。",
     );
   } catch (error) {
     const message = errorMessage(error);
@@ -312,7 +323,7 @@ async function initializeWorkspace(workspaceId) {
   try {
     setupState = await invokeManagement("initializeWorkspace", { workspaceId });
     renderSetupState();
-    setMessage("message", `已开始为工作区 ${workspaceId} 创建授权档案；当前 Codex 登录、会话和非认证配置保持不变。`);
+    setMessage("message", `已开始为工作区 ${workspaceId} 创建认证通道；当前 Codex 登录、会话和非认证配置保持不变。`);
     void monitorSetup();
   } catch (error) {
     setAccountBusy(false);
@@ -348,11 +359,9 @@ function renderSetupState() {
   const status = meta.status;
   elements["setup-message"].textContent = meta.showCurrentError
     ? setupState.error
-    : setupState?.message || (status === "pending"
-      ? "正在确认当前授权工作区并准备自动初始化 Codex。"
-      : "等待初始化");
+    : setupState?.message || codexCapabilityMeta(setupState).message;
   renderSetupProgress();
-  renderIntegrationState();
+  renderInstallationState();
   setAccountBusy(status === "running");
   elements["setup-actions"].hidden = false;
   elements["setup-action-button"].hidden = !action.visible;
@@ -620,9 +629,10 @@ elements["setup-action-button"].addEventListener("click", () => {
   if (action.operation === "verify") void retryRouterVerification();
   else void retrySetup();
 });
-elements["go-to-runtime-button"].addEventListener("click", () => {
-  elements["setup-panel"].scrollIntoView({ behavior: "smooth", block: "start" });
-  elements["setup-panel"].focus({ preventScroll: true });
+elements["auth-channel-toggle"].addEventListener("click", () => {
+  authChannelSelectorExpanded = !authChannelSelectorExpanded;
+  renderAuthChannelSelector();
+  if (authChannelSelectorExpanded) elements["auth-channel-selector"].focus({ preventScroll: true });
 });
 elements["restore-external-home-button"].addEventListener("click", () => void restoreExternalCodexHome());
 elements["error-retry-button"].addEventListener("click", () => {

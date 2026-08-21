@@ -61,12 +61,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .active-panel { border-top: 3px solid var(--green); }
 .integration-panel { border-top: 3px solid var(--green); }
 .capability-panel { border-color: #efd99e; background: var(--amber-soft); }
-.workspace-panel {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  box-shadow: none;
-}
+.workspace-panel { border-top: 3px solid var(--green); }
 .setup-panel { scroll-margin-top: 18px; }
 .setup-panel:focus { outline: none; }
 .integration-note { margin: 16px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
@@ -85,6 +80,43 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .setup-message { max-width: none; text-align: left; }
 .section-heading-actions,
 .active-actions { display: flex; align-items: center; gap: 10px; }
+
+.workspace-heading { margin-bottom: 12px; }
+.workspace-note { margin: 0 0 18px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.workspace-summary {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.25fr) minmax(190px, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  background: #fbfcfc;
+}
+.workspace-current-channel,
+.workspace-home { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.field-label { color: var(--muted); font-size: 11px; font-weight: 750; }
+.workspace-current-channel strong { overflow-wrap: anywhere; font-size: 16px; }
+.workspace-current-channel small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.workspace-home code {
+  overflow-wrap: anywhere;
+  color: #394841;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.auth-channel-selector {
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  background: #f7faf8;
+}
+.auth-channel-selector[hidden] { display: none; }
+.auth-channel-selector:focus { outline: none; }
+.selector-heading { margin-bottom: 12px; }
+.selector-heading h3 { margin: 0; font-size: 15px; }
+.selector-heading p { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 
 .status-grid {
   display: grid;
@@ -306,6 +338,8 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .form-actions .button { width: 100%; }
   .setup-action-buttons { width: 100%; flex-direction: column; }
   .operation-steps { grid-template-columns: 1fr; }
+  .workspace-summary { grid-template-columns: 1fr; align-items: stretch; }
+  .workspace-summary > .button { width: 100%; }
 }
 
 @media (max-width: 440px) {

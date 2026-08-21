@@ -1,6 +1,6 @@
 {
   "name": "@baijimu/codex-desktop",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "description": "负责 Codex 桌面安装以及 ChatGPT 与百积木工作区授权档案切换的百积木本地应用。",
   "type": "module",
   "bin": {

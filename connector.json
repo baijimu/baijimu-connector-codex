@@ -2,10 +2,10 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex 桌面管理器",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "description": "安装 Codex 桌面应用，并在共享 .codex 中切换 ChatGPT 与百积木工作区授权。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.4.4"},
+  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.4.5"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
@@ -54,7 +54,7 @@
     }
   ],
   "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex 桌面管理器", "defaultView": true},
-  "releaseNotes": ["恢复并完善 ChatGPT 登录与百积木工作区授权档案的显式选择；没有历史个人凭证时也始终提供 ChatGPT 登录入口。", "启动、状态刷新和旧版本迁移改为只读识别共享 .codex，绝不再把归档工作区凭证或 provider 写回 auth.json、config.toml。", "只有用户明确切换授权档案时才原子更新认证文件和认证配置；会话、历史、技能及其他 Codex 状态继续共享且保持不变。", "从百积木授权切换到 ChatGPT 时移除百积木 provider 选择并使用官方 ChatGPT 登录方式；后续可在两类授权间往返。"],
+  "releaseNotes": ["恢复 Codex 默认工作区层级：工作区固定展示当前认证通道，只有用户展开后才显示 ChatGPT 登录和百积木工作区授权的切换选项。", "Codex 安装状态与默认工作区认证状态改为两个始终独立展示的一级状态，不再因安装阶段或授权档案数量互相隐藏或替代。", "切换认证通道仍然只在用户明确确认后原子更新 auth.json 和 config.toml 中的认证内容；客户端启动、状态刷新和旧版本迁移保持只读。", "会话、历史、技能、Codex Home 和其他环境状态继续由唯一的 Codex 默认工作区共享，不随认证通道切换。"],
   "configSchema": {
     "type": "object",
     "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},

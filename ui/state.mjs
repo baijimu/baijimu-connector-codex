@@ -34,7 +34,7 @@ export function normalizeCredentialState(value) {
     ? input.profiles.map(normalizeProfile).filter(Boolean)
     : [];
   return {
-    activeMode: "baijimu",
+    activeMode: input.activeMode === "chatgpt" ? "chatgpt" : "baijimu",
     currentWorkspaceId: positiveInteger(input.currentWorkspaceId),
     activeWorkspaceId: positiveInteger(input.activeWorkspaceId),
     codexConfigured: input.codexConfigured === true,
@@ -42,14 +42,7 @@ export function normalizeCredentialState(value) {
     activeProfile: normalizeProfile(input.activeProfile),
     profiles,
     workspaces,
-    chatgpt: {
-      available: input.chatgpt?.available !== false,
-      configured: input.chatgpt?.configured === true,
-      authMode: String(input.chatgpt?.authMode || ""),
-      accountId: String(input.chatgpt?.accountId || ""),
-      codexHome: String(input.chatgpt?.codexHome || ""),
-    },
-    originalCodexHome: String(input.originalCodexHome || input.chatgpt?.codexHome || ""),
+    originalCodexHome: String(input.originalCodexHome || ""),
     originalCodexHomeState: {
       captured: input.originalCodexHomeState?.captured === true,
       wasSet: typeof input.originalCodexHomeState?.value === "string",
@@ -78,34 +71,45 @@ export function normalizeCredentialState(value) {
 
 export function normalizeProfile(value) {
   if (!value || typeof value !== "object") return null;
+  const kind = value.kind === "personal" ? "personal" : "baijimu";
   const workspaceId = positiveInteger(value.workspaceId);
-  if (!workspaceId) return null;
+  if (kind === "baijimu" && !workspaceId) return null;
   return {
     profileId: String(value.profileId || ""),
+    kind,
+    name: String(value.name || (kind === "personal" ? "ChatGPT 登录" : value.workspaceName || "")).trim(),
     environment: String(value.environment || "prod"),
     userId: positiveInteger(value.userId),
     clientId: String(value.clientId || ""),
     workspaceId,
-    workspaceName: String(value.workspaceName || `工作区 ${workspaceId}`).trim(),
+    workspaceName: String(value.workspaceName || (workspaceId ? `工作区 ${workspaceId}` : "")).trim(),
     model: String(value.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL,
     activatedAtEpochSeconds: Math.max(0, Number(value.activatedAtEpochSeconds) || 0),
-    codexHome: String(value.codexHome || ""),
     credentialStatus: String(value.credentialStatus || ""),
   };
 }
 
 export function profileBadgeMeta({
   active = false,
-  systemDefault = false,
+  kind = "baijimu",
   disabled = false,
   configured = true,
   credentialStatus = "",
 } = {}) {
   const badges = [];
   if (active) badges.push({ label: "当前", tone: "current" });
-  if (systemDefault) badges.push({ label: "共享 .codex", tone: "default" });
+  badges.push({
+    label: kind === "personal" ? "ChatGPT 登录" : "百积木授权",
+    tone: "default",
+  });
   if (disabled) badges.push({ label: "未授权", tone: "warning" });
   else if (!configured) badges.push({ label: "未初始化", tone: "warning" });
+  else if (credentialStatus === "external") {
+    badges.push({ label: "系统凭据库", tone: "neutral" });
+  }
+  else if (credentialStatus === "login_required") {
+    badges.push({ label: "需登录", tone: "warning" });
+  }
   else if (["missing", "invalid"].includes(credentialStatus)) {
     badges.push({ label: "需重新授权", tone: "danger" });
   }

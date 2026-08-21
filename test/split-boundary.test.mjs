@@ -64,8 +64,8 @@ test("desktop manager neither installs CLI nor exposes invoke routes", async () 
   assert.doesNotMatch(windows, /RouterBaseUrl|New-BaijimuLlmCredential|ConvertTo-CodexConfigContent|Write-CodexConfig|CODEX_LLM_CREDENTIAL_FILE/);
   assert.doesNotMatch(windows, /gpt-5\.6-sol|baijimu-router|base_url\s*=/);
   assert.match(windows, /function Confirm-CodexConfiguration/);
-  assert.match(windows, /Rust 凭证管理器未生成 Codex 授权文件/);
-  assert.match(windows, /Rust 凭证管理器未生成 Codex 配置文件/);
+  assert.match(windows, /Rust 凭证管理器未生成当前 Codex 授权文件/);
+  assert.match(windows, /Rust 凭证管理器未生成当前 Codex 配置文件/);
   assert.doesNotMatch(setup, /CODEX_LLM_CREDENTIAL_FILE|credential-\{unique\}/);
   assert.match(setup, /credential::initialize_workspace_profile\(workspace_id\)/);
   assert.match(setup, /prepared\.credential/);
@@ -148,14 +148,14 @@ test("desktop launch only activates an existing profile and starts the desktop a
   );
   assert.doesNotMatch(launchRoute, /verify_system_compatibility|stop_for_codex_home_switch/);
   assert.match(launchRoute, /stop_for_workspace_switch/);
-  assert.match(launchRoute, /prepare_workspace_activation/);
-  assert.match(launchRoute, /activate_prepared_workspace_profile/);
+  assert.match(launchRoute, /prepare_profile_activation/);
+  assert.match(launchRoute, /activate_prepared_profile/);
   assert.doesNotMatch(
     launchRoute,
     /initialize_workspace_profile|prepare_workspace_reauthorization|create_llm_credential|write_workspace_auth|write_workspace_config/,
   );
   const stopIndex = launchRoute.indexOf("desktop::stop_for_workspace_switch()");
-  const credentialIndex = launchRoute.indexOf("credential::activate_prepared_workspace_profile(&prepared)");
+  const credentialIndex = launchRoute.indexOf("credential::activate_prepared_profile(&prepared)");
   const launchIndex = launchRoute.indexOf("desktop::launch()");
   assert.ok(stopIndex >= 0 && credentialIndex > stopIndex && launchIndex > credentialIndex);
   assert.doesNotMatch(credential, /PERMISSION_MODE_VISIBILITY_KEY|desktop_defaults_version/);
@@ -184,5 +184,22 @@ test("initialization preserves shared state and reauthorization only rotates cre
   assert.match(main, /\/management\/v1\/codex\/initialize/);
   assert.match(main, /\/management\/v1\/codex\/reauthorize/);
   assert.match(app, /label: "重新授权"/);
-  assert.match(app, /label: "初始化"/);
+  assert.match(app, /label: "创建授权档案"/);
+  assert.match(app, /label: loginRequired \? "使用 ChatGPT 登录"/);
+  assert.match(app, /移除百积木 API 授权与 provider 选择/);
+});
+
+test("status reads never reactivate archived workspace credentials", async () => {
+  const [store, credential] = await Promise.all([
+    read("src/credential/store.rs"),
+    read("src/credential.rs"),
+  ]);
+  const loadMetadata = store.slice(
+    store.indexOf("pub(super) fn load_metadata"),
+    store.indexOf("pub(super) fn save_metadata"),
+  );
+  assert.doesNotMatch(loadMetadata, /ensure_workspace_config|sync_credential_to_shared_home|commit_shared_home_ownership/);
+  assert.match(loadMetadata, /reconcile_active_profile_from_shared_home/);
+  assert.match(credential, /credential_status: "login_required"/);
+  assert.match(credential, /forced_login_method: Some\("chatgpt"\.to_string\(\)\)/);
 });

@@ -81,7 +81,8 @@ function renderContentVisibility() {
   const hasAuthorizedWorkspace = credentialState?.workspaces?.some(
     (workspace) => workspace.authorized,
   );
-  elements["management-workspace-panel"].hidden = !capability.available && !hasAuthorizedWorkspace;
+  const hasProfile = (credentialState?.profiles?.length || 0) > 0;
+  elements["management-workspace-panel"].hidden = !capability.available && !hasAuthorizedWorkspace && !hasProfile;
   elements["integration-unavailable-panel"].hidden = capability.available;
 }
 
@@ -144,47 +145,59 @@ function profileRow({ title, badges, active, disabled, actions }) {
 
 function authProfiles() {
   const state = credentialState;
-  const profiles = [];
-  for (const workspace of state?.workspaces || []) {
-    const profile = state.profiles.find((item) => item.workspaceId === workspace.workspaceId);
-    const active = state.activeMode === "baijimu" && state.activeWorkspaceId === workspace.workspaceId;
-    const usesDefaultHome = profile?.codexHome
-      && profile.codexHome === state.originalCodexHome;
-    const needsReauthorization = workspace.configured
-      && !["configured", "verified"].includes(profile?.credentialStatus);
-    const request = { mode: "baijimu", workspaceId: workspace.workspaceId };
-    const actions = workspace.configured
-      ? [
-          {
-            label: "重新授权",
-            tone: "secondary",
-            onClick: () => reauthorizeWorkspace(workspace.workspaceId),
-          },
-          {
-            label: active ? "重启" : "启动",
-            tone: active ? "secondary" : "primary",
-            disabled: needsReauthorization,
-            onClick: () => openAuthSwitchModal(request),
-          },
-        ]
-      : [{
-          label: "初始化",
-          tone: "primary",
-          onClick: () => initializeWorkspace(workspace.workspaceId),
-        }];
-    profiles.push({
-      key: `workspace-${workspace.workspaceId}`,
-      title: `${workspace.name || `工作区 ${workspace.workspaceId}`}（${workspace.workspaceId}）`,
+  const profiles = (state?.profiles || []).map((profile) => {
+    const active = state.activeProfile?.profileId === profile.profileId;
+    const workspace = profile.kind === "baijimu"
+      ? state.workspaces.find((item) => item.workspaceId === profile.workspaceId)
+      : null;
+    const needsReauthorization = profile.kind === "baijimu"
+      && !["configured", "verified"].includes(profile.credentialStatus);
+    const loginRequired = profile.kind === "personal"
+      && profile.credentialStatus === "login_required";
+    const actions = [];
+    if (profile.kind === "baijimu" && workspace?.authorized) {
+      actions.push({
+        label: "重新授权",
+        tone: "secondary",
+        onClick: () => reauthorizeWorkspace(profile.workspaceId),
+      });
+    }
+    actions.push({
+      label: loginRequired ? "使用 ChatGPT 登录" : active ? "重启" : "切换并启动",
+      tone: active ? "secondary" : "primary",
+      disabled: needsReauthorization,
+      onClick: () => openAuthSwitchModal({ authProfileId: profile.profileId }),
+    });
+    return {
+      key: profile.profileId,
+      title: profile.kind === "baijimu"
+        ? `${profile.name || profile.workspaceName}（工作区 ${profile.workspaceId}）`
+        : profile.name,
       badges: profileBadgeMeta({
         active,
-        systemDefault: usesDefaultHome,
-        disabled: !workspace.authorized,
-        configured: workspace.configured,
-        credentialStatus: profile?.credentialStatus,
+        kind: profile.kind,
+        disabled: false,
+        configured: !needsReauthorization,
+        credentialStatus: profile.credentialStatus,
       }),
       active,
-      disabled: !workspace.authorized,
+      disabled: false,
       actions,
+    };
+  });
+  for (const workspace of state?.workspaces || []) {
+    if (!workspace.authorized || workspace.configured) continue;
+    profiles.push({
+      key: `workspace-source-${workspace.workspaceId}`,
+      title: `${workspace.name || `工作区 ${workspace.workspaceId}`}（工作区 ${workspace.workspaceId}）`,
+      badges: profileBadgeMeta({ configured: false }),
+      active: false,
+      disabled: false,
+      actions: [{
+        label: "创建授权档案",
+        tone: "primary",
+        onClick: () => initializeWorkspace(workspace.workspaceId),
+      }],
     });
   }
   return profiles.sort((left, right) => {
@@ -203,7 +216,7 @@ function renderAuthProfiles() {
   if (!list.children.length) {
     const empty = document.createElement("div");
     empty.className = "empty-state";
-    empty.textContent = "没有可用的 Codex 环境。";
+    empty.textContent = "没有可用的授权档案。完成个人登录或百积木工作区授权后即可创建。";
     list.append(empty);
   }
 }
@@ -224,15 +237,22 @@ function renderCredentialState() {
 }
 
 function codexLaunchCopy(request) {
-  const workspace = credentialState?.workspaces?.find(
-    (item) => item.workspaceId === Number(request.workspaceId),
+  const profile = credentialState?.profiles?.find(
+    (item) => item.profileId === request.authProfileId,
   );
-  const name = workspace?.name
-    ? `${workspace.name}（${workspace.workspaceId}）`
-    : `工作区 ${request.workspaceId}`;
+  const name = profile?.kind === "baijimu"
+    ? `${profile.name || profile.workspaceName}（工作区 ${profile.workspaceId}）`
+    : "ChatGPT 登录";
+  if (profile?.kind === "personal" && profile.credentialStatus === "login_required") {
+    return {
+      title: "使用 ChatGPT 登录启动 Codex",
+      message: "将关闭当前 Codex，保存当前工作区授权档案，移除百积木 API 授权与 provider 选择，再以官方 ChatGPT 登录方式启动 Codex。会话、历史记录和其他状态不会切换或移动。",
+      progress: "正在切换到 ChatGPT 登录并启动 Codex…",
+    };
+  }
   return {
     title: `使用${name}启动 Codex`,
-    message: `将关闭当前 Codex，把“${name}”的凭证原子写入共享 .codex 后重新启动。会话、历史记录和其他状态不会切换或移动。`,
+    message: `将关闭当前 Codex，保存当前档案可能已刷新的授权，再把“${name}”的授权与认证配置原子写入固定 .codex 后重新启动。会话、历史记录和其他状态不会切换或移动。`,
     progress: `正在切换到${name}的凭证并启动 Codex…`,
   };
 }
@@ -271,7 +291,7 @@ async function launchCodex(request, progressMessage) {
     renderCredentialState();
     setMessage(
       "message",
-      "已切换到所选百积木工作区并提交 Codex 启动请求。",
+      "已切换到所选授权档案并提交 Codex 启动请求。",
     );
   } catch (error) {
     const message = errorMessage(error);
@@ -292,7 +312,7 @@ async function initializeWorkspace(workspaceId) {
   try {
     setupState = await invokeManagement("initializeWorkspace", { workspaceId });
     renderSetupState();
-    setMessage("message", `已开始初始化工作区 ${workspaceId}；会保留共享 .codex 中的会话和非百积木配置。`);
+    setMessage("message", `已开始为工作区 ${workspaceId} 创建授权档案；当前 Codex 登录、会话和非认证配置保持不变。`);
     void monitorSetup();
   } catch (error) {
     setAccountBusy(false);

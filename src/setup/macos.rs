@@ -117,7 +117,7 @@ impl<'a> MacosInstaller<'a> {
         self.progress.set_step(
             5,
             InstallerStepState::Running,
-            "正在创建百积木 LLM 凭证并写入 Codex 配置",
+            "正在创建百积木 LLM 凭证授权档案",
             None,
             None,
         )?;
@@ -128,12 +128,16 @@ impl<'a> MacosInstaller<'a> {
         let profile_home = PathBuf::from(&prepared.profile.codex_home);
         self.result.codex_home = profile_home.display().to_string();
         self.result.llm_credential_created = true;
-        self.result.config_written = true;
-        self.result.auth_written = true;
+        self.result.config_written = auto_activate;
+        self.result.auth_written = auto_activate;
         self.progress.set_step(
             5,
             InstallerStepState::Completed,
-            "已使用百积木 LLM 凭证写入 Codex 配置",
+            if auto_activate {
+                "已创建并激活百积木授权档案"
+            } else {
+                "已创建百积木授权档案，当前 Codex 登录保持不变"
+            },
             None,
             None,
         )?;
@@ -149,7 +153,7 @@ impl<'a> MacosInstaller<'a> {
         self.progress.set_step(
             7,
             InstallerStepState::Running,
-            "正在提交工作区档案并启动桌面应用",
+            "正在提交授权档案并按需启动桌面应用",
             None,
             None,
         )?;

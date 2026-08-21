@@ -13,22 +13,39 @@ pub enum AuthMode {
     Baijimu,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthProfileKind {
+    Personal,
+    #[default]
+    Baijimu,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialProfile {
     #[serde(default)]
     pub profile_id: String,
+    #[serde(default)]
+    pub kind: AuthProfileKind,
+    #[serde(default)]
+    pub name: String,
     #[serde(default = "default_environment")]
     pub environment: String,
     #[serde(default)]
     pub user_id: Option<u64>,
     #[serde(default)]
     pub client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub workspace_id: u64,
     pub workspace_name: String,
     pub model: String,
     pub activated_at_epoch_seconds: u64,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub codex_home: String,
     #[serde(default)]
     pub credential_status: String,
@@ -46,16 +63,6 @@ pub struct WorkspaceOption {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ChatGptProfileState {
-    pub available: bool,
-    pub configured: bool,
-    pub auth_mode: Option<String>,
-    pub account_id: Option<String>,
-    pub codex_home: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct CredentialManagerState {
     pub active_mode: AuthMode,
     pub current_workspace_id: Option<u64>,
@@ -65,7 +72,6 @@ pub struct CredentialManagerState {
     pub active_profile: Option<CredentialProfile>,
     pub profiles: Vec<CredentialProfile>,
     pub workspaces: Vec<WorkspaceOption>,
-    pub chatgpt: ChatGptProfileState,
     pub discovery_warning: Option<String>,
     pub original_codex_home_state: OriginalCodexHomeState,
     pub original_codex_home: String,

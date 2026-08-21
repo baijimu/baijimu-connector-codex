@@ -17,7 +17,7 @@ pub(super) fn load_metadata() -> Result<CredentialMetadata> {
     } else {
         CredentialMetadata::default()
     };
-    let previous_version = metadata.version;
+    let previous_version = source.as_ref().map(|_| metadata.version).unwrap_or(0);
     let needs_version_migration = previous_version < METADATA_VERSION;
     for profile in &mut metadata.profiles {
         normalize_profile(profile);
@@ -36,24 +36,21 @@ pub(super) fn load_metadata() -> Result<CredentialMetadata> {
         }
     }
     let baseline_captured = capture_original_codex_home(&mut metadata)?;
-    if !metadata.profiles.is_empty() {
-        metadata.active_mode = AuthMode::Baijimu;
-    }
+    let original_auth_captured = capture_original_auth_profile(&mut metadata)?;
+    let chatgpt_profile_created = ensure_chatgpt_profile(&mut metadata)?;
+    // Migration and status reads must never reactivate archived credentials into
+    // the shared Codex home. They only reconcile connector metadata to live files.
+    let active_profile_reconciled = reconcile_active_profile_from_shared_home(&mut metadata)?;
     metadata.version = METADATA_VERSION;
     if source.as_ref() != Some(&path)
         || needs_version_migration
         || baseline_captured
         || legacy_profile_homes_migrated
+        || original_auth_captured
+        || chatgpt_profile_created
+        || active_profile_reconciled
     {
         save_metadata(&metadata)?;
-    }
-    if let Some(profile) = metadata.active_profile_id.as_deref().and_then(|id| {
-        metadata
-            .profiles
-            .iter()
-            .find(|profile| profile.profile_id == id)
-    }) {
-        sync_profile_to_shared_home(profile)?;
     }
     if remove_after_import {
         let source = source.expect("legacy source exists when cleanup is requested");

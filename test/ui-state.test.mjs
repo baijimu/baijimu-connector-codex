@@ -13,7 +13,7 @@ test("workspace rows expose only compact status badges", () => {
     profileBadgeMeta({ active: true, systemDefault: true }),
     [
       { label: "当前", tone: "current" },
-      { label: "系统默认", tone: "default" },
+      { label: "共享 .codex", tone: "default" },
     ],
   );
   assert.deepEqual(

@@ -30,7 +30,7 @@ pub fn restore_codex_home(value: Option<&Path>) -> Result<CodexHomeRestore> {
     Ok(CodexHomeRestore {
         previous,
         current,
-        environment_broadcast: platform::broadcast_environment_change()?,
+        environment_broadcast: false,
     })
 }
 
@@ -44,10 +44,6 @@ fn display_optional(value: Option<&Path>) -> String {
 mod platform {
     use super::*;
     use anyhow::Context;
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
-    };
     use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
     use winreg::RegKey;
 
@@ -85,29 +81,6 @@ mod platform {
             },
         }
     }
-
-    pub fn broadcast_environment_change() -> Result<bool> {
-        let environment = std::ffi::OsStr::new("Environment")
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect::<Vec<_>>();
-        let mut result = 0usize;
-        let sent = unsafe {
-            SendMessageTimeoutW(
-                HWND_BROADCAST,
-                WM_SETTINGCHANGE,
-                0,
-                environment.as_ptr() as isize,
-                SMTO_ABORTIFHUNG,
-                5_000,
-                &mut result,
-            )
-        };
-        if sent == 0 {
-            anyhow::bail!("用户级 CODEX_HOME 已恢复，但广播 WM_SETTINGCHANGE 失败")
-        }
-        Ok(true)
-    }
 }
 
 #[cfg(any(not(windows), test))]
@@ -124,10 +97,6 @@ mod platform {
             None => std::env::remove_var("CODEX_HOME"),
         }
         Ok(())
-    }
-
-    pub fn broadcast_environment_change() -> Result<bool> {
-        Ok(false)
     }
 }
 

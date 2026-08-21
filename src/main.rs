@@ -20,7 +20,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -282,29 +282,18 @@ fn initialize_server() -> Result<(), String> {
         return Ok(());
     };
     let desktop_switch = if migration.active_home_before.is_some() {
-        desktop::stop_for_codex_home_switch()
+        desktop::stop_for_workspace_switch()
             .map_err(|error| format!("迁移旧版 Codex 档案前停止桌面应用失败: {error}"))?
     } else {
         desktop::DesktopSwitch::default()
     };
     match credential::state() {
-        Ok(state) => desktop_switch
-            .restart_if_needed(Path::new(&state.active_codex_home))
+        Ok(_) => desktop_switch
+            .restart_if_needed()
             .map(|_| ())
             .map_err(|error| format!("旧版 Codex 档案迁移完成，但桌面应用重启失败: {error}")),
         Err(error) => {
-            let recovery_home = migration
-                .active_home_before
-                .as_deref()
-                .filter(|path| path.exists())
-                .or_else(|| {
-                    migration
-                        .active_home_after
-                        .as_deref()
-                        .filter(|path| path.exists())
-                });
-            let restart_error =
-                recovery_home.and_then(|path| desktop_switch.restart_if_needed(path).err());
+            let restart_error = desktop_switch.restart_if_needed().err();
             let mut message = format!("迁移旧版 Codex 档案失败: {error}");
             if let Some(restart_error) = restart_error {
                 message.push_str(&format!("；恢复桌面应用失败: {restart_error}"));
@@ -522,8 +511,36 @@ fn handle_management(
                 .and_then(Value::as_u64)
                 .filter(|value| *value > 0)
                 .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?;
-            credential::reauthorize_workspace_profile(workspace_id)
+            let active = credential::state()
+                .map_err(|error| HttpError::internal(error.to_string()))?
+                .active_workspace_id
+                == Some(workspace_id);
+            let prepared = credential::prepare_workspace_reauthorization(workspace_id)
                 .map_err(|error| HttpError::new(409, error.to_string()))?;
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            let desktop_switch = if active && !test_control_enabled() {
+                Some(
+                    desktop::stop_for_workspace_switch()
+                        .map_err(desktop_compatibility_http_error)?,
+                )
+            } else {
+                None
+            };
+            if let Err(error) = credential::commit_workspace_reauthorization(prepared) {
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                if let Some(desktop_switch) = desktop_switch {
+                    desktop_switch
+                        .restart_if_needed()
+                        .map_err(desktop_compatibility_http_error)?;
+                }
+                return Err(HttpError::new(409, error.to_string()));
+            }
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            if let Some(desktop_switch) = desktop_switch {
+                desktop_switch
+                    .restart_if_needed()
+                    .map_err(desktop_compatibility_http_error)?;
+            }
             serde_json::to_value(
                 credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
             )
@@ -544,26 +561,41 @@ fn handle_management(
                 .get("mode")
                 .and_then(Value::as_str)
                 .ok_or_else(|| HttpError::new(400, "必须提供 mode"))?;
-            let selected_home = match mode {
-                "chatgpt" => credential::activate_chatgpt_profile(),
-                "baijimu" => {
-                    let workspace_id = body
-                        .get("workspaceId")
-                        .and_then(Value::as_u64)
-                        .filter(|value| *value > 0)
-                        .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?;
-                    credential::activate_workspace_profile(workspace_id)
-                        .map(|profile| PathBuf::from(profile.codex_home))
-                }
-                _ => return Err(HttpError::new(400, "mode 必须是 chatgpt 或 baijimu")),
+            if mode != "baijimu" {
+                return Err(HttpError::new(
+                    400,
+                    "安装后默认 .codex 由百积木管理，mode 只允许 baijimu",
+                ));
             }
-            .map_err(|error| HttpError::new(409, error.to_string()))?;
+            let workspace_id = body
+                .get("workspaceId")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0)
+                .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?;
+            let prepared = credential::prepare_workspace_activation(workspace_id)
+                .map_err(|error| HttpError::new(409, error.to_string()))?;
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            let desktop_switch = if !test_control_enabled() {
+                Some(
+                    desktop::stop_for_workspace_switch()
+                        .map_err(desktop_compatibility_http_error)?,
+                )
+            } else {
+                None
+            };
+            if let Err(error) = credential::activate_prepared_workspace_profile(&prepared) {
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                if let Some(desktop_switch) = desktop_switch {
+                    desktop_switch
+                        .restart_if_needed()
+                        .map_err(desktop_compatibility_http_error)?;
+                }
+                return Err(HttpError::new(409, error.to_string()));
+            }
             if !test_control_enabled() {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
-                desktop::launch(&selected_home).map_err(desktop_compatibility_http_error)?;
+                desktop::launch().map_err(desktop_compatibility_http_error)?;
             }
-            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-            let _ = selected_home;
             serde_json::to_value(
                 credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
             )

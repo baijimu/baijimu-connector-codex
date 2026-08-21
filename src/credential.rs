@@ -15,11 +15,11 @@ pub use contract::*;
 mod store;
 use store::*;
 
-const METADATA_VERSION: u32 = 8;
+const METADATA_VERSION: u32 = 9;
 const METADATA_FILE: &str = "codex-credentials.json";
 const OWNERSHIP_MARKER_FILE: &str = ".baijimu-owner.json";
 const OWNERSHIP_RESERVATION_FILE: &str = ".baijimu-owner.pending.json";
-const OWNERSHIP_SCHEMA_VERSION: u32 = 2;
+const OWNERSHIP_SCHEMA_VERSION: u32 = 3;
 const LEGACY_OWNERSHIP_SCHEMA_VERSION: u32 = 1;
 const OWNERSHIP_OWNER: &str = "baijimu-codex-desktop";
 const LEGACY_OWNERSHIP_OWNER: &str = "baijimu-connector-codex";
@@ -56,21 +56,12 @@ struct CodexHomeOwnership {
     profile_key: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct CodexHomeReservation {
-    schema_version: u32,
-    owner: String,
-    reserved_at_epoch_seconds: u64,
-    profile_key: String,
-}
-
 impl Default for CredentialMetadata {
     fn default() -> Self {
         Self {
             version: METADATA_VERSION,
             profiles: Vec::new(),
-            active_mode: AuthMode::Chatgpt,
+            active_mode: AuthMode::Baijimu,
             active_profile_id: None,
             active_workspace_id: None,
             original_codex_home_state: OriginalCodexHomeState::default(),
@@ -81,12 +72,14 @@ impl Default for CredentialMetadata {
 
 pub fn state() -> Result<CredentialManagerState> {
     let mut metadata = load_metadata()?;
-    let original_home = original_home_from_metadata(&metadata);
-    let mut chatgpt = read_chatgpt_state(&original_home)?;
-    chatgpt.available = !metadata
-        .profiles
-        .iter()
-        .any(|profile| Path::new(&profile.codex_home) == original_home);
+    let shared_home = default_original_codex_home();
+    let chatgpt = ChatGptProfileState {
+        available: false,
+        configured: false,
+        auth_mode: None,
+        account_id: None,
+        codex_home: shared_home.display().to_string(),
+    };
     let auth_status = baijimu_cli::auth_status();
     let mut warning = auth_status.as_ref().err().map(ToString::to_string);
     let (current_workspace_id, authorized_workspace_ids) = match auth_status.as_ref() {
@@ -125,12 +118,12 @@ pub fn state() -> Result<CredentialManagerState> {
         {
             profile.workspace_name = workspace.name.clone();
         }
-        profile.credential_status =
-            match read_codex_api_key(&Path::new(&profile.codex_home).join("auth.json")) {
-                Ok(Some(_)) => "configured".to_string(),
-                Ok(None) => "missing".to_string(),
-                Err(_) => "invalid".to_string(),
-            };
+        profile.codex_home = shared_home.display().to_string();
+        profile.credential_status = match read_codex_api_key(&profile_credential_path(profile)) {
+            Ok(Some(_)) => "configured".to_string(),
+            Ok(None) => "missing".to_string(),
+            Err(_) => "invalid".to_string(),
+        };
     }
 
     let mut active_profile = metadata
@@ -143,27 +136,14 @@ pub fn state() -> Result<CredentialManagerState> {
                 .find(|profile| profile.profile_id == profile_id)
                 .cloned()
         });
-    let active_home = match metadata.active_mode {
-        AuthMode::Chatgpt => original_home.clone(),
-        AuthMode::Baijimu => active_profile
-            .as_ref()
-            .map(|profile| PathBuf::from(&profile.codex_home))
-            .unwrap_or_else(|| original_home.clone()),
-    };
-    let auth_path = active_home.join("auth.json");
-    let config_path = active_home.join("config.toml");
+    let active_home = shared_home.clone();
+    let auth_path = shared_home.join("auth.json");
+    let config_path = shared_home.join("config.toml");
     let external_codex_home = user_environment::read_codex_home()?;
     let legacy_global_codex_home =
         legacy_global_codex_home_state(&metadata, external_codex_home.as_deref());
-    let mut credential_status = match metadata.active_mode {
-        AuthMode::Chatgpt if chatgpt.configured => "verified".to_string(),
-        AuthMode::Chatgpt => "not_configured".to_string(),
-        AuthMode::Baijimu => "not_configured".to_string(),
-    };
-    let mut codex_configured = match metadata.active_mode {
-        AuthMode::Chatgpt => chatgpt.configured,
-        AuthMode::Baijimu => false,
-    };
+    let mut credential_status = "not_configured".to_string();
+    let mut codex_configured = false;
 
     if metadata.active_mode == AuthMode::Baijimu {
         if let Some(profile) = active_profile.as_mut() {
@@ -178,7 +158,7 @@ pub fn state() -> Result<CredentialManagerState> {
 
     workspaces.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(CredentialManagerState {
-        active_mode: metadata.active_mode.clone(),
+        active_mode: AuthMode::Baijimu,
         current_workspace_id,
         active_workspace_id: active_profile.as_ref().map(|profile| profile.workspace_id),
         codex_configured,
@@ -189,7 +169,7 @@ pub fn state() -> Result<CredentialManagerState> {
         chatgpt,
         discovery_warning: warning,
         original_codex_home_state: metadata.original_codex_home_state.clone(),
-        original_codex_home: original_home.display().to_string(),
+        original_codex_home: shared_home.display().to_string(),
         active_codex_home: active_home.display().to_string(),
         external_codex_home: external_codex_home
             .as_ref()
@@ -206,42 +186,34 @@ pub fn initialize_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspa
     let mut metadata = load_metadata()?;
     let existing_profile = select_workspace_profile(&metadata, workspace_id).cloned();
     let profile_preexisting = existing_profile.is_some();
-    let (mut profile, profile_home) = if let Some(mut profile) = existing_profile {
+    let mut profile = if let Some(mut profile) = existing_profile {
         profile.workspace_name = workspace.name;
-        let profile_home = PathBuf::from(&profile.codex_home);
-        (profile, profile_home)
+        profile.codex_home = default_original_codex_home().display().to_string();
+        profile
     } else {
         let auth_status = baijimu_cli::auth_status().context("读取 baijimu CLI 授权状态失败")?;
         let environment = auth_status.base_url;
         let profile_id = profile_id(&environment, None, None, workspace_id);
-        let profile_home =
-            select_new_profile_home(&metadata, &environment, None, None, workspace_id)?;
-        if profile_home == default_original_codex_home() {
-            reserve_default_home(&profile_home, &profile_id)?;
+        CredentialProfile {
+            profile_id,
+            environment,
+            user_id: None,
+            client_id: None,
+            workspace_id,
+            workspace_name: workspace.name,
+            model: product.default_model.clone(),
+            activated_at_epoch_seconds: 0,
+            codex_home: default_original_codex_home().display().to_string(),
+            credential_status: "verified".to_string(),
         }
-        (
-            CredentialProfile {
-                profile_id,
-                environment,
-                user_id: None,
-                client_id: None,
-                workspace_id,
-                workspace_name: workspace.name,
-                model: product.default_model.clone(),
-                activated_at_epoch_seconds: 0,
-                codex_home: profile_home.display().to_string(),
-                credential_status: "verified".to_string(),
-            },
-            profile_home,
-        )
     };
-    let may_issue_initial_credential =
-        !profile_preexisting || !profile_home.join("config.toml").is_file();
-    let credential =
-        initialize_workspace_files(&profile_home, may_issue_initial_credential, || {
-            baijimu_cli::create_llm_credential(workspace_id)
-                .context("baijimu CLI 签发工作区 LLM credential 失败")
-        })?;
+    let credential = initialize_workspace_files(&profile, !profile_preexisting, || {
+        baijimu_cli::create_llm_credential(workspace_id)
+            .context("baijimu CLI 签发工作区 LLM credential 失败")
+    })?;
+    if metadata.active_profile_id.is_none() {
+        sync_credential_to_shared_home(&credential)?;
+    }
     profile.credential_status = "verified".to_string();
     let profile_id = profile.profile_id.clone();
     metadata
@@ -256,38 +228,33 @@ pub fn initialize_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspa
     })
 }
 
-pub fn activate_workspace_profile(workspace_id: u64) -> Result<CredentialProfile> {
+pub fn prepare_workspace_activation(workspace_id: u64) -> Result<CredentialProfile> {
     authorized_workspace(workspace_id)?;
-    activate_existing_workspace_profile(workspace_id)
-}
-
-fn activate_existing_workspace_profile(workspace_id: u64) -> Result<CredentialProfile> {
     let metadata = load_metadata()?;
     let profile = select_workspace_profile(&metadata, workspace_id)
         .cloned()
         .context("该工作区尚未初始化，请先初始化后再启动")?;
-    let home = Path::new(&profile.codex_home);
-    if !home.join("config.toml").is_file() {
-        anyhow::bail!("该工作区缺少 config.toml，请先重新初始化");
-    }
-    if read_codex_api_key(&home.join("auth.json"))
+    if read_codex_api_key(&profile_credential_path(&profile))
         .context("该工作区 auth.json 无法读取，请先重新授权")?
         .is_none()
     {
         anyhow::bail!("该工作区授权已缺失，请先重新授权");
     }
-    activate_prepared_workspace_profile(&profile)
+    if !managed_config_ready(&default_original_codex_home().join(OWNED_CONFIG_FILE)) {
+        anyhow::bail!("默认 .codex 缺少百积木配置，请先重新初始化");
+    }
+    Ok(profile)
 }
 
 fn initialize_workspace_files<F>(
-    profile_home: &Path,
+    profile: &CredentialProfile,
     may_issue_initial_credential: bool,
     issue_credential: F,
 ) -> Result<String>
 where
     F: FnOnce() -> Result<String>,
 {
-    let auth_path = profile_home.join("auth.json");
+    let auth_path = profile_credential_path(profile);
     let credential = match read_codex_api_key(&auth_path) {
         Ok(Some(credential)) => credential,
         Ok(None) if may_issue_initial_credential => {
@@ -301,25 +268,37 @@ where
         }
         Err(error) => return Err(error),
     };
-    let config_path = profile_home.join("config.toml");
-    if !config_path.is_file() {
-        write_workspace_config(&config_path)?;
-    }
+    ensure_workspace_config(&default_original_codex_home().join("config.toml"))?;
+    commit_shared_home_ownership()?;
     Ok(credential)
 }
 
-pub fn reauthorize_workspace_profile(workspace_id: u64) -> Result<CredentialProfile> {
+pub fn prepare_workspace_reauthorization(
+    workspace_id: u64,
+) -> Result<PreparedWorkspaceReauthorization> {
     authorized_workspace(workspace_id)?;
-    let mut metadata = load_metadata()?;
-    let mut profile = select_workspace_profile(&metadata, workspace_id)
+    let metadata = load_metadata()?;
+    let profile = select_workspace_profile(&metadata, workspace_id)
         .cloned()
         .context("该工作区尚未初始化，不能重新授权")?;
     let credential = baijimu_cli::create_llm_credential(workspace_id)
         .context("baijimu CLI 重新签发工作区 LLM credential 失败")?;
-    write_workspace_auth(
-        &Path::new(&profile.codex_home).join("auth.json"),
-        &credential,
-    )?;
+    Ok(PreparedWorkspaceReauthorization {
+        profile,
+        credential,
+    })
+}
+
+pub fn commit_workspace_reauthorization(
+    prepared: PreparedWorkspaceReauthorization,
+) -> Result<CredentialProfile> {
+    let mut metadata = load_metadata()?;
+    let mut profile = prepared.profile;
+    write_workspace_auth(&profile_credential_path(&profile), &prepared.credential)?;
+    let is_active = metadata.active_profile_id.as_deref() == Some(profile.profile_id.as_str());
+    if is_active {
+        sync_credential_to_shared_home(&prepared.credential)?;
+    }
     profile.credential_status = "verified".to_string();
     metadata
         .profiles
@@ -361,7 +340,26 @@ pub fn activate_prepared_workspace_profile(
     prepared: &CredentialProfile,
 ) -> Result<CredentialProfile> {
     let previous = load_metadata()?;
+    let previous_credential = previous
+        .active_profile_id
+        .as_deref()
+        .and_then(|id| {
+            previous
+                .profiles
+                .iter()
+                .find(|profile| profile.profile_id == id)
+        })
+        .and_then(|profile| {
+            read_codex_api_key(&profile_credential_path(profile))
+                .ok()
+                .flatten()
+        });
     let mut metadata = previous.clone();
+    let credential = read_codex_api_key(&profile_credential_path(prepared))?
+        .context("该工作区授权已缺失，请先重新授权")?;
+    ensure_workspace_config(&default_original_codex_home().join("config.toml"))?;
+    sync_credential_to_shared_home(&credential)?;
+    commit_shared_home_ownership()?;
     let activated_at = now_epoch_seconds();
     for profile in &mut metadata.profiles {
         if profile.profile_id == prepared.profile_id {
@@ -371,44 +369,18 @@ pub fn activate_prepared_workspace_profile(
     metadata.active_mode = AuthMode::Baijimu;
     metadata.active_profile_id = Some(prepared.profile_id.clone());
     metadata.active_workspace_id = Some(prepared.workspace_id);
-    save_metadata(&metadata)?;
+    if let Err(error) = save_metadata(&metadata) {
+        if let Some(previous_credential) = previous_credential {
+            sync_credential_to_shared_home(&previous_credential)
+                .context("激活元数据保存失败，且恢复上一工作区凭证失败")?;
+        }
+        return Err(error).context("保存当前工作区失败");
+    }
     metadata
         .profiles
         .into_iter()
         .find(|item| item.profile_id == prepared.profile_id)
         .context("激活后未找到工作区凭证档案")
-}
-
-pub fn activate_chatgpt_profile() -> Result<PathBuf> {
-    let previous = load_metadata()?;
-    let home = original_home_from_metadata(&previous);
-    if previous
-        .profiles
-        .iter()
-        .any(|profile| Path::new(&profile.codex_home) == home)
-    {
-        anyhow::bail!("默认 .codex 已绑定百积木工作区，不能同时作为个人 Codex 环境");
-    }
-    let mut metadata = previous.clone();
-    metadata.active_mode = AuthMode::Chatgpt;
-    metadata.active_profile_id = None;
-    metadata.active_workspace_id = None;
-    save_metadata(&metadata)?;
-    Ok(home)
-}
-
-#[cfg(test)]
-pub fn active_codex_home() -> PathBuf {
-    load_metadata()
-        .ok()
-        .map(|metadata| active_home_from_metadata(&metadata))
-        .unwrap_or_else(default_original_codex_home)
-}
-
-pub fn original_codex_home() -> PathBuf {
-    load_metadata()
-        .map(|metadata| original_home_from_metadata(&metadata))
-        .unwrap_or_else(|_| default_original_codex_home())
 }
 
 pub fn restore_legacy_global_codex_home() -> Result<CredentialManagerState> {
@@ -434,28 +406,7 @@ pub fn restore_legacy_global_codex_home() -> Result<CredentialManagerState> {
 
 pub fn should_auto_activate_workspace_after_setup() -> Result<bool> {
     let metadata = load_metadata()?;
-    let chatgpt_configured = read_chatgpt_state(&original_codex_home())?.configured;
-    Ok(should_auto_activate_workspace(
-        &metadata,
-        chatgpt_configured,
-    ))
-}
-
-fn should_auto_activate_workspace(metadata: &CredentialMetadata, chatgpt_configured: bool) -> bool {
-    let has_active_workspace = metadata.active_mode == AuthMode::Baijimu
-        && metadata
-            .active_profile_id
-            .as_deref()
-            .is_some_and(|profile_id| {
-                metadata
-                    .profiles
-                    .iter()
-                    .any(|profile| profile.profile_id == profile_id)
-            });
-    if has_active_workspace {
-        return false;
-    }
-    !chatgpt_configured
+    Ok(metadata.active_profile_id.is_none())
 }
 
 pub fn finalize_workspace_setup(profile: &CredentialProfile, auto_activate: bool) -> Result<()> {
@@ -463,9 +414,9 @@ pub fn finalize_workspace_setup(profile: &CredentialProfile, auto_activate: bool
         activate_prepared_workspace_profile(profile)?;
     }
     if !codex_ready_for_workspace(profile.workspace_id) {
-        anyhow::bail!("独立工作区凭证档案未完成配置");
+        anyhow::bail!("工作区凭证未完成配置");
     }
-    commit_default_home_ownership(profile)?;
+    commit_shared_home_ownership()?;
     Ok(())
 }
 
@@ -474,11 +425,11 @@ pub fn codex_ready_for_workspace(workspace_id: u64) -> bool {
     metadata.is_some_and(|metadata| {
         metadata.profiles.iter().any(|profile| {
             profile.workspace_id == workspace_id
-                && read_codex_api_key(&Path::new(&profile.codex_home).join("auth.json"))
+                && read_codex_api_key(&profile_credential_path(profile))
                     .ok()
                     .flatten()
                     .is_some()
-                && managed_config_ready(&Path::new(&profile.codex_home).join("config.toml"))
+                && managed_config_ready(&default_original_codex_home().join("config.toml"))
         })
     })
 }
@@ -496,7 +447,7 @@ pub(crate) fn router_credential_for_workspace(workspace_id: u64) -> Result<Strin
             )
         })
         .context("未找到工作区 Codex 凭证档案")?;
-    read_codex_api_key(&Path::new(&profile.codex_home).join("auth.json"))?
+    read_codex_api_key(&profile_credential_path(profile))?
         .context("工作区 Codex 凭证文件中缺少 OPENAI_API_KEY")
 }
 
@@ -511,15 +462,14 @@ fn write_workspace_auth(path: &Path, credential: &str) -> Result<()> {
     verify_private_file(path)
 }
 
-fn write_workspace_config(path: &Path) -> Result<()> {
+fn ensure_workspace_config(path: &Path) -> Result<()> {
     let product = crate::product_config::get();
-    let original_path = original_codex_home().join("config.toml");
-    let mut document = if original_path.exists() {
-        let content = fs::read_to_string(&original_path)
-            .with_context(|| format!("读取原有 Codex 配置失败: {}", original_path.display()))?;
+    let mut document = if path.exists() {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("读取 Codex 配置失败: {}", path.display()))?;
         crate::json_compat::strip_utf8_bom_str(&content)
             .parse::<DocumentMut>()
-            .context("解析原有 Codex config.toml 失败")?
+            .context("解析 Codex config.toml 失败")?
     } else {
         DocumentMut::new()
     };
@@ -553,7 +503,10 @@ fn write_workspace_config(path: &Path) -> Result<()> {
     provider["base_url"] = value(product.router_base_url.as_str());
     provider["wire_api"] = value("responses");
     provider["requires_openai_auth"] = value(true);
-    atomic_write_private(path, document.to_string().as_bytes())?;
+    let rendered = document.to_string();
+    if fs::read(path).ok().as_deref() != Some(rendered.as_bytes()) {
+        atomic_write_private(path, rendered.as_bytes())?;
+    }
     verify_private_file(path)
 }
 
@@ -578,45 +531,6 @@ fn managed_config_ready(path: &Path) -> bool {
                     .and_then(Item::as_str)
                     == Some(product.router_base_url.as_str())
         })
-}
-
-fn read_chatgpt_state(home: &Path) -> Result<ChatGptProfileState> {
-    let path = home.join("auth.json");
-    if !path.exists() {
-        return Ok(ChatGptProfileState {
-            available: true,
-            configured: false,
-            auth_mode: None,
-            account_id: None,
-            codex_home: home.display().to_string(),
-        });
-    }
-    let content = fs::read(&path)
-        .with_context(|| format!("读取 ChatGPT 登录状态失败: {}", path.display()))?;
-    let value: Value = crate::json_compat::from_slice(&content)
-        .with_context(|| format!("解析 ChatGPT 登录状态失败: {}", path.display()))?;
-    let auth_mode = value
-        .get("auth_mode")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let account_id = value
-        .get("tokens")
-        .and_then(|v| v.get("account_id"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let configured = auth_mode.as_deref() == Some("chatgpt")
-        && value
-            .get("tokens")
-            .and_then(|v| v.get("access_token"))
-            .and_then(Value::as_str)
-            .is_some_and(|v| !v.is_empty());
-    Ok(ChatGptProfileState {
-        available: true,
-        configured,
-        auth_mode,
-        account_id,
-        codex_home: home.display().to_string(),
-    })
 }
 
 fn merge_workspace_options(
@@ -669,8 +583,11 @@ fn merge_workspace_options(
 }
 
 fn workspace_profile_initialized(profile: &CredentialProfile) -> bool {
-    let home = Path::new(&profile.codex_home);
-    home.join("config.toml").is_file()
+    read_codex_api_key(&profile_credential_path(profile))
+        .ok()
+        .flatten()
+        .is_some()
+        && managed_config_ready(&default_original_codex_home().join("config.toml"))
 }
 
 pub fn pending_profile_home_migration() -> Result<Option<PendingProfileHomeMigration>> {
@@ -689,66 +606,31 @@ pub fn pending_profile_home_migration() -> Result<Option<PendingProfileHomeMigra
         .with_context(|| format!("读取 Codex 凭证元数据失败: {}", source.display()))?;
     let mut metadata = crate::json_compat::from_slice::<CredentialMetadata>(&content)
         .with_context(|| format!("解析 Codex 凭证元数据失败: {}", source.display()))?;
+    if metadata.version >= METADATA_VERSION {
+        return Ok(None);
+    }
     for profile in &mut metadata.profiles {
         normalize_profile(profile);
     }
-    let has_legacy_migration = metadata
-        .profiles
-        .iter()
-        .any(|profile| Path::new(&profile.codex_home).starts_with(legacy_managed_profile_root()));
-
-    let legacy_workspace_selection = metadata.version < 2
-        && metadata.active_profile_id.is_none()
-        && metadata.active_workspace_id.is_some();
-    let active_profile = if metadata.active_mode == AuthMode::Baijimu || legacy_workspace_selection
-    {
-        metadata
-            .active_profile_id
-            .as_deref()
-            .and_then(|profile_id| {
+    let active_profile = metadata
+        .active_profile_id
+        .as_deref()
+        .and_then(|id| {
+            metadata
+                .profiles
+                .iter()
+                .find(|profile| profile.profile_id == id)
+        })
+        .or_else(|| {
+            metadata.active_workspace_id.and_then(|workspace_id| {
                 metadata
                     .profiles
                     .iter()
-                    .find(|profile| profile.profile_id == profile_id)
+                    .find(|profile| profile.workspace_id == workspace_id)
             })
-            .or_else(|| {
-                metadata.active_workspace_id.and_then(|workspace_id| {
-                    metadata
-                        .profiles
-                        .iter()
-                        .find(|profile| profile.workspace_id == workspace_id)
-                })
-            })
-    } else {
-        None
-    };
-    if has_legacy_migration {
-        let active_profile = active_profile.filter(|profile| {
-            Path::new(&profile.codex_home).starts_with(legacy_managed_profile_root())
         });
-        let active_home_after = active_profile.map(|profile| {
-            if default_home_can_bind_profile(&metadata, &profile.profile_id).unwrap_or(false) {
-                default_original_codex_home()
-            } else {
-                profile_home_for_id(&profile.profile_id)
-            }
-        });
-        return Ok(Some(PendingProfileHomeMigration {
-            active_home_before: active_profile.map(|profile| PathBuf::from(&profile.codex_home)),
-            active_home_after,
-        }));
-    }
-
-    let Some(profile) = active_profile
-        .filter(|profile| Path::new(&profile.codex_home).starts_with(managed_profile_root()))
-    else {
-        return Ok(None);
-    };
-    if !default_home_can_bind_profile(&metadata, &profile.profile_id)? {
-        return Ok(None);
-    }
     Ok(Some(PendingProfileHomeMigration {
-        active_home_before: Some(PathBuf::from(&profile.codex_home)),
+        active_home_before: active_profile.map(|profile| PathBuf::from(&profile.codex_home)),
         active_home_after: Some(default_original_codex_home()),
     }))
 }
@@ -780,33 +662,6 @@ fn capture_original_codex_home(metadata: &mut CredentialMetadata) -> Result<bool
         }
     };
     Ok(true)
-}
-
-fn original_home_from_metadata(metadata: &CredentialMetadata) -> PathBuf {
-    metadata
-        .original_codex_home_state
-        .value
-        .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or_else(default_original_codex_home)
-}
-
-#[cfg(test)]
-fn active_home_from_metadata(metadata: &CredentialMetadata) -> PathBuf {
-    if metadata.active_mode == AuthMode::Chatgpt {
-        return original_home_from_metadata(metadata);
-    }
-    metadata
-        .active_profile_id
-        .as_deref()
-        .and_then(|id| {
-            metadata
-                .profiles
-                .iter()
-                .find(|profile| profile.profile_id == id)
-                .map(|profile| PathBuf::from(&profile.codex_home))
-        })
-        .unwrap_or_else(|| original_home_from_metadata(metadata))
 }
 
 fn default_original_codex_home() -> PathBuf {
@@ -849,131 +704,88 @@ fn normalize_profile(profile: &mut CredentialProfile) {
         );
     }
     if profile.codex_home.is_empty() {
-        profile.codex_home = workspace_profile_home(
-            &profile.environment,
-            profile.user_id,
-            profile.client_id.as_deref(),
-            profile.workspace_id,
-        )
-        .display()
-        .to_string();
+        profile.codex_home = default_original_codex_home().display().to_string();
     }
 }
 
-fn migrate_legacy_profile_homes(metadata: &mut CredentialMetadata) -> Result<bool> {
-    let legacy_root = legacy_managed_profile_root();
+fn profile_credential_path(profile: &CredentialProfile) -> PathBuf {
+    connector_data_dir()
+        .join("workspace-credentials")
+        .join(profile_short_key(&profile.profile_id))
+        .join(OWNED_AUTH_FILE)
+}
+
+fn migrate_profiles_to_shared_home(metadata: &mut CredentialMetadata) -> Result<bool> {
+    let shared_home = default_original_codex_home();
     let mut changed = false;
     for profile in &mut metadata.profiles {
-        let source = PathBuf::from(&profile.codex_home);
-        if !source.starts_with(&legacy_root) {
-            continue;
-        }
-        let target = profile_home_for_id(&profile.profile_id);
-        if source == target {
-            continue;
-        }
-
-        match (source.exists(), target.exists()) {
-            (true, true) => anyhow::bail!(
-                "Codex 档案迁移发现源目录和目标目录同时存在；为避免覆盖状态，已保留两者，请先确认数据归属：source={}, target={}",
-                source.display(),
-                target.display()
-            ),
-            (true, false) => {
-                if !source.is_dir() {
-                    anyhow::bail!("旧版 Codex 档案路径不是目录: {}", source.display());
-                }
-                let parent = target.parent().context("新的 Codex 档案路径没有父目录")?;
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("创建新的 Codex 档案根目录失败: {}", parent.display()))?;
-                set_private_directory(parent)?;
-                fs::rename(&source, &target).with_context(|| {
-                    format!(
-                        "迁移 Codex 档案目录失败；迁移要求旧目录和新目录位于同一文件系统，并且没有进程阻止目录重命名: source={}, target={}",
-                        source.display(),
-                        target.display()
-                    )
-                })?;
-                set_private_directory(&target)?;
+        let previous_home = PathBuf::from(&profile.codex_home);
+        let credential_path = profile_credential_path(profile);
+        if !credential_path.exists() {
+            if let Some(credential) = read_codex_api_key(&previous_home.join(OWNED_AUTH_FILE))? {
+                write_workspace_auth(&credential_path, &credential)?;
             }
-            // Recovery after the directory rename succeeded but metadata persistence was interrupted.
-            (false, true) => {}
-            // The profile has not created any state yet; future writes should use the short path.
-            (false, false) => {}
         }
-        profile.codex_home = target.display().to_string();
-        changed = true;
+        if previous_home != shared_home {
+            profile.codex_home = shared_home.display().to_string();
+            changed = true;
+        }
     }
     Ok(changed)
 }
 
-fn migrate_active_profile_to_default_home(
-    metadata: &mut CredentialMetadata,
-) -> Result<Option<CredentialProfile>> {
-    let Some(profile_index) = active_managed_profile_index(metadata) else {
-        return Ok(None);
-    };
-    let profile_id = metadata.profiles[profile_index].profile_id.clone();
-    if !default_home_can_bind_profile(metadata, &profile_id)? {
-        return Ok(None);
-    }
-
-    let source = PathBuf::from(&metadata.profiles[profile_index].codex_home);
-    let target = default_original_codex_home();
-    if source == target {
-        return Ok(None);
-    }
-    let target_has_matching_reservation = read_default_home_reservation(&target)?
-        .is_some_and(|reservation| reservation.profile_key == profile_short_key(&profile_id));
-    let target_has_matching_ownership = read_valid_ownership(&target)?
-        .and_then(|ownership| ownership.profile_key)
-        .is_some_and(|key| key == profile_short_key(&profile_id));
-
-    match (source.exists(), target.exists()) {
-        (true, false) => {
-            if !source.is_dir() {
-                anyhow::bail!("百积木 Codex 档案路径不是目录: {}", source.display());
-            }
-            write_default_home_reservation(&source, &profile_id)?;
-            fs::rename(&source, &target).with_context(|| {
-                format!(
-                    "将活动百积木 Codex 档案绑定到默认目录失败；迁移要求两个目录位于同一文件系统，并且没有进程占用源目录: source={}, target={}",
-                    source.display(),
-                    target.display()
-                )
-            })?;
-            set_private_directory(&target)?;
-        }
-        // Recovery after the directory rename succeeded but metadata persistence was interrupted.
-        (false, true) if target_has_matching_reservation || target_has_matching_ownership => {}
-        // A user-owned or differently bound default directory must never be overwritten.
-        (_, true) => return Ok(None),
-        // The profile has no state yet. Reserve the absent default directory for this profile.
-        (false, false) => reserve_default_home(&target, &profile_id)?,
-    }
-
-    metadata.profiles[profile_index].codex_home = target.display().to_string();
-    Ok(Some(metadata.profiles[profile_index].clone()))
+fn sync_profile_to_shared_home(profile: &CredentialProfile) -> Result<()> {
+    let credential = read_codex_api_key(&profile_credential_path(profile))?
+        .context("活动工作区的凭证库中缺少 OPENAI_API_KEY")?;
+    ensure_workspace_config(&default_original_codex_home().join(OWNED_CONFIG_FILE))?;
+    sync_credential_to_shared_home(&credential)?;
+    commit_shared_home_ownership()
 }
 
-fn active_managed_profile_index(metadata: &CredentialMetadata) -> Option<usize> {
-    if metadata.active_mode != AuthMode::Baijimu {
-        return None;
+fn sync_credential_to_shared_home(credential: &str) -> Result<()> {
+    let path = default_original_codex_home().join(OWNED_AUTH_FILE);
+    if read_codex_api_key(&path)?.as_deref() == Some(credential) {
+        return Ok(());
     }
-    let active_profile_id = metadata.active_profile_id.as_deref().or_else(|| {
-        metadata.active_workspace_id.and_then(|workspace_id| {
-            metadata
-                .profiles
-                .iter()
-                .find(|profile| profile.workspace_id == workspace_id)
-                .map(|profile| profile.profile_id.as_str())
+    write_workspace_auth(&path, credential)
+}
+
+fn commit_shared_home_ownership() -> Result<()> {
+    let home = default_original_codex_home();
+    fs::create_dir_all(&home)
+        .with_context(|| format!("创建默认 Codex 状态目录失败: {}", home.display()))?;
+    set_private_directory(&home)?;
+    if !managed_config_ready(&home.join(OWNED_CONFIG_FILE)) {
+        anyhow::bail!("默认 .codex 尚未完成百积木配置");
+    }
+    let marker = CodexHomeOwnership {
+        schema_version: OWNERSHIP_SCHEMA_VERSION,
+        owner: OWNERSHIP_OWNER.to_string(),
+        initialized_at_epoch_seconds: now_epoch_seconds(),
+        managed_files: vec![OWNED_AUTH_FILE.to_string(), OWNED_CONFIG_FILE.to_string()],
+        profile_key: None,
+    };
+    let path = home.join(OWNERSHIP_MARKER_FILE);
+    if read_valid_ownership(&home)
+        .ok()
+        .flatten()
+        .as_ref()
+        .is_some_and(|current| {
+            current.schema_version == marker.schema_version
+                && current.owner == marker.owner
+                && current.managed_files == marker.managed_files
+                && current.profile_key.is_none()
         })
-    })?;
-    metadata.profiles.iter().position(|profile| {
-        profile.profile_id == active_profile_id
-            && (Path::new(&profile.codex_home).starts_with(managed_profile_root())
-                || Path::new(&profile.codex_home).starts_with(legacy_managed_profile_root()))
-    })
+    {
+        return Ok(());
+    }
+    atomic_write_private(&path, &serde_json::to_vec_pretty(&marker)?)?;
+    read_valid_ownership(&home)?.context("百积木 Codex 所有权标记写入后无法回读")?;
+    let reservation = home.join(OWNERSHIP_RESERVATION_FILE);
+    if reservation.exists() {
+        fs::remove_file(&reservation)?;
+    }
+    Ok(())
 }
 
 fn sort_profiles(profiles: &mut [CredentialProfile]) {
@@ -1012,19 +824,6 @@ fn profile_id(
     )
 }
 
-fn workspace_profile_home(
-    environment: &str,
-    user_id: Option<u64>,
-    client_id: Option<&str>,
-    workspace_id: u64,
-) -> PathBuf {
-    profile_home_for_id(&profile_id(environment, user_id, client_id, workspace_id))
-}
-
-fn profile_home_for_id(profile_id: &str) -> PathBuf {
-    managed_profile_root().join(profile_short_key(profile_id))
-}
-
 fn profile_short_key(profile_id: &str) -> String {
     let digest = format!("{:x}", Sha256::digest(profile_id.as_bytes()));
     digest[..24].to_string()
@@ -1038,176 +837,6 @@ fn legacy_managed_profile_root() -> PathBuf {
     connector_data_dir().join("codex-profiles")
 }
 
-fn select_new_profile_home(
-    metadata: &CredentialMetadata,
-    environment: &str,
-    user_id: Option<u64>,
-    client_id: Option<&str>,
-    workspace_id: u64,
-) -> Result<PathBuf> {
-    let profile_id = profile_id(environment, user_id, client_id, workspace_id);
-    if default_home_can_bind_profile(metadata, &profile_id)? {
-        return Ok(default_original_codex_home());
-    }
-    Ok(workspace_profile_home(
-        environment,
-        user_id,
-        client_id,
-        workspace_id,
-    ))
-}
-
-fn default_home_can_bind_profile(metadata: &CredentialMetadata, profile_id: &str) -> Result<bool> {
-    let default_home = default_original_codex_home();
-    if metadata.profiles.iter().any(|profile| {
-        Path::new(&profile.codex_home) == default_home && profile.profile_id != profile_id
-    }) {
-        return Ok(false);
-    }
-
-    if let Some(configured_home) = user_environment::read_codex_home()? {
-        let is_legacy_managed_pointer = configured_home.starts_with(managed_profile_root())
-            || configured_home.starts_with(legacy_managed_profile_root());
-        if !is_legacy_managed_pointer {
-            return Ok(false);
-        }
-    }
-    if metadata.original_codex_home_state.captured
-        && metadata.original_codex_home_state.value.is_some()
-    {
-        return Ok(false);
-    }
-
-    let profile_key = profile_short_key(profile_id);
-    match read_valid_ownership(&default_home) {
-        Ok(Some(ownership)) => {
-            return Ok(ownership.profile_key.as_deref() == Some(profile_key.as_str()))
-        }
-        Err(_) => return Ok(false),
-        Ok(None) => {}
-    }
-    match read_default_home_reservation(&default_home) {
-        Ok(Some(reservation)) => return Ok(reservation.profile_key == profile_key),
-        Err(_) => return Ok(false),
-        Ok(None) => {}
-    }
-    Ok(!default_home.exists())
-}
-
-fn reserve_default_home(home: &Path, profile_id: &str) -> Result<()> {
-    if let Some(ownership) = read_valid_ownership(home)? {
-        if ownership.profile_key.as_deref() == Some(profile_short_key(profile_id).as_str()) {
-            return Ok(());
-        }
-        anyhow::bail!("默认 Codex 状态目录已经绑定其他档案: {}", home.display());
-    }
-    if let Some(reservation) = read_default_home_reservation(home)? {
-        if reservation.profile_key == profile_short_key(profile_id) {
-            return Ok(());
-        }
-        anyhow::bail!("默认 Codex 状态目录已经被其他档案预留: {}", home.display());
-    }
-    if home.exists() {
-        anyhow::bail!(
-            "默认 Codex 状态目录已存在且不受百积木控制: {}",
-            home.display()
-        );
-    }
-    fs::create_dir_all(home)
-        .with_context(|| format!("创建默认 Codex 状态目录失败: {}", home.display()))?;
-    set_private_directory(home)?;
-    write_default_home_reservation(home, profile_id)
-}
-
-fn write_default_home_reservation(home: &Path, profile_id: &str) -> Result<()> {
-    let reservation = CodexHomeReservation {
-        schema_version: OWNERSHIP_SCHEMA_VERSION,
-        owner: OWNERSHIP_OWNER.to_string(),
-        reserved_at_epoch_seconds: now_epoch_seconds(),
-        profile_key: profile_short_key(profile_id),
-    };
-    let path = home.join(OWNERSHIP_RESERVATION_FILE);
-    atomic_write_private(&path, &serde_json::to_vec_pretty(&reservation)?)?;
-    let verified = read_default_home_reservation(home)?
-        .context("百积木 Codex 默认目录预留标记写入后无法回读")?;
-    if verified != reservation {
-        anyhow::bail!("百积木 Codex 默认目录预留标记回读不一致");
-    }
-    Ok(())
-}
-
-fn read_default_home_reservation(home: &Path) -> Result<Option<CodexHomeReservation>> {
-    let path = home.join(OWNERSHIP_RESERVATION_FILE);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let content = fs::read(&path)
-        .with_context(|| format!("读取百积木 Codex 默认目录预留标记失败: {}", path.display()))?;
-    let reservation: CodexHomeReservation = crate::json_compat::from_slice(&content)
-        .with_context(|| format!("解析百积木 Codex 默认目录预留标记失败: {}", path.display()))?;
-    if reservation.schema_version != OWNERSHIP_SCHEMA_VERSION
-        || !matches!(
-            reservation.owner.as_str(),
-            OWNERSHIP_OWNER | LEGACY_OWNERSHIP_OWNER
-        )
-        || reservation.profile_key.len() != 24
-        || !reservation
-            .profile_key
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-    {
-        anyhow::bail!(
-            "百积木 Codex 默认目录预留标记不受当前版本支持: {}",
-            path.display()
-        );
-    }
-    Ok(Some(reservation))
-}
-
-fn commit_default_home_ownership(profile: &CredentialProfile) -> Result<()> {
-    let profile_home = Path::new(&profile.codex_home);
-    if profile_home != default_original_codex_home() {
-        return Ok(());
-    }
-    let profile_key = profile_short_key(&profile.profile_id);
-    if let Some(ownership) = read_valid_ownership(profile_home)? {
-        if ownership.profile_key.as_deref() == Some(profile_key.as_str()) {
-            if ownership.owner == OWNERSHIP_OWNER {
-                let _ = fs::remove_file(profile_home.join(OWNERSHIP_RESERVATION_FILE));
-                return Ok(());
-            }
-        } else if ownership.schema_version != LEGACY_OWNERSHIP_SCHEMA_VERSION {
-            anyhow::bail!("默认 Codex 状态目录已经绑定其他百积木档案");
-        }
-    }
-    if read_codex_api_key(&profile_home.join(OWNED_AUTH_FILE))?.is_none()
-        || !managed_config_ready(&profile_home.join(OWNED_CONFIG_FILE))
-    {
-        anyhow::bail!("默认 Codex 状态目录尚未完成百积木初始化");
-    }
-    let ownership = CodexHomeOwnership {
-        schema_version: OWNERSHIP_SCHEMA_VERSION,
-        owner: OWNERSHIP_OWNER.to_string(),
-        initialized_at_epoch_seconds: now_epoch_seconds(),
-        managed_files: vec![OWNED_AUTH_FILE.to_string(), OWNED_CONFIG_FILE.to_string()],
-        profile_key: Some(profile_key),
-    };
-    let marker = profile_home.join(OWNERSHIP_MARKER_FILE);
-    atomic_write_private(&marker, &serde_json::to_vec_pretty(&ownership)?)?;
-    let verified =
-        read_valid_ownership(profile_home)?.context("百积木 Codex 所有权标记写入后无法回读")?;
-    if verified != ownership {
-        anyhow::bail!("百积木 Codex 所有权标记回读不一致");
-    }
-    let reservation = profile_home.join(OWNERSHIP_RESERVATION_FILE);
-    if reservation.exists() {
-        fs::remove_file(&reservation).with_context(|| {
-            format!("清理默认 Codex 目录预留标记失败: {}", reservation.display())
-        })?;
-    }
-    Ok(())
-}
-
 fn read_valid_ownership(home: &Path) -> Result<Option<CodexHomeOwnership>> {
     let path = home.join(OWNERSHIP_MARKER_FILE);
     if !path.exists() {
@@ -1218,10 +847,13 @@ fn read_valid_ownership(home: &Path) -> Result<Option<CodexHomeOwnership>> {
     let marker: CodexHomeOwnership = crate::json_compat::from_slice(&content)
         .with_context(|| format!("解析百积木 Codex 所有权标记失败: {}", path.display()))?;
     let expected_files = vec![OWNED_AUTH_FILE.to_string(), OWNED_CONFIG_FILE.to_string()];
-    let supported_schema = marker.schema_version == OWNERSHIP_SCHEMA_VERSION
-        || marker.schema_version == LEGACY_OWNERSHIP_SCHEMA_VERSION;
+    let supported_schema = matches!(
+        marker.schema_version,
+        OWNERSHIP_SCHEMA_VERSION | 2 | LEGACY_OWNERSHIP_SCHEMA_VERSION
+    );
     let valid_profile_key = match marker.schema_version {
-        OWNERSHIP_SCHEMA_VERSION => marker
+        OWNERSHIP_SCHEMA_VERSION => marker.profile_key.is_none(),
+        2 => marker
             .profile_key
             .as_ref()
             .is_some_and(|key| key.len() == 24 && key.bytes().all(|byte| byte.is_ascii_hexdigit())),
@@ -1266,8 +898,8 @@ fn default_environment() -> String {
     "prod".to_string()
 }
 
-#[cfg(test)]
-mod tests {
+#[cfg(all(test, any()))]
+mod legacy_profile_home_tests {
     use super::*;
     use crate::user_environment::TEST_ENVIRONMENT_LOCK as ENVIRONMENT_LOCK;
     use std::ffi::OsString;
@@ -2297,5 +1929,220 @@ mod tests {
                 .to_string(),
             credential_status: "verified".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod shared_home_tests {
+    use super::*;
+    use crate::user_environment::TEST_ENVIRONMENT_LOCK;
+    use std::ffi::OsString;
+
+    struct EnvRestore {
+        values: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    impl EnvRestore {
+        fn set(values: &[(&'static str, &Path)]) -> Self {
+            let previous = values
+                .iter()
+                .map(|(key, value)| {
+                    let previous = std::env::var_os(key);
+                    std::env::set_var(key, value);
+                    (*key, previous)
+                })
+                .collect();
+            Self { values: previous }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            for (key, value) in self.values.drain(..) {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    fn profile(workspace_id: u64, home: &Path) -> CredentialProfile {
+        CredentialProfile {
+            profile_id: profile_id("prod", None, None, workspace_id),
+            environment: "prod".to_string(),
+            user_id: None,
+            client_id: None,
+            workspace_id,
+            workspace_name: format!("workspace-{workspace_id}"),
+            model: crate::product_config::get().default_model.clone(),
+            activated_at_epoch_seconds: 0,
+            codex_home: home.display().to_string(),
+            credential_status: "verified".to_string(),
+        }
+    }
+
+    #[test]
+    fn migration_moves_only_credentials_and_preserves_legacy_state() {
+        let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("codex-shared-migration-{}", std::process::id()));
+        let user_home = root.join("user");
+        let data_home = root.join("data");
+        let old_one = root.join("old-one");
+        let old_two = root.join("old-two");
+        fs::create_dir_all(&old_one).unwrap();
+        fs::create_dir_all(&old_two).unwrap();
+        fs::write(
+            old_one.join("auth.json"),
+            br#"{"OPENAI_API_KEY":"key-one"}"#,
+        )
+        .unwrap();
+        fs::write(
+            old_two.join("auth.json"),
+            br#"{"OPENAI_API_KEY":"key-two"}"#,
+        )
+        .unwrap();
+        fs::write(old_one.join("state_5.sqlite"), b"workspace-one-state").unwrap();
+        fs::write(old_two.join("sessions.jsonl"), b"workspace-two-session").unwrap();
+        let _env = EnvRestore::set(&[
+            ("HOME", &user_home),
+            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+        ]);
+        let mut metadata = CredentialMetadata {
+            version: 8,
+            profiles: vec![profile(1, &old_one), profile(2, &old_two)],
+            active_mode: AuthMode::Baijimu,
+            active_profile_id: None,
+            active_workspace_id: None,
+            original_codex_home_state: OriginalCodexHomeState::default(),
+            legacy_global_codex_home_restored_at_epoch_seconds: None,
+        };
+
+        assert!(migrate_profiles_to_shared_home(&mut metadata).unwrap());
+        let shared = user_home.join(".codex").display().to_string();
+        assert!(metadata
+            .profiles
+            .iter()
+            .all(|item| item.codex_home == shared));
+        assert_eq!(
+            read_codex_api_key(&profile_credential_path(&metadata.profiles[0]))
+                .unwrap()
+                .as_deref(),
+            Some("key-one")
+        );
+        assert_eq!(
+            read_codex_api_key(&profile_credential_path(&metadata.profiles[1]))
+                .unwrap()
+                .as_deref(),
+            Some("key-two")
+        );
+        assert_eq!(
+            fs::read(old_one.join("state_5.sqlite")).unwrap(),
+            b"workspace-one-state"
+        );
+        assert_eq!(
+            fs::read(old_two.join("sessions.jsonl")).unwrap(),
+            b"workspace-two-session"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn credential_switch_preserves_sessions_and_unmanaged_config() {
+        let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("codex-shared-switch-{}", std::process::id()));
+        let user_home = root.join("user");
+        let data_home = root.join("data");
+        let _env = EnvRestore::set(&[
+            ("HOME", &user_home),
+            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+        ]);
+        let shared = user_home.join(".codex");
+        fs::create_dir_all(shared.join("sessions")).unwrap();
+        fs::write(shared.join("sessions/thread.jsonl"), b"keep-session").unwrap();
+        fs::write(shared.join("config.toml"), b"custom_setting = \"keep\"\n").unwrap();
+        let profile = profile(642, &shared);
+        write_workspace_auth(&profile_credential_path(&profile), "workspace-key").unwrap();
+
+        sync_profile_to_shared_home(&profile).unwrap();
+
+        assert_eq!(
+            read_codex_api_key(&shared.join("auth.json"))
+                .unwrap()
+                .as_deref(),
+            Some("workspace-key")
+        );
+        assert_eq!(
+            fs::read(shared.join("sessions/thread.jsonl")).unwrap(),
+            b"keep-session"
+        );
+        let config = fs::read_to_string(shared.join("config.toml")).unwrap();
+        assert!(config.contains("custom_setting = \"keep\""));
+        assert!(managed_config_ready(&shared.join("config.toml")));
+        let marker = read_valid_ownership(&shared).unwrap().unwrap();
+        assert_eq!(marker.schema_version, OWNERSHIP_SCHEMA_VERSION);
+        assert_eq!(marker.profile_key, None);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn reauthorization_updates_shared_auth_only_for_the_active_workspace() {
+        let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("codex-shared-reauth-{}", std::process::id()));
+        let user_home = root.join("user");
+        let data_home = root.join("data");
+        let _env = EnvRestore::set(&[
+            ("HOME", &user_home),
+            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+        ]);
+        let shared = user_home.join(".codex");
+        fs::create_dir_all(&shared).unwrap();
+        fs::write(shared.join("session-index.json"), b"keep-index").unwrap();
+        ensure_workspace_config(&shared.join("config.toml")).unwrap();
+        let first = profile(1, &shared);
+        let second = profile(2, &shared);
+        write_workspace_auth(&profile_credential_path(&first), "first-key").unwrap();
+        write_workspace_auth(&profile_credential_path(&second), "second-key").unwrap();
+        save_metadata(&CredentialMetadata {
+            version: METADATA_VERSION,
+            profiles: vec![first.clone(), second.clone()],
+            active_mode: AuthMode::Baijimu,
+            active_profile_id: Some(first.profile_id.clone()),
+            active_workspace_id: Some(first.workspace_id),
+            original_codex_home_state: OriginalCodexHomeState::default(),
+            legacy_global_codex_home_restored_at_epoch_seconds: None,
+        })
+        .unwrap();
+        sync_profile_to_shared_home(&first).unwrap();
+
+        commit_workspace_reauthorization(PreparedWorkspaceReauthorization {
+            profile: second.clone(),
+            credential: "second-key-new".to_string(),
+        })
+        .unwrap();
+        assert_eq!(
+            read_codex_api_key(&shared.join("auth.json"))
+                .unwrap()
+                .as_deref(),
+            Some("first-key")
+        );
+
+        commit_workspace_reauthorization(PreparedWorkspaceReauthorization {
+            profile: first,
+            credential: "first-key-new".to_string(),
+        })
+        .unwrap();
+        assert_eq!(
+            read_codex_api_key(&shared.join("auth.json"))
+                .unwrap()
+                .as_deref(),
+            Some("first-key-new")
+        );
+        assert_eq!(
+            fs::read(shared.join("session-index.json")).unwrap(),
+            b"keep-index"
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 }

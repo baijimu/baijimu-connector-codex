@@ -514,10 +514,12 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
     let unique = format!("{}-{}", std::process::id(), now_epoch_seconds());
     let script_path = setup_dir.join(format!("install-{unique}.ps1"));
     let auto_activate = credential::should_auto_activate_workspace_after_setup()?;
+    let desktop_guard = SetupDesktopGuard::stop_for_activation(auto_activate)?;
 
     let install_result = (|| -> Result<(Option<PathBuf>, String)> {
         let prepared = credential::initialize_workspace_profile(workspace_id)?;
         let profile_home = PathBuf::from(&prepared.profile.codex_home);
+        credential::finalize_workspace_setup(&prepared.profile, auto_activate)?;
         atomic_write_private(&script_path, &windows_install_script_bytes())?;
         let state_dir = installer_state_dir();
         fs::create_dir_all(&state_dir)?;
@@ -539,7 +541,7 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
                 &product_config.windows_desktop_protocol,
             )
             .env("CODEX_DESKTOP_TRUSTED_PUBLISHERS", trusted_publishers)
-            .env("CODEX_HOME", &profile_home)
+            .env_remove("CODEX_HOME")
             .env_remove("CODEX_PROJECT_ID")
             .env_remove("BAIJIMU_PROJECT_ID")
             .env_remove("PROJECT_ID");
@@ -569,7 +571,6 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
                 .unwrap_or_else(|| String::from_utf8_lossy(&output.stderr).to_string());
             anyhow::bail!("官方安装脚本执行失败: {}", compact_error(&errors));
         }
-        credential::finalize_workspace_setup(&prepared.profile, auto_activate)?;
         let credential_state = credential::state()?;
         let workspace_profile_is_active = credential_state.active_mode
             == credential::AuthMode::Baijimu
@@ -584,10 +585,10 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
     let (activated_profile_home, router_credential) = install_result?;
 
     if !credential::codex_ready_for_workspace(workspace_id) {
-        anyhow::bail!("安装脚本执行成功，但独立工作区凭证归属回查失败");
+        anyhow::bail!("安装脚本执行成功，但工作区凭证归属回查失败");
     }
     let completion = match activated_profile_home {
-        Some(profile_home) => launch_desktop_after_setup(&profile_home),
+        Some(_) => desktop_guard.launch(),
         None => SetupCompletion::completed_without_desktop_launch(),
     };
     Ok(SetupInstallation {
@@ -596,15 +597,52 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
     })
 }
 
-fn launch_desktop_after_setup(profile_home: &Path) -> SetupCompletion {
+struct SetupDesktopGuard {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    {
-        SetupCompletion::from_desktop_activation(crate::desktop::launch(profile_home))
+    stopped: Option<crate::desktop::DesktopSwitch>,
+    launch_after_setup: bool,
+}
+
+impl SetupDesktopGuard {
+    fn stop_for_activation(activate: bool) -> Result<Self> {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        let stopped = if activate {
+            Some(crate::desktop::stop_for_workspace_switch()?)
+        } else {
+            None
+        };
+        Ok(Self {
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            stopped,
+            launch_after_setup: activate,
+        })
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let _ = profile_home;
-        SetupCompletion::completed_without_desktop_launch()
+
+    fn launch(mut self) -> SetupCompletion {
+        self.launch_after_setup = false;
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            self.stopped.take();
+            SetupCompletion::from_desktop_activation(crate::desktop::launch())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            SetupCompletion::completed_without_desktop_launch()
+        }
+    }
+}
+
+impl Drop for SetupDesktopGuard {
+    fn drop(&mut self) {
+        if !self.launch_after_setup {
+            return;
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(stopped) = self.stopped.take() {
+            if let Err(error) = stopped.restart_if_needed() {
+                eprintln!("安装失败后恢复 ChatGPT/Codex 桌面应用失败: {error}");
+            }
+        }
     }
 }
 

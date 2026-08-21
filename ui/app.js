@@ -145,31 +145,11 @@ function profileRow({ title, badges, active, disabled, actions }) {
 function authProfiles() {
   const state = credentialState;
   const profiles = [];
-  if (state?.chatgpt?.available !== false) {
-    const active = state?.activeMode === "chatgpt";
-    const systemDefault = Boolean(
-      state?.chatgpt?.codexHome
-      && state.chatgpt.codexHome === state.originalCodexHome,
-    );
-    profiles.push({
-      key: "chatgpt",
-      title: "原有 Codex 环境",
-      badges: profileBadgeMeta({ active, systemDefault }),
-      active,
-      disabled: false,
-      actions: [{
-        label: active ? "重启" : "启动",
-        tone: active ? "secondary" : "primary",
-        onClick: () => openAuthSwitchModal({ mode: "chatgpt" }),
-      }],
-    });
-  }
   for (const workspace of state?.workspaces || []) {
     const profile = state.profiles.find((item) => item.workspaceId === workspace.workspaceId);
     const active = state.activeMode === "baijimu" && state.activeWorkspaceId === workspace.workspaceId;
     const usesDefaultHome = profile?.codexHome
-      && profile.codexHome === state.originalCodexHome
-      && state?.chatgpt?.available === false;
+      && profile.codexHome === state.originalCodexHome;
     const needsReauthorization = workspace.configured
       && !["configured", "verified"].includes(profile?.credentialStatus);
     const request = { mode: "baijimu", workspaceId: workspace.workspaceId };
@@ -244,13 +224,6 @@ function renderCredentialState() {
 }
 
 function codexLaunchCopy(request) {
-  if (request.mode === "chatgpt") {
-    return {
-      title: "启动个人 Codex",
-      message: "将关闭当前 Codex，并切换回百积木接管前的个人 Codex 状态目录重新启动。不会删除任何工作区目录。",
-      progress: "正在使用个人状态目录启动 Codex…",
-    };
-  }
   const workspace = credentialState?.workspaces?.find(
     (item) => item.workspaceId === Number(request.workspaceId),
   );
@@ -259,8 +232,8 @@ function codexLaunchCopy(request) {
     : `工作区 ${request.workspaceId}`;
   return {
     title: `使用${name}启动 Codex`,
-    message: `将关闭当前 Codex，使用“${name}”已绑定的状态目录重新启动。不会删除个人或其他工作区数据。`,
-    progress: `正在使用${name}提交 Codex 启动请求…`,
+    message: `将关闭当前 Codex，把“${name}”的凭证原子写入共享 .codex 后重新启动。会话、历史记录和其他状态不会切换或移动。`,
+    progress: `正在切换到${name}的凭证并启动 Codex…`,
   };
 }
 
@@ -298,9 +271,7 @@ async function launchCodex(request, progressMessage) {
     renderCredentialState();
     setMessage(
       "message",
-      request.mode === "chatgpt"
-        ? "个人 Codex 启动请求已提交。"
-        : "已使用所选百积木工作区提交 Codex 启动请求。",
+      "已切换到所选百积木工作区并提交 Codex 启动请求。",
     );
   } catch (error) {
     const message = errorMessage(error);
@@ -321,7 +292,7 @@ async function initializeWorkspace(workspaceId) {
   try {
     setupState = await invokeManagement("initializeWorkspace", { workspaceId });
     renderSetupState();
-    setMessage("message", `已开始初始化工作区 ${workspaceId}；已有配置文件不会被覆盖。`);
+    setMessage("message", `已开始初始化工作区 ${workspaceId}；会保留共享 .codex 中的会话和非百积木配置。`);
     void monitorSetup();
   } catch (error) {
     setAccountBusy(false);
@@ -340,7 +311,7 @@ async function reauthorizeWorkspace(workspaceId) {
       await invokeManagement("reauthorizeWorkspace", { workspaceId }),
     );
     renderCredentialState();
-    setMessage("message", `工作区 ${workspaceId} 已重新授权；config.toml 保持不变。`);
+    setMessage("message", `工作区 ${workspaceId} 已重新授权；如果该工作区当前生效，Codex 已按需重启。`);
   } catch (error) {
     showError(errorMessage(error), {
       action: () => reauthorizeWorkspace(workspaceId),

@@ -1,7 +1,7 @@
 use super::contract::{InstallerStatus, InstallerStepState, MacosInstallerResult};
 use super::{
-    atomic_write_private, compact_error, installer_state_dir, launch_desktop_after_setup,
-    set_private_directory, SetupCompletion, SetupInstallation,
+    atomic_write_private, compact_error, installer_state_dir, set_private_directory,
+    SetupCompletion, SetupDesktopGuard, SetupInstallation,
 };
 use crate::credential;
 use anyhow::{Context, Result};
@@ -122,7 +122,9 @@ impl<'a> MacosInstaller<'a> {
             None,
         )?;
         let auto_activate = credential::should_auto_activate_workspace_after_setup()?;
+        let desktop_guard = SetupDesktopGuard::stop_for_activation(auto_activate)?;
         let prepared = credential::initialize_workspace_profile(self.workspace_id)?;
+        credential::finalize_workspace_setup(&prepared.profile, auto_activate)?;
         let profile_home = PathBuf::from(&prepared.profile.codex_home);
         self.result.codex_home = profile_home.display().to_string();
         self.result.llm_credential_created = true;
@@ -151,9 +153,8 @@ impl<'a> MacosInstaller<'a> {
             None,
             None,
         )?;
-        credential::finalize_workspace_setup(&prepared.profile, auto_activate)?;
         if !credential::codex_ready_for_workspace(self.workspace_id) {
-            anyhow::bail!("安装配置完成，但独立工作区凭证归属回查失败");
+            anyhow::bail!("安装配置完成，但工作区凭证归属回查失败");
         }
         let credential_state = credential::state()?;
         let workspace_profile_is_active = credential_state.active_mode
@@ -161,7 +162,7 @@ impl<'a> MacosInstaller<'a> {
             && credential_state.active_workspace_id == Some(self.workspace_id)
             && Path::new(&credential_state.active_codex_home) == profile_home;
         let outcome = if workspace_profile_is_active {
-            launch_desktop_after_setup(&profile_home)
+            desktop_guard.launch()
         } else {
             SetupCompletion::completed_without_desktop_launch()
         };

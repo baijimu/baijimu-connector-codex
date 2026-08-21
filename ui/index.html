@@ -53,12 +53,12 @@
           <span class="operation-spinner" aria-hidden="true"></span>
           <div>
             <strong>正在准备并启动 Codex</strong>
-            <p id="switch-progress-message">停止当前进程、选择工作区状态目录，并提交系统启动请求。</p>
+            <p id="switch-progress-message">停止当前进程、切换工作区凭证，并提交系统启动请求。</p>
           </div>
         </div>
         <ol class="operation-steps" aria-label="Codex 启动步骤">
           <li>停止当前 Codex</li>
-          <li>选择工作区状态目录</li>
+          <li>原子切换工作区凭证</li>
           <li>提交系统启动请求</li>
         </ol>
       </section>
@@ -99,7 +99,7 @@
           <ol id="setup-step-list" class="setup-step-list" aria-label="Codex 初始化步骤"></ol>
         </div>
         <div id="setup-actions" class="form-actions">
-          <p>首次初始化会自动开始。全新用户会把当前工作区绑定到默认 .codex；已有个人 .codex 时保持原样，工作区使用隔离目录。只有失败后才需要手动修复。</p>
+          <p>安装后默认 .codex 由百积木管理。所有工作区共享会话和状态，启动时只切换工作区凭证；只有失败后才需要手动修复。</p>
           <div class="setup-action-buttons">
             <button id="setup-action-button" class="button primary" type="button" hidden>重新安装并修复</button>
           </div>

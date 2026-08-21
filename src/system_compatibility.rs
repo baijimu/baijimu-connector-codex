@@ -1,4 +1,6 @@
+#[cfg(any(not(target_os = "windows"), test))]
 use anyhow::Result;
+#[cfg(any(not(target_os = "windows"), test))]
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fmt;
@@ -45,6 +47,7 @@ impl fmt::Display for UnsupportedOsVersion {
 
 impl Error for UnsupportedOsVersion {}
 
+#[cfg(any(not(target_os = "windows"), test))]
 pub fn ensure_supported(
     platform: &str,
     current_version: &str,
@@ -97,9 +100,11 @@ pub fn current_macos_version() -> Result<String> {
     Ok(version)
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct NumericVersion(Vec<u64>);
 
+#[cfg(any(not(target_os = "windows"), test))]
 impl NumericVersion {
     fn parse(value: &str) -> Result<Self> {
         let value = value.trim();

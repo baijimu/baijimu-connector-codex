@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>Codex 桌面环境</title>
+    <title>Codex 授权档案</title>
     <link rel="stylesheet" href="./styles.css" />
     <script type="module" src="./app.js"></script>
   </head>
@@ -53,19 +53,20 @@
           <span class="operation-spinner" aria-hidden="true"></span>
           <div>
             <strong>正在准备并启动 Codex</strong>
-            <p id="switch-progress-message">停止当前进程、切换工作区凭证，并提交系统启动请求。</p>
+            <p id="switch-progress-message">停止当前进程、切换授权档案，并提交系统启动请求。</p>
           </div>
         </div>
         <ol class="operation-steps" aria-label="Codex 启动步骤">
           <li>停止当前 Codex</li>
-          <li>原子切换工作区凭证</li>
+          <li>保存当前授权档案</li>
+          <li>原子切换所选授权</li>
           <li>提交系统启动请求</li>
         </ol>
       </section>
 
-      <section id="management-workspace-panel" class="panel workspace-panel" aria-label="Codex 工作区" hidden>
+      <section id="management-workspace-panel" class="panel workspace-panel" aria-label="Codex 授权档案" hidden>
         <div id="auth-profile-list" class="profile-list">
-          <div class="empty-state">正在读取可用工作区…</div>
+          <div class="empty-state">正在读取授权档案…</div>
         </div>
       </section>
       <section id="setup-panel" class="panel setup-panel" aria-labelledby="setup-title" tabindex="-1">
@@ -99,7 +100,7 @@
           <ol id="setup-step-list" class="setup-step-list" aria-label="Codex 初始化步骤"></ol>
         </div>
         <div id="setup-actions" class="form-actions">
-          <p>安装后默认 .codex 由百积木管理。所有工作区共享会话和状态，启动时只切换工作区凭证；只有失败后才需要手动修复。</p>
+          <p>Codex 始终使用用户当前有效的 Codex Home。百积木只管理授权档案；切换档案不会切换 Codex Home、会话、历史或其他环境状态。</p>
           <div class="setup-action-buttons">
             <button id="setup-action-button" class="button primary" type="button" hidden>重新安装并修复</button>
           </div>

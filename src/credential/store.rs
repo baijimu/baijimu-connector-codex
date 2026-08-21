@@ -17,7 +17,7 @@ pub(super) fn load_metadata() -> Result<CredentialMetadata> {
     } else {
         CredentialMetadata::default()
     };
-    let previous_version = metadata.version;
+    let previous_version = source.as_ref().map(|_| metadata.version).unwrap_or(0);
     let needs_version_migration = previous_version < METADATA_VERSION;
     for profile in &mut metadata.profiles {
         normalize_profile(profile);
@@ -36,24 +36,31 @@ pub(super) fn load_metadata() -> Result<CredentialMetadata> {
         }
     }
     let baseline_captured = capture_original_codex_home(&mut metadata)?;
-    if !metadata.profiles.is_empty() {
-        metadata.active_mode = AuthMode::Baijimu;
+    let original_auth_captured = capture_original_auth_profile(&mut metadata)?;
+    let activate_migrated_workspace =
+        previous_version > 0 && previous_version < 9 && metadata.active_mode == AuthMode::Baijimu;
+    if activate_migrated_workspace {
+        if let Some(profile) = metadata.active_profile_id.as_deref().and_then(|id| {
+            metadata
+                .profiles
+                .iter()
+                .find(|profile| profile.profile_id == id)
+        }) {
+            let credential = read_codex_api_key(&profile_credential_path(profile))?
+                .context("迁移活动工作区时缺少归档凭证")?;
+            ensure_workspace_config(&default_original_codex_home().join(OWNED_CONFIG_FILE))?;
+            sync_credential_to_shared_home(&credential)?;
+            commit_shared_home_ownership()?;
+        }
     }
     metadata.version = METADATA_VERSION;
     if source.as_ref() != Some(&path)
         || needs_version_migration
         || baseline_captured
         || legacy_profile_homes_migrated
+        || original_auth_captured
     {
         save_metadata(&metadata)?;
-    }
-    if let Some(profile) = metadata.active_profile_id.as_deref().and_then(|id| {
-        metadata
-            .profiles
-            .iter()
-            .find(|profile| profile.profile_id == id)
-    }) {
-        sync_profile_to_shared_home(profile)?;
     }
     if remove_after_import {
         let source = source.expect("legacy source exists when cleanup is requested");

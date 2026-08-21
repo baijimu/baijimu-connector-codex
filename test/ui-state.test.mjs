@@ -3,30 +3,62 @@ import { test } from "node:test";
 
 import {
   codexCapabilityMeta,
+  normalizeCredentialState,
   profileBadgeMeta,
   setupActionMeta,
   setupStatusMeta,
 } from "../ui/state.mjs";
 
-test("workspace rows expose only compact status badges", () => {
+test("personal auth profiles do not require a workspace dimension", () => {
+  const state = normalizeCredentialState({
+    activeMode: "chatgpt",
+    activeProfile: {
+      profileId: "personal:installation-backup",
+      kind: "personal",
+      name: "安装前授权备份",
+      credentialStatus: "verified",
+    },
+    profiles: [{
+      profileId: "personal:installation-backup",
+      kind: "personal",
+      name: "安装前授权备份",
+      credentialStatus: "verified",
+    }],
+  });
+  assert.equal(state.activeMode, "chatgpt");
+  assert.equal(state.profiles.length, 1);
+  assert.equal(state.profiles[0].workspaceId, null);
+  assert.equal(state.profiles[0].kind, "personal");
+});
+
+test("authorization profiles expose source and compact status badges", () => {
   assert.deepEqual(
-    profileBadgeMeta({ active: true, systemDefault: true }),
+    profileBadgeMeta({ active: true, kind: "personal" }),
     [
       { label: "当前", tone: "current" },
-      { label: "共享 .codex", tone: "default" },
+      { label: "原授权备份", tone: "default" },
     ],
   );
   assert.deepEqual(
     profileBadgeMeta({ disabled: true }),
-    [{ label: "未授权", tone: "warning" }],
+    [
+      { label: "百积木授权", tone: "default" },
+      { label: "未授权", tone: "warning" },
+    ],
   );
   assert.deepEqual(
     profileBadgeMeta({ configured: false }),
-    [{ label: "未初始化", tone: "warning" }],
+    [
+      { label: "百积木授权", tone: "default" },
+      { label: "未初始化", tone: "warning" },
+    ],
   );
   assert.deepEqual(
     profileBadgeMeta({ credentialStatus: "missing" }),
-    [{ label: "需重新授权", tone: "danger" }],
+    [
+      { label: "百积木授权", tone: "default" },
+      { label: "需重新授权", tone: "danger" },
+    ],
   );
 });
 

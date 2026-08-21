@@ -9,6 +9,7 @@ $WorkspaceId = if ($env:CODEX_WORKSPACE_ID) { $env:CODEX_WORKSPACE_ID } elseif (
 if (-not $WorkspaceId -or $WorkspaceId -notmatch '^\d+$') {
   throw "必须提供 CODEX_WORKSPACE_ID 或 BAIJIMU_WORKSPACE_ID"
 }
+$AuthProfileActivated = $env:CODEX_AUTH_PROFILE_ACTIVATED -eq "1"
 
 $startedAt = Get-Date
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -410,27 +411,31 @@ function Ensure-CodexApp {
 }
 
 function Confirm-CodexConfiguration {
-  Set-InstallStep 6 "running" "正在确认百积木 LLM 凭证和 Codex 配置"
-  if (-not (Test-Path -LiteralPath $authPath -PathType Leaf)) {
-    throw "Rust 凭证管理器未生成 Codex 授权文件：$authPath"
+  Set-InstallStep 6 "running" "正在确认百积木授权档案"
+  if ($AuthProfileActivated) {
+    if (-not (Test-Path -LiteralPath $authPath -PathType Leaf)) {
+      throw "Rust 凭证管理器未生成当前 Codex 授权文件：$authPath"
+    }
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+      throw "Rust 凭证管理器未生成当前 Codex 配置文件：$configPath"
+    }
+    $auth = Get-Content -Raw -LiteralPath $authPath | ConvertFrom-Json
+    if (-not $auth.OPENAI_API_KEY) {
+      throw "Rust 凭证管理器生成的当前 Codex 授权文件中不包含 OPENAI_API_KEY"
+    }
+    $config = Get-Content -Raw -LiteralPath $configPath
+    if ([string]::IsNullOrWhiteSpace($config)) {
+      throw "Rust 凭证管理器生成的当前 Codex 配置文件为空"
+    }
+    Remove-Variable auth, config -ErrorAction SilentlyContinue
+    $script:result.codexAuthWritten = $true
+    $script:result.configWritten = $true
+    $script:result.authWritten = $true
+    Set-InstallStep 6 "completed" "已确认并激活百积木授权档案"
+  } else {
+    Set-InstallStep 6 "completed" "已创建百积木授权档案，当前 Codex 登录保持不变"
   }
-  if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
-    throw "Rust 凭证管理器未生成 Codex 配置文件：$configPath"
-  }
-  $auth = Get-Content -Raw -LiteralPath $authPath | ConvertFrom-Json
-  if (-not $auth.OPENAI_API_KEY) {
-    throw "Rust 凭证管理器生成的 Codex 授权文件中不包含 OPENAI_API_KEY"
-  }
-  $config = Get-Content -Raw -LiteralPath $configPath
-  if ([string]::IsNullOrWhiteSpace($config)) {
-    throw "Rust 凭证管理器生成的 Codex 配置文件为空"
-  }
-  Remove-Variable auth, config -ErrorAction SilentlyContinue
   $script:result.llmCredentialCreated = $true
-  $script:result.codexAuthWritten = $true
-  $script:result.configWritten = $true
-  $script:result.authWritten = $true
-  Set-InstallStep 6 "completed" "已确认百积木 LLM 凭证和 Codex 配置"
 }
 
 try {

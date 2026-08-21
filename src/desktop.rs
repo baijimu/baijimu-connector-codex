@@ -138,6 +138,12 @@ if ($current -lt $minimum) {
   return
 }
 $process = Start-Process -FilePath $entry[0].executable -PassThru
+$deadline = (Get-Date).AddSeconds(15)
+do {
+  $running = @(Get-CodexDesktopProcesses @($entry[0]))
+  if ($running.Count -eq 0) { Start-Sleep -Milliseconds 250 }
+} while ($running.Count -eq 0 -and (Get-Date) -lt $deadline)
+if ($running.Count -eq 0) { throw 'ChatGPT/Codex 桌面应用启动后未在 15 秒内进入运行状态' }
 [pscustomobject]@{
   currentVersion = $current.ToString()
   minimumVersion = $minimum.ToString()
@@ -145,6 +151,7 @@ $process = Start-Process -FilePath $entry[0].executable -PassThru
   packageFullName = [string]$entry[0].package.PackageFullName
   processId = $process.Id
   executable = $entry[0].executable
+  processReady = $true
 } | ConvertTo-Json -Compress
 "#;
 
@@ -183,6 +190,7 @@ $process = Start-Process -FilePath $entry[0].executable -PassThru
     fn run_powershell(script: &str) -> Result<Vec<u8>> {
         let mut command = Command::new("powershell.exe");
         crate::child_process::isolate_from_connector_environment(&mut command);
+        command.env("CODEX_HOME", crate::credential::effective_codex_home());
         let product = crate::product_config::get();
         let complete = format!("{POWERSHELL_PREAMBLE}\n{script}");
         command
@@ -292,8 +300,18 @@ mod platform {
         verify_system_compatibility()?;
         let mut command = Command::new("/usr/bin/open");
         crate::child_process::isolate_from_connector_environment(&mut command);
+        command.env("CODEX_HOME", crate::credential::effective_codex_home());
         command.arg(&path);
-        run_checked(&mut command, "打开 ChatGPT/Codex 桌面应用失败")
+        run_checked(&mut command, "打开 ChatGPT/Codex 桌面应用失败")?;
+        let bundle_id = plist_value(&path, "CFBundleIdentifier")?;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            if is_running(&bundle_id)? {
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
+        anyhow::bail!("ChatGPT/Codex 桌面应用启动后未在 15 秒内进入运行状态")
     }
 
     fn installed_application_path() -> Option<PathBuf> {
@@ -346,15 +364,19 @@ mod platform {
     mod tests {
         use super::*;
         #[test]
-        fn launch_does_not_override_codex_home() {
+        fn launch_passes_the_resolved_effective_codex_home() {
             let mut command = Command::new("/usr/bin/open");
             crate::child_process::isolate_from_connector_environment(&mut command);
+            command.env("CODEX_HOME", crate::credential::effective_codex_home());
             command.arg("/Applications/Codex.app");
             let args = command
                 .get_args()
                 .map(|v| v.to_string_lossy().into_owned())
                 .collect::<Vec<_>>();
             assert_eq!(args, vec!["/Applications/Codex.app"]);
+            assert!(command
+                .get_envs()
+                .any(|(name, value)| { name == "CODEX_HOME" && value.is_some() }));
         }
     }
 }

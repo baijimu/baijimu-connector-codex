@@ -2,10 +2,10 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex 桌面管理器",
-  "version": "1.4.1",
-  "description": "安装 Codex 桌面应用，并在共享 .codex 中切换百积木工作区凭证。",
+  "version": "1.4.2",
+  "description": "安装 Codex 桌面应用，并在用户当前 Codex Home 中管理和切换授权档案。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.4.1"},
+  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.4.2"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
@@ -54,7 +54,7 @@
     }
   ],
   "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex 桌面管理器", "defaultView": true},
-  "releaseNotes": ["管理服务绑定后立即进入健康状态，安装验证不再等待旧档案迁移或桌面进程管理。", "Windows 仅查询配置中的可信 Publisher，并按已解析的可执行文件名和受信安装路径定位 Codex 进程，不再遍历全部 AppX 包和进程。", "安装后默认 .codex 仍由百积木统一管理；工作区切换只原子替换 auth.json 中的凭证。", "旧版隔离目录中的会话和状态文件保持原位，不合并、不删除。"],
+  "releaseNotes": ["授权档案与百积木工作区、Codex Home 分离；当前版本尊重用户当前 CODEX_HOME，只提供授权档案选择。", "首次接管前保存原 auth.json 和认证相关配置；使用系统凭据库时保存其引用配置，管理界面可随时切回。", "切换前回写当前可能已刷新的授权，同时切换授权与 provider/login 配置；桌面启动失败时恢复授权、配置和活动档案元数据。", "初始化百积木工作区只创建授权档案；已有个人档案时不改写当前登录、不切换 Codex Home。", "1.4.0/1.4.1 已覆盖且无法证明存在的旧个人授权不会被伪造成备份；旧隔离目录和状态继续原样保留。"],
   "configSchema": {
     "type": "object",
     "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},

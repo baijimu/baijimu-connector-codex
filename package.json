@@ -1,7 +1,7 @@
 {
   "name": "@baijimu/codex-desktop",
-  "version": "1.4.1",
-  "description": "负责 Codex 桌面安装与共享 .codex 工作区凭证切换的百积木本地应用。",
+  "version": "1.4.2",
+  "description": "负责 Codex 桌面安装与固定 Codex Home 授权档案切换的百积木本地应用。",
   "type": "module",
   "bin": {
     "baijimu-codex-desktop": "./bin/baijimu-codex-desktop.js"

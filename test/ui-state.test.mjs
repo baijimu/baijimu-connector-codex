@@ -5,6 +5,7 @@ import {
   codexCapabilityMeta,
   defaultWorkspaceMeta,
   normalizeCredentialState,
+  primaryViewMeta,
   profileBadgeMeta,
   setupActionMeta,
   setupStatusMeta,
@@ -103,7 +104,7 @@ test("the default Codex workspace exposes its current authentication channel", (
   });
 });
 
-test("workspace authentication and Codex installation remain independent states", () => {
+test("workspace authentication data stays independent from installation readiness", () => {
   const chatgptWorkspace = defaultWorkspaceMeta(normalizeCredentialState({
     activeMode: "chatgpt",
     activeProfile: {
@@ -118,6 +119,23 @@ test("workspace authentication and Codex installation remain independent states"
   assert.deepEqual(chatgptWorkspace.badge, { label: "ChatGPT · 需登录", tone: "warning" });
   assert.equal(failedInstallation.label, "安装失败");
   assert.equal(failedInstallation.available, false);
+});
+
+test("installation and default workspace are mutually exclusive primary views", () => {
+  for (const status of ["pending", "running", "failed", "interrupted", "needs_retry"]) {
+    assert.deepEqual(primaryViewMeta({ status }), {
+      workspaceVisible: false,
+      setupVisible: true,
+    });
+  }
+  assert.deepEqual(primaryViewMeta({ status: "succeeded" }), {
+    workspaceVisible: true,
+    setupVisible: false,
+  });
+  assert.deepEqual(
+    primaryViewMeta({ status: "succeeded", completedAtEpochSeconds: null, retryable: true }),
+    { workspaceVisible: true, setupVisible: false },
+  );
 });
 
 test("a running route verification keeps Codex available", () => {

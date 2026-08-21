@@ -2,10 +2,10 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex 桌面管理器",
-  "version": "1.4.5",
+  "version": "1.4.6",
   "description": "安装 Codex 桌面应用，并在共享 .codex 中切换 ChatGPT 与百积木工作区授权。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.4.5"},
+  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.4.6"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
@@ -36,7 +36,8 @@
       "ensureCodexReady": {"method": "POST", "path": "/management/v1/setup/ensure-ready"},
       "credentialState": {"method": "GET", "path": "/management/v1/credential-state"},
       "initializeWorkspace": {"method": "POST", "path": "/management/v1/codex/initialize"},
-      "launchCodex": {"method": "POST", "path": "/management/v1/codex/launch"},
+      "switchAuthChannel": {"method": "POST", "path": "/management/v1/codex/auth-channel"},
+      "restartCodex": {"method": "POST", "path": "/management/v1/codex/restart"},
       "reauthorizeWorkspace": {"method": "POST", "path": "/management/v1/codex/reauthorize"},
       "restoreExternalCodexHome": {"method": "POST", "path": "/management/v1/codex/restore-external-home"}
     }
@@ -54,7 +55,7 @@
     }
   ],
   "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex 桌面管理器", "defaultView": true},
-  "releaseNotes": ["恢复 Codex 默认工作区层级：工作区固定展示当前认证通道，只有用户展开后才显示 ChatGPT 登录和百积木工作区授权的切换选项。", "Codex 安装状态与默认工作区认证状态改为两个始终独立展示的一级状态，不再因安装阶段或授权档案数量互相隐藏或替代。", "切换认证通道仍然只在用户明确确认后原子更新 auth.json 和 config.toml 中的认证内容；客户端启动、状态刷新和旧版本迁移保持只读。", "会话、历史、技能、Codex Home 和其他环境状态继续由唯一的 Codex 默认工作区共享，不随认证通道切换。"],
+  "releaseNotes": ["安装状态与 Codex 默认工作区改为互斥主视图：安装完成后不再常驻显示安装状态，后台路由验证异常改在默认工作区内提示。", "认证通道改为默认工作区内的选择弹窗，明确展示 ChatGPT 登录和已授权的百积木工作区。", "切换认证通道与重启 Codex 拆成两个独立管理操作：切换只原子更新认证内容，重启只负责默认工作区的桌面进程。", "重新授权当前通道后不再自动重启 Codex；会话、历史、技能、Codex Home 和其他共享状态保持不变。"],
   "configSchema": {
     "type": "object",
     "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},

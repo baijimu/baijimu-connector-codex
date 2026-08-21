@@ -26,42 +26,48 @@
       <div id="auth-switch-modal" class="modal-backdrop" hidden>
         <section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-switch-modal-title">
           <div class="modal-heading">
-            <p class="eyebrow">确认启动</p>
-            <h2 id="auth-switch-modal-title">启动 Codex</h2>
+            <p class="eyebrow">认证通道</p>
+            <h2 id="auth-switch-modal-title">切换认证通道</h2>
           </div>
-          <p id="auth-switch-modal-message" class="modal-message"></p>
+          <p id="auth-switch-modal-message" class="modal-message">
+            选择 ChatGPT 登录或一个百积木工作区授权。确认后只切换默认工作区的当前认证，不会启动 Codex。
+          </p>
+          <div id="auth-profile-list" class="profile-list modal-profile-list">
+            <div class="empty-state">正在读取认证通道…</div>
+          </div>
           <div class="modal-actions">
             <button id="auth-switch-cancel" class="button secondary" type="button">取消</button>
-            <button id="auth-switch-confirm" class="button primary" type="button">确认启动</button>
+            <button id="auth-switch-confirm" class="button primary" type="button" disabled>确认切换</button>
           </div>
         </section>
       </div>
 
-      <section id="switch-progress" class="panel operation-panel" aria-live="polite" hidden>
+      <section id="codex-operation-progress" class="panel operation-panel" aria-live="polite" hidden>
         <div class="operation-heading">
           <span class="operation-spinner" aria-hidden="true"></span>
           <div>
-            <strong>正在准备并启动 Codex</strong>
-            <p id="switch-progress-message">停止当前进程、切换认证通道，并提交系统启动请求。</p>
+            <strong id="codex-operation-title">正在处理默认工作区</strong>
+            <p id="codex-operation-message">请稍候。</p>
           </div>
         </div>
-        <ol class="operation-steps" aria-label="Codex 启动步骤">
-          <li>停止当前 Codex</li>
-          <li>保存当前认证通道</li>
-          <li>原子切换所选认证</li>
-          <li>提交系统启动请求</li>
-        </ol>
       </section>
 
-      <section id="management-workspace-panel" class="panel workspace-panel active-panel" aria-labelledby="workspace-title">
+      <section id="management-workspace-panel" class="panel workspace-panel active-panel" aria-labelledby="workspace-title" hidden>
         <div class="section-heading workspace-heading">
           <div>
             <p class="eyebrow">工作区</p>
             <h2 id="workspace-title">Codex 默认工作区</h2>
           </div>
-          <span id="workspace-auth-badge" class="status-badge neutral">读取中</span>
+          <div class="workspace-heading-actions">
+            <span id="workspace-auth-badge" class="status-badge neutral">读取中</span>
+            <button id="restart-codex-button" class="button primary" type="button">重启 Codex</button>
+          </div>
         </div>
         <p class="workspace-note">会话、历史、技能和其他 Codex 状态始终保留在这个工作区；切换只影响认证通道。</p>
+        <div id="workspace-route-notice" class="workspace-route-notice" hidden>
+          <span id="workspace-route-message"></span>
+          <button id="workspace-route-action" class="button secondary compact" type="button" hidden>重新验证路由</button>
+        </div>
         <div class="workspace-summary">
           <div class="workspace-current-channel">
             <span class="field-label">当前认证通道</span>
@@ -76,20 +82,9 @@
             id="auth-channel-toggle"
             class="button secondary"
             type="button"
-            aria-expanded="false"
-            aria-controls="auth-channel-selector"
+            aria-haspopup="dialog"
+            aria-controls="auth-switch-modal"
           >切换认证通道</button>
-        </div>
-        <div id="auth-channel-selector" class="auth-channel-selector" tabindex="-1" hidden>
-          <div class="selector-heading">
-            <div>
-              <h3>选择认证通道</h3>
-              <p>可使用 ChatGPT 登录，或选择已授权的百积木工作区。切换后会重新启动 Codex。</p>
-            </div>
-          </div>
-          <div id="auth-profile-list" class="profile-list">
-            <div class="empty-state">正在读取认证通道…</div>
-          </div>
         </div>
       </section>
       <section id="setup-panel" class="panel setup-panel" aria-labelledby="setup-title" tabindex="-1">
@@ -123,7 +118,7 @@
           <ol id="setup-step-list" class="setup-step-list" aria-label="Codex 初始化步骤"></ol>
         </div>
         <div id="setup-actions" class="form-actions">
-          <p>安装状态与工作区认证相互独立。这里仅负责 Codex 桌面环境的安装、修复和路由验证。</p>
+          <p>这里仅负责 Codex 桌面环境的安装和修复；安装完成后将进入默认工作区。</p>
           <div class="setup-action-buttons">
             <button id="setup-action-button" class="button primary" type="button" hidden>重新安装并修复</button>
           </div>

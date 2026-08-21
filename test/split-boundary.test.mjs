@@ -26,7 +26,15 @@ test("desktop manager exposes only its required read-only status method", async 
     manifest.methods.map(({ name, path, httpMethod }) => ({ name, path, httpMethod })),
     [{ name: "status", path: "/healthz", httpMethod: "GET" }],
   );
-  assert.ok(manifest.management.operations.launchCodex);
+  assert.equal(manifest.management.operations.launchCodex, undefined);
+  assert.deepEqual(manifest.management.operations.switchAuthChannel, {
+    method: "POST",
+    path: "/management/v1/codex/auth-channel",
+  });
+  assert.deepEqual(manifest.management.operations.restartCodex, {
+    method: "POST",
+    path: "/management/v1/codex/restart",
+  });
   assert.deepEqual(manifest.management.operations.initializeWorkspace, {
     method: "POST",
     path: "/management/v1/codex/initialize",
@@ -83,7 +91,8 @@ test("desktop manager separates the default workspace from installation status",
   assert.doesNotMatch(html, /当前生效/);
   assert.match(html, /Codex 默认工作区/);
   assert.match(html, /当前认证通道/);
-  assert.match(html, /auth-channel-selector[^>]+hidden/);
+  assert.match(html, /auth-switch-modal[^>]+hidden/);
+  assert.match(html, /management-workspace-panel[^>]+hidden/);
   assert.match(html, /Codex 安装状态/);
   assert.doesNotMatch(html, /integration-unavailable-panel/);
 });
@@ -136,7 +145,7 @@ test("Windows runtime uses codex protocol activation without AppX discovery", as
   assert.doesNotMatch(desktopLaunch, /CODEX_HOME|appUserModelId/);
 });
 
-test("desktop launch only activates an existing profile and starts the desktop app", async () => {
+test("authentication switching and Codex restart are separate management operations", async () => {
   const [main, desktop, credential] = await Promise.all([
     read("src/main.rs"),
     read("src/desktop.rs"),
@@ -146,24 +155,49 @@ test("desktop launch only activates an existing profile and starts the desktop a
   assert.doesNotMatch(main, /active_home_snapshot|restore_active_home|启动验证失败|状态指针回滚/);
   assert.doesNotMatch(credential, /pub fn active_home_snapshot|pub fn restore_active_home/);
   assert.match(main, /desktop::launch\(\)/);
-  const launchRouteStart = main.indexOf('(\"POST\", \"/management/v1/codex/launch\")');
-  const launchRoute = main.slice(
-    launchRouteStart,
-    main.indexOf('_ => Err(HttpError::new(404', launchRouteStart),
+  const switchRouteStart = main.indexOf('(\"POST\", \"/management/v1/codex/auth-channel\")');
+  const restartRouteStart = main.indexOf('(\"POST\", \"/management/v1/codex/restart\")');
+  const switchRoute = main.slice(
+    switchRouteStart,
+    restartRouteStart,
   );
-  assert.doesNotMatch(launchRoute, /verify_system_compatibility|stop_for_codex_home_switch/);
-  assert.match(launchRoute, /stop_for_workspace_switch/);
-  assert.match(launchRoute, /prepare_profile_activation/);
-  assert.match(launchRoute, /activate_prepared_profile/);
+  const restartRoute = main.slice(
+    restartRouteStart,
+    main.indexOf('_ => Err(HttpError::new(404', restartRouteStart),
+  );
+  assert.doesNotMatch(switchRoute, /verify_system_compatibility|stop_for_codex_home_switch/);
+  assert.match(switchRoute, /stop_for_workspace_switch/);
+  assert.match(switchRoute, /prepare_profile_activation/);
+  assert.match(switchRoute, /activate_prepared_profile/);
+  assert.doesNotMatch(switchRoute, /desktop::launch/);
   assert.doesNotMatch(
-    launchRoute,
+    switchRoute,
     /initialize_workspace_profile|prepare_workspace_reauthorization|create_llm_credential|write_workspace_auth|write_workspace_config/,
   );
-  const stopIndex = launchRoute.indexOf("desktop::stop_for_workspace_switch()");
-  const credentialIndex = launchRoute.indexOf("credential::activate_prepared_profile(&prepared)");
-  const launchIndex = launchRoute.indexOf("desktop::launch()");
-  assert.ok(stopIndex >= 0 && credentialIndex > stopIndex && launchIndex > credentialIndex);
+  assert.match(restartRoute, /stop_for_workspace_switch/);
+  assert.match(restartRoute, /desktop::launch/);
+  assert.doesNotMatch(
+    restartRoute,
+    /prepare_profile_activation|activate_prepared_profile|authProfileId|credential::state/,
+  );
+  const stopIndex = restartRoute.indexOf("desktop::stop_for_workspace_switch()");
+  const launchIndex = restartRoute.indexOf("desktop::launch()");
+  assert.ok(stopIndex >= 0 && launchIndex > stopIndex);
   assert.doesNotMatch(credential, /PERMISSION_MODE_VISIBILITY_KEY|desktop_defaults_version/);
+});
+
+test("the default workspace is exclusive with installation and auth selection is modal", async () => {
+  const [html, app] = await Promise.all([read("ui/index.html"), read("ui/app.js")]);
+  const modalStart = html.indexOf('id="auth-switch-modal"');
+  const modalEnd = html.indexOf('id="codex-operation-progress"');
+  assert.ok(modalStart >= 0 && modalEnd > modalStart);
+  assert.match(html.slice(modalStart, modalEnd), /id="auth-profile-list"/);
+  assert.doesNotMatch(html, /id="auth-channel-selector"/);
+  assert.match(html, /id="restart-codex-button"/);
+  assert.match(app, /primaryViewMeta\(setupState\)/);
+  assert.match(app, /invokeManagement\("switchAuthChannel"/);
+  assert.match(app, /invokeManagement\("restartCodex"/);
+  assert.doesNotMatch(app, /invokeManagement\("launchCodex"/);
 });
 
 test("initialization preserves shared state and reauthorization only rotates credentials", async () => {
@@ -190,8 +224,8 @@ test("initialization preserves shared state and reauthorization only rotates cre
   assert.match(main, /\/management\/v1\/codex\/reauthorize/);
   assert.match(app, /label: "重新授权"/);
   assert.match(app, /label: "创建认证通道"/);
-  assert.match(app, /label: loginRequired \? "使用 ChatGPT 登录"/);
-  assert.match(app, /移除百积木 API 授权与 provider 选择/);
+  assert.match(app, /radio\.name = "auth-profile"/);
+  assert.match(app, /需要使用新通道时/);
 });
 
 test("status reads never reactivate archived workspace credentials", async () => {

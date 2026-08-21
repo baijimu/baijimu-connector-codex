@@ -450,9 +450,7 @@ fn handle_management(
                 .credential_management
                 .lock()
                 .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
-            if state.setup.state().status == "running" {
-                return Err(HttpError::new(409, "Codex 正在初始化，完成后再重新授权"));
-            }
+            ensure_default_workspace_ready(state, "重新授权")?;
             let workspace_id = body
                 .get("workspaceId")
                 .and_then(Value::as_u64)
@@ -482,28 +480,17 @@ fn handle_management(
                 }
                 return Err(HttpError::new(409, error.to_string()));
             }
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            if let Some(desktop_switch) = desktop_switch {
-                desktop_switch
-                    .restart_if_needed()
-                    .map_err(desktop_compatibility_http_error)?;
-            }
             serde_json::to_value(
                 credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
             )
             .map_err(|error| HttpError::internal(error.to_string()))
         }
-        ("POST", "/management/v1/codex/launch") => {
+        ("POST", "/management/v1/codex/auth-channel") => {
             let _credential_guard = state
                 .credential_management
                 .lock()
                 .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
-            if state.setup.state().status == "running" {
-                return Err(HttpError::new(
-                    409,
-                    "Codex 正在安装配置，完成后再切换授权档案",
-                ));
-            }
+            ensure_default_workspace_ready(state, "切换认证通道")?;
             let profile_id = body
                 .get("authProfileId")
                 .and_then(Value::as_str)
@@ -533,31 +520,40 @@ fn handle_management(
                     return Err(HttpError::new(409, error.to_string()));
                 }
             };
-            if !test_control_enabled() {
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
-                if let Err(error) = desktop::launch() {
-                    transaction.rollback().map_err(|rollback| {
-                        HttpError::new(
-                            500,
-                            format!("Codex 启动失败，且授权档案回滚失败：{rollback}"),
-                        )
-                    })?;
-                    if let Some(desktop_switch) = desktop_switch {
-                        desktop_switch
-                            .restart_if_needed()
-                            .map_err(desktop_compatibility_http_error)?;
-                    }
-                    return Err(desktop_compatibility_http_error(error));
-                }
-            }
             transaction.commit();
             serde_json::to_value(
                 credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
             )
             .map_err(|error| HttpError::internal(error.to_string()))
         }
+        ("POST", "/management/v1/codex/restart") => {
+            let _credential_guard = state
+                .credential_management
+                .lock()
+                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
+            ensure_default_workspace_ready(state, "重启 Codex")?;
+            if !test_control_enabled() {
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                {
+                    desktop::stop_for_workspace_switch()
+                        .map_err(desktop_compatibility_http_error)?;
+                    desktop::launch().map_err(desktop_compatibility_http_error)?;
+                }
+            }
+            Ok(json!({"restarted": true}))
+        }
         _ => Err(HttpError::new(404, format!("未知的管理接口路径：{path}"))),
     }
+}
+
+fn ensure_default_workspace_ready(state: &AppState, operation: &str) -> Result<(), HttpError> {
+    if state.setup.state().status == "succeeded" {
+        return Ok(());
+    }
+    Err(HttpError::new(
+        409,
+        format!("Codex 尚未完成安装配置，不能{operation}"),
+    ))
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]

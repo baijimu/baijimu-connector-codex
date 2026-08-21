@@ -159,7 +159,7 @@ export function defaultWorkspaceMeta(value) {
 
   return {
     name: "未选择认证通道",
-    detail: "展开认证通道后选择 ChatGPT 登录或百积木工作区授权。",
+    detail: "请选择 ChatGPT 登录或百积木工作区授权。",
     badge: { label: "未选择", tone: "neutral" },
     codexHome,
     selectableChannelCount,
@@ -257,6 +257,14 @@ export function codexCapabilityMeta(value) {
     label: "准备中",
     tone: "neutral",
     message: "正在准备自动初始化 Codex 桌面环境。",
+  };
+}
+
+export function primaryViewMeta(value) {
+  const workspaceVisible = String(value?.status || "pending") === "succeeded";
+  return {
+    workspaceVisible,
+    setupVisible: !workspaceVisible,
   };
 }
 

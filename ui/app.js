@@ -4,6 +4,7 @@ import {
   defaultWorkspaceMeta,
   normalizeCredentialState,
   normalizeSetupProgress,
+  primaryViewMeta,
   profileBadgeMeta,
   setupActionMeta,
   setupStatusMeta,
@@ -17,10 +18,12 @@ const elementIds = [
   "legacy-home-migration", "legacy-home-message", "restore-external-home-button",
   "auth-profile-list", "workspace-auth-badge", "current-auth-channel",
   "current-auth-detail", "workspace-codex-home", "auth-channel-toggle",
-  "auth-channel-selector",
+  "restart-codex-button", "workspace-route-notice", "workspace-route-message",
+  "workspace-route-action",
   "setup-message", "setup-action-button", "setup-progress", "setup-progress-label",
   "setup-progress-percent", "setup-progress-track", "setup-progress-bar", "setup-step-list",
-  "switch-progress", "switch-progress-message", "auth-switch-modal",
+  "codex-operation-progress", "codex-operation-title", "codex-operation-message",
+  "auth-switch-modal",
   "auth-switch-modal-title", "auth-switch-modal-message", "auth-switch-cancel",
   "auth-switch-confirm",
   "management-workspace-panel",
@@ -31,10 +34,10 @@ const elements = Object.fromEntries(elementIds.map((id) => [id, document.getElem
 let credentialState = null;
 let setupState = null;
 let setupMonitorGeneration = 0;
-let pendingCodexLaunch = null;
+let selectedAuthProfileId = null;
+let authModalReturnFocus = null;
 let accountBusy = false;
 let errorRetryAction = null;
-let authChannelSelectorExpanded = false;
 const STARTUP_RETRY_ATTEMPTS = 20;
 
 function bridge() {
@@ -95,18 +98,37 @@ function setAccountBusy(value) {
   elements["refresh-button"].disabled = value;
   elements["setup-action-button"].disabled = value;
   elements["auth-channel-toggle"].disabled = value;
+  elements["restart-codex-button"].disabled = value;
+  elements["workspace-route-action"].disabled = value;
+  elements["auth-switch-confirm"].disabled = value || !authSwitchCanSubmit();
   elements["error-retry-button"].disabled = value || !errorRetryAction;
   elements["restore-external-home-button"].disabled = value;
   const action = setupActionMeta(setupState);
   elements["setup-action-button"].textContent = value ? "正在处理…" : action.label;
-  document.querySelectorAll(".profile-action").forEach((button) => {
-    button.disabled = value || button.dataset.profileDisabled === "true";
+  document.querySelectorAll(".profile-action, input[name='auth-profile']").forEach((control) => {
+    control.disabled = value || control.dataset.profileDisabled === "true";
   });
 }
 
-function profileRow({ title, badges, active, disabled, actions }) {
+function profileRow({ key, title, badges, active, disabled, selectable, actions }) {
   const row = document.createElement("div");
   row.className = `profile-row${active ? " active" : ""}${disabled ? " unavailable" : ""}`;
+  const choice = document.createElement(selectable ? "label" : "div");
+  choice.className = "profile-choice";
+  if (selectable) {
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "auth-profile";
+    radio.value = key;
+    radio.checked = selectedAuthProfileId === key;
+    radio.dataset.profileDisabled = String(disabled);
+    radio.disabled = accountBusy || disabled;
+    radio.addEventListener("change", () => {
+      selectedAuthProfileId = key;
+      elements["auth-switch-confirm"].disabled = accountBusy || !authSwitchCanSubmit();
+    });
+    choice.append(radio);
+  }
   const heading = document.createElement("div");
   heading.className = "profile-heading";
   const strong = document.createElement("strong");
@@ -126,12 +148,13 @@ function profileRow({ title, badges, active, disabled, actions }) {
     button.className = `button ${action.tone || "secondary"} compact profile-action`;
     button.textContent = action.label;
     button.setAttribute("aria-label", `${action.label}${title}`);
-    button.dataset.profileDisabled = String(disabled || action.disabled === true);
-    button.disabled = accountBusy || disabled || action.disabled === true;
+    button.dataset.profileDisabled = String(action.disabled === true);
+    button.disabled = accountBusy || action.disabled === true;
     button.addEventListener("click", action.onClick);
     actionGroup.append(button);
   }
-  row.append(heading, actionGroup);
+  choice.append(heading);
+  row.append(choice, actionGroup);
   return row;
 }
 
@@ -144,22 +167,17 @@ function authProfiles() {
       : null;
     const needsReauthorization = profile.kind === "baijimu"
       && !["configured", "verified"].includes(profile.credentialStatus);
-    const loginRequired = profile.kind === "personal"
-      && profile.credentialStatus === "login_required";
     const actions = [];
     if (profile.kind === "baijimu" && workspace?.authorized) {
       actions.push({
         label: "重新授权",
         tone: "secondary",
-        onClick: () => reauthorizeWorkspace(profile.workspaceId),
+        onClick: () => {
+          closeAuthSwitchModal();
+          void reauthorizeWorkspace(profile.workspaceId);
+        },
       });
     }
-    actions.push({
-      label: loginRequired ? "使用 ChatGPT 登录" : active ? "重启" : "切换并启动",
-      tone: active ? "secondary" : "primary",
-      disabled: needsReauthorization,
-      onClick: () => openAuthSwitchModal({ authProfileId: profile.profileId }),
-    });
     return {
       key: profile.profileId,
       title: profile.kind === "baijimu"
@@ -173,7 +191,8 @@ function authProfiles() {
         credentialStatus: profile.credentialStatus,
       }),
       active,
-      disabled: false,
+      disabled: needsReauthorization,
+      selectable: true,
       actions,
     };
   });
@@ -185,10 +204,14 @@ function authProfiles() {
       badges: profileBadgeMeta({ configured: false }),
       active: false,
       disabled: false,
+      selectable: false,
       actions: [{
         label: "创建认证通道",
         tone: "primary",
-        onClick: () => initializeWorkspace(workspace.workspaceId),
+        onClick: () => {
+          closeAuthSwitchModal();
+          void initializeWorkspace(workspace.workspaceId);
+        },
       }],
     });
   }
@@ -211,17 +234,15 @@ function renderAuthProfiles() {
     empty.textContent = "没有可用的认证通道。可使用 ChatGPT 登录，或先完成百积木工作区授权。";
     list.append(empty);
   }
+  elements["auth-switch-confirm"].disabled = accountBusy || !authSwitchCanSubmit();
 }
 
-function renderAuthChannelSelector() {
-  elements["auth-channel-selector"].hidden = !authChannelSelectorExpanded;
-  elements["auth-channel-toggle"].setAttribute(
-    "aria-expanded",
-    String(authChannelSelectorExpanded),
-  );
-  elements["auth-channel-toggle"].textContent = authChannelSelectorExpanded
-    ? "收起认证通道"
-    : "切换认证通道";
+function authSwitchCanSubmit() {
+  if (!selectedAuthProfileId) return false;
+  const activeProfileId = credentialState?.activeProfile?.profileId || null;
+  if (selectedAuthProfileId === activeProfileId) return false;
+  const profile = credentialState?.profiles?.find((item) => item.profileId === selectedAuthProfileId);
+  return Boolean(profile) && !["missing", "invalid"].includes(profile.credentialStatus);
 }
 
 function renderCredentialState() {
@@ -243,76 +264,72 @@ function renderCredentialState() {
     elements["restore-external-home-button"].hidden = !migration.canRestore;
   }
   renderAuthProfiles();
-  renderAuthChannelSelector();
-}
-
-function codexLaunchCopy(request) {
-  const profile = credentialState?.profiles?.find(
-    (item) => item.profileId === request.authProfileId,
-  );
-  const name = profile?.kind === "baijimu"
-    ? `${profile.name || profile.workspaceName}（工作区 ${profile.workspaceId}）`
-    : "ChatGPT 登录";
-  if (profile?.kind === "personal" && profile.credentialStatus === "login_required") {
-    return {
-      title: "使用 ChatGPT 登录启动 Codex",
-      message: "将关闭当前 Codex，保存当前工作区认证通道，移除百积木 API 授权与 provider 选择，再以官方 ChatGPT 登录方式启动 Codex。会话、历史记录和其他状态不会切换或移动。",
-      progress: "正在切换到 ChatGPT 登录并启动 Codex…",
-    };
-  }
-  return {
-    title: `使用${name}启动 Codex`,
-    message: `将关闭当前 Codex，保存当前通道可能已刷新的授权，再把“${name}”的授权与认证配置原子写入固定 .codex 后重新启动。会话、历史记录和其他状态不会切换或移动。`,
-    progress: `正在切换到${name}的凭证并启动 Codex…`,
-  };
 }
 
 function closeAuthSwitchModal() {
-  pendingCodexLaunch = null;
+  selectedAuthProfileId = null;
   elements["auth-switch-modal"].hidden = true;
+  if (authModalReturnFocus instanceof HTMLElement) authModalReturnFocus.focus();
+  authModalReturnFocus = null;
 }
 
-function openAuthSwitchModal(request) {
-  if (pendingCodexLaunch || accountBusy) return;
-  const copy = codexLaunchCopy(request);
-  pendingCodexLaunch = request;
-  elements["auth-switch-modal-title"].textContent = copy.title;
-  elements["auth-switch-modal-message"].textContent = copy.message;
+function openAuthSwitchModal() {
+  if (!elements["auth-switch-modal"].hidden || accountBusy) return;
+  authModalReturnFocus = document.activeElement;
+  selectedAuthProfileId = credentialState?.activeProfile?.profileId || null;
+  renderAuthProfiles();
   elements["auth-switch-modal"].hidden = false;
-  elements["auth-switch-confirm"].focus();
+  const selected = elements["auth-profile-list"].querySelector("input[name='auth-profile']:checked");
+  (selected || elements["auth-switch-cancel"]).focus();
 }
 
 async function confirmAuthSwitch() {
-  const request = pendingCodexLaunch;
-  if (!request) return;
-  const copy = codexLaunchCopy(request);
+  if (!authSwitchCanSubmit()) return;
+  const authProfileId = selectedAuthProfileId;
   closeAuthSwitchModal();
-  await launchCodex(request, copy.progress);
+  await switchAuthChannel({ authProfileId });
 }
 
-async function launchCodex(request, progressMessage) {
+async function switchAuthChannel(request) {
   clearNotices();
   setAccountBusy(true);
-  elements["switch-progress-message"].textContent = progressMessage;
-  elements["switch-progress"].hidden = false;
+  elements["codex-operation-title"].textContent = "正在切换认证通道";
+  elements["codex-operation-message"].textContent = "正在保存当前认证并原子切换默认工作区的认证通道。";
+  elements["codex-operation-progress"].hidden = false;
   try {
-    const response = await invokeManagement("launchCodex", request);
+    const response = await invokeManagement("switchAuthChannel", request);
     credentialState = normalizeCredentialState(response);
-    authChannelSelectorExpanded = false;
     renderCredentialState();
-    setMessage(
-      "message",
-      "已切换到所选认证通道并提交 Codex 启动请求。",
-    );
+    setMessage("message", "认证通道已切换。需要使用新通道时，请在默认工作区重启 Codex。");
   } catch (error) {
     const message = errorMessage(error);
     await loadState({ ensureReady: false, monitor: false });
     showError(message, {
-      action: () => launchCodex(request, progressMessage),
-      label: "重试启动",
+      action: () => switchAuthChannel(request),
+      label: "重试切换",
     });
   } finally {
-    elements["switch-progress"].hidden = true;
+    elements["codex-operation-progress"].hidden = true;
+    setAccountBusy(false);
+  }
+}
+
+async function restartCodex() {
+  clearNotices();
+  setAccountBusy(true);
+  elements["codex-operation-title"].textContent = "正在重启 Codex";
+  elements["codex-operation-message"].textContent = "正在关闭默认工作区的现有进程并重新打开 Codex。";
+  elements["codex-operation-progress"].hidden = false;
+  try {
+    await invokeManagement("restartCodex", {});
+    setMessage("message", "已提交 Codex 重启请求；当前认证通道保持不变。");
+  } catch (error) {
+    showError(errorMessage(error), {
+      action: restartCodex,
+      label: "重试重启",
+    });
+  } finally {
+    elements["codex-operation-progress"].hidden = true;
     setAccountBusy(false);
   }
 }
@@ -342,7 +359,7 @@ async function reauthorizeWorkspace(workspaceId) {
       await invokeManagement("reauthorizeWorkspace", { workspaceId }),
     );
     renderCredentialState();
-    setMessage("message", `工作区 ${workspaceId} 已重新授权；如果该工作区当前生效，Codex 已按需重启。`);
+    setMessage("message", `工作区 ${workspaceId} 已重新授权；如果该通道当前生效，Codex 已关闭，请从默认工作区重启。`);
   } catch (error) {
     showError(errorMessage(error), {
       action: () => reauthorizeWorkspace(workspaceId),
@@ -351,6 +368,19 @@ async function reauthorizeWorkspace(workspaceId) {
   } finally {
     setAccountBusy(false);
   }
+}
+
+function renderPrimaryView() {
+  const view = primaryViewMeta(setupState);
+  elements["management-workspace-panel"].hidden = !view.workspaceVisible;
+  elements["setup-panel"].hidden = !view.setupVisible;
+
+  const capability = codexCapabilityMeta(setupState);
+  const routeStatusVisible = view.workspaceVisible
+    && (setupState?.completedAtEpochSeconds == null || setupState?.retryable === true);
+  elements["workspace-route-notice"].hidden = !routeStatusVisible;
+  elements["workspace-route-message"].textContent = routeStatusVisible ? capability.message : "";
+  elements["workspace-route-action"].hidden = !(routeStatusVisible && setupState?.retryable === true);
 }
 
 function renderSetupState() {
@@ -362,6 +392,7 @@ function renderSetupState() {
     : setupState?.message || codexCapabilityMeta(setupState).message;
   renderSetupProgress();
   renderInstallationState();
+  renderPrimaryView();
   setAccountBusy(status === "running");
   elements["setup-actions"].hidden = false;
   elements["setup-action-button"].hidden = !action.visible;
@@ -629,11 +660,9 @@ elements["setup-action-button"].addEventListener("click", () => {
   if (action.operation === "verify") void retryRouterVerification();
   else void retrySetup();
 });
-elements["auth-channel-toggle"].addEventListener("click", () => {
-  authChannelSelectorExpanded = !authChannelSelectorExpanded;
-  renderAuthChannelSelector();
-  if (authChannelSelectorExpanded) elements["auth-channel-selector"].focus({ preventScroll: true });
-});
+elements["auth-channel-toggle"].addEventListener("click", openAuthSwitchModal);
+elements["restart-codex-button"].addEventListener("click", () => void restartCodex());
+elements["workspace-route-action"].addEventListener("click", () => void retryRouterVerification());
 elements["restore-external-home-button"].addEventListener("click", () => void restoreExternalCodexHome());
 elements["error-retry-button"].addEventListener("click", () => {
   const action = errorRetryAction;
@@ -645,7 +674,25 @@ elements["auth-switch-modal"].addEventListener("click", (event) => {
   if (event.target === elements["auth-switch-modal"]) closeAuthSwitchModal();
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && pendingCodexLaunch) closeAuthSwitchModal();
+  if (elements["auth-switch-modal"].hidden) return;
+  if (event.key === "Escape") {
+    closeAuthSwitchModal();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = [...elements["auth-switch-modal"].querySelectorAll(
+    "button:not(:disabled), input:not(:disabled)",
+  )];
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable.at(-1);
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 });
 
 void loadState({ ensureReady: true });

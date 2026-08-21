@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "defaultModel": "gpt-5.6-sol",
   "defaultUiLocale": "zh-CN",
   "routerProvider": "baijimu-router",
@@ -7,5 +7,11 @@
   "windowsDesktopProtocol": "codex",
   "windowsDesktopTrustedPublishers": [
     "CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B"
+  ],
+  "windowsDesktopProcessNames": [
+    "ChatGPT"
+  ],
+  "windowsDesktopTrustedSignerSubjects": [
+    "CN=\"OpenAI OpCo, LLC\", O=\"OpenAI OpCo, LLC\", L=San Francisco, S=California, C=US"
   ]
 }

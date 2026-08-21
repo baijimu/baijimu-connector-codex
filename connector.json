@@ -2,10 +2,10 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex 桌面管理器",
-  "version": "1.4.1",
+  "version": "1.4.3",
   "description": "安装 Codex 桌面应用，并在共享 .codex 中切换百积木工作区凭证。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.4.1"},
+  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.4.3"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
@@ -54,7 +54,7 @@
     }
   ],
   "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex 桌面管理器", "defaultView": true},
-  "releaseNotes": ["管理服务绑定后立即进入健康状态，安装验证不再等待旧档案迁移或桌面进程管理。", "Windows 仅查询配置中的可信 Publisher，并按已解析的可执行文件名和受信安装路径定位 Codex 进程，不再遍历全部 AppX 包和进程。", "安装后默认 .codex 仍由百积木统一管理；工作区切换只原子替换 auth.json 中的凭证。", "旧版隔离目录中的会话和状态文件保持原位，不合并、不删除。"],
+  "releaseNotes": ["Windows 启动直接调用应用声明的 codex: 协议，不再查询任何 AppX 包或读取应用清单。", "工作区切换仅按版本化配置中的 ChatGPT 进程名定位桌面进程，并校验有效的 OpenAI Authenticode 签名后停止或确认启动。", "管理服务绑定后立即进入健康状态；桌面进程管理和档案升级均不阻塞 Connector 健康检查。", "安装后默认 .codex 仍由百积木统一管理；切换只原子替换 auth.json 中的凭证，会话文件保持不变。"],
   "configSchema": {
     "type": "object",
     "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},

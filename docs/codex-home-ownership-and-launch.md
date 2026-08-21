@@ -42,7 +42,11 @@
 4. 更新当前工作区元数据。
 5. 启动官方桌面应用。
 
-Windows 使用可信 Publisher、`codex` 协议和 FullTrust 清单能力发现应用包，然后直接启动包内可执行入口。该路径不得写 `HKCU\Environment`，不得调用 `SendMessageTimeout` 或发送 `WM_SETTINGCHANGE`，不得依赖 AUMID 激活继承调用方临时环境。
+Windows 直接调用安装包声明的稳定 `codex:` 协议，由 Windows Shell 解析当前安装版本；运行期不得为定位
+可执行文件枚举 AppX 包或读取应用清单。工作区切换需要停止既有桌面进程时，只查询版本化产品配置声明的
+进程名，并在执行停止前校验可执行文件具有有效且受信任的 OpenAI Authenticode 签名。AppX 包身份、最低
+系统版本和安装位置只属于安装与升级校验职责。该路径不得写 `HKCU\Environment`，不得调用
+`SendMessageTimeout` 或发送 `WM_SETTINGCHANGE`。
 
 macOS 使用系统安装的 ChatGPT/Codex 应用路径启动，并从子进程环境中移除 Connector 私有变量和继承的 `CODEX_HOME`。
 

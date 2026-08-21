@@ -42,8 +42,6 @@ mod platform {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct LaunchResult {
-        current_version: String,
-        minimum_version: String,
         activation_accepted: bool,
     }
 
@@ -53,64 +51,38 @@ $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding
 $codexDesktopProtocol = $env:CODEX_DESKTOP_PROTOCOL
 if ([string]::IsNullOrWhiteSpace($codexDesktopProtocol)) { throw '缺少 Windows 桌面协议配置' }
-$codexDesktopTrustedPublishers = @($env:CODEX_DESKTOP_TRUSTED_PUBLISHERS -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-if ($codexDesktopTrustedPublishers.Count -eq 0) { throw 'Windows 桌面可信 Publisher 配置为空' }
+$codexDesktopProcessNames = @($env:CODEX_DESKTOP_PROCESS_NAMES -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($codexDesktopProcessNames.Count -eq 0) { throw 'Windows 桌面进程名配置为空' }
+$codexDesktopTrustedSignerSubjects = @($env:CODEX_DESKTOP_TRUSTED_SIGNER_SUBJECTS -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($codexDesktopTrustedSignerSubjects.Count -eq 0) { throw 'Windows 桌面可信签名主体配置为空' }
 
-function Get-CodexDesktopEntries {
-  $packages = @($codexDesktopTrustedPublishers | ForEach-Object {
-    Get-AppxPackage -Publisher $_ -ErrorAction SilentlyContinue
-  } | Where-Object { $_.InstallLocation } | Sort-Object PackageFullName -Unique)
-  $entries = @($packages | ForEach-Object {
-    $package = $_
+function Get-CodexDesktopProcesses {
+  $candidates = @($codexDesktopProcessNames | ForEach-Object {
+    Get-Process -Name $_ -ErrorAction SilentlyContinue
+  } | Sort-Object Id -Unique)
+  $trustedPaths = @($candidates | ForEach-Object {
     try {
-      $manifestPath = Join-Path $package.InstallLocation 'AppxManifest.xml'
-      if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return }
-      [xml]$manifest = Get-Content -Raw -LiteralPath $manifestPath
-      $identity = @($manifest.SelectNodes("/*[local-name()='Package']/*[local-name()='Identity']") | Select-Object -First 1)
-      if ($identity.Count -eq 0 -or $codexDesktopTrustedPublishers -notcontains ([string]$identity[0].Publisher)) { return }
-      $applications = @($manifest.SelectNodes("/*[local-name()='Package']/*[local-name()='Applications']/*[local-name()='Application']") | Where-Object {
-        if (-not $_.Executable) { return $false }
-        $entryPoint = [string]$_.EntryPoint
-        $fullTrust = [string]::IsNullOrWhiteSpace($entryPoint) -or $entryPoint -eq 'Windows.FullTrustApplication'
-        $protocol = @($_.SelectNodes(".//*[local-name()='Protocol']") | Where-Object { ([string]$_.Name) -eq $codexDesktopProtocol }).Count -gt 0
-        return $fullTrust -and $protocol
-      })
-      @($applications | Select-Object -First 1) | ForEach-Object {
-        $relativeExecutable = [string]$_.Executable
-        if ([System.IO.Path]::IsPathRooted($relativeExecutable)) { return }
-        $packageRoot = [System.IO.Path]::GetFullPath($package.InstallLocation).TrimEnd('\') + '\'
-        $executable = [System.IO.Path]::GetFullPath((Join-Path $packageRoot $relativeExecutable))
-        if (-not $executable.StartsWith($packageRoot, [System.StringComparison]::OrdinalIgnoreCase)) { return }
-        if ([System.IO.Path]::GetExtension($executable) -ne '.exe' -or -not (Test-Path -LiteralPath $executable -PathType Leaf)) { return }
-        [pscustomobject]@{ package = $package; packageRoot = $packageRoot; executable = $executable }
+      $path = $_.Path
+      if ([string]::IsNullOrWhiteSpace($path) -or [System.IO.Path]::GetExtension($path) -ne '.exe') { return }
+      $signature = Get-AuthenticodeSignature -LiteralPath $path
+      if ($signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid -and
+          $signature.SignerCertificate -and
+          $codexDesktopTrustedSignerSubjects -contains ([string]$signature.SignerCertificate.Subject)) {
+        return $path
       }
     } catch { return }
-  })
-  @($entries | Sort-Object @{ Expression = { [string]$_.package.PackageFullName } })
-}
-
-function Get-CodexDesktopProcesses($entries) {
-  @($entries | ForEach-Object {
-    $entry = $_
-    $processName = [System.IO.Path]::GetFileNameWithoutExtension($entry.executable)
-    if ([string]::IsNullOrWhiteSpace($processName)) { return }
-    Get-Process -Name $processName -ErrorAction SilentlyContinue | Where-Object {
+  } | Sort-Object -Unique)
+  @($candidates | Where-Object {
       try {
         $path = $_.Path
-        $path -and $path.StartsWith($entry.packageRoot, [System.StringComparison]::OrdinalIgnoreCase)
+        $path -and $trustedPaths -contains $path
       } catch { $false }
-    }
-  } | Sort-Object Id -Unique)
-}
-
-function New-CodexDesktopPackageNotFoundMessage {
-  return "当前 Windows 账户未发现可信 Publisher 签名、声明 $codexDesktopProtocol 协议且具有 FullTrust 可执行入口的桌面应用包。请确认百积木与 ChatGPT/Codex 在同一 Windows 账户下运行"
+    } | Sort-Object Id -Unique)
 }
 "#;
 
     const STOP_SCRIPT: &str = r#"
-$entries = @(Get-CodexDesktopEntries)
-$targets = @(Get-CodexDesktopProcesses $entries)
+$targets = @(Get-CodexDesktopProcesses)
 $wasRunning = $targets.Count -gt 0
 if ($wasRunning) {
   $targets | Stop-Process -Force -ErrorAction Stop
@@ -125,26 +97,16 @@ if ($wasRunning) {
 "#;
 
     const LAUNCH_SCRIPT: &str = r#"
-$entry = @(Get-CodexDesktopEntries | Select-Object -First 1)
-if ($entry.Count -eq 0) { throw (New-CodexDesktopPackageNotFoundMessage) }
-$manifestPath = Join-Path $entry[0].package.InstallLocation 'AppxManifest.xml'
-[xml]$manifest = Get-Content -Raw -LiteralPath $manifestPath
-$minimumVersions = @($manifest.SelectNodes("/*[local-name()='Package']/*[local-name()='Dependencies']/*[local-name()='TargetDeviceFamily']") | ForEach-Object { [string]$_.MinVersion } | Where-Object { $_ })
-if ($minimumVersions.Count -eq 0) { throw 'ChatGPT/Codex 应用包未声明最低 Windows 版本' }
-$minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -Descending | Select-Object -First 1)[0]
-$current = [System.Environment]::OSVersion.Version
-if ($current -lt $minimum) {
-  [pscustomobject]@{ currentVersion = $current.ToString(); minimumVersion = $minimum.ToString(); activationAccepted = $false } | ConvertTo-Json -Compress
-  return
-}
-$process = Start-Process -FilePath $entry[0].executable -PassThru
+Start-Process -FilePath "${codexDesktopProtocol}:"
+$deadline = (Get-Date).AddSeconds(10)
+do {
+  $targets = @(Get-CodexDesktopProcesses)
+  if ($targets.Count -eq 0) { Start-Sleep -Milliseconds 100 }
+} while ($targets.Count -eq 0 -and (Get-Date) -lt $deadline)
+if ($targets.Count -eq 0) { throw 'Windows 已接受 codex: 协议请求，但可信 ChatGPT/Codex 桌面进程未在 10 秒内出现' }
 [pscustomobject]@{
-  currentVersion = $current.ToString()
-  minimumVersion = $minimum.ToString()
   activationAccepted = $true
-  packageFullName = [string]$entry[0].package.PackageFullName
-  processId = $process.Id
-  executable = $entry[0].executable
+  processCount = $targets.Count
 } | ConvertTo-Json -Compress
 "#;
 
@@ -159,12 +121,6 @@ $process = Start-Process -FilePath $entry[0].executable -PassThru
     pub fn launch() -> Result<()> {
         let result: LaunchResult = crate::json_compat::from_slice(&run_powershell(LAUNCH_SCRIPT)?)
             .context("解析 ChatGPT/Codex Windows 启动结果失败")?;
-        crate::system_compatibility::ensure_supported(
-            "Windows",
-            &result.current_version,
-            &result.minimum_version,
-            "ChatGPT/Codex",
-        )?;
         anyhow::ensure!(
             result.activation_accepted,
             "Windows 未接受 ChatGPT/Codex 桌面应用启动请求"
@@ -188,8 +144,12 @@ $process = Start-Process -FilePath $entry[0].executable -PassThru
         command
             .env("CODEX_DESKTOP_PROTOCOL", &product.windows_desktop_protocol)
             .env(
-                "CODEX_DESKTOP_TRUSTED_PUBLISHERS",
-                product.windows_desktop_trusted_publishers.join("\n"),
+                "CODEX_DESKTOP_PROCESS_NAMES",
+                product.windows_desktop_process_names.join("\n"),
+            )
+            .env(
+                "CODEX_DESKTOP_TRUSTED_SIGNER_SUBJECTS",
+                product.windows_desktop_trusted_signer_subjects.join("\n"),
             )
             .args([
                 "-NoLogo",
@@ -218,11 +178,12 @@ $process = Start-Process -FilePath $entry[0].executable -PassThru
         #[test]
         fn launch_has_no_environment_write_or_broadcast() {
             let source = format!("{POWERSHELL_PREAMBLE}\n{STOP_SCRIPT}\n{LAUNCH_SCRIPT}");
-            assert!(source.contains("Start-Process"));
-            assert!(source.contains("Get-AppxPackage -Publisher"));
+            assert!(source.contains("Start-Process -FilePath \"${codexDesktopProtocol}:\""));
             assert!(source.contains("Get-Process -Name"));
-            assert!(source.contains("StartsWith($entry.packageRoot"));
-            assert!(!source.contains("Get-AppxPackage -ErrorAction"));
+            assert!(source.contains("Get-AuthenticodeSignature"));
+            assert!(source.contains("SignatureStatus]::Valid"));
+            assert!(!source.contains("Get-AppxPackage"));
+            assert!(!source.contains("AppxManifest.xml"));
             assert!(!source.contains("Get-Process -ErrorAction"));
             for forbidden in [
                 concat!("CODEX", "_HOME"),

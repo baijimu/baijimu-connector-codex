@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::sync::OnceLock;
 
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -13,6 +13,8 @@ pub(crate) struct ProductConfig {
     pub(crate) router_base_url: String,
     pub(crate) windows_desktop_protocol: String,
     pub(crate) windows_desktop_trusted_publishers: Vec<String>,
+    pub(crate) windows_desktop_process_names: Vec<String>,
+    pub(crate) windows_desktop_trusted_signer_subjects: Vec<String>,
 }
 
 pub(crate) fn get() -> &'static ProductConfig {
@@ -55,6 +57,25 @@ pub(crate) fn get() -> &'static ProductConfig {
                         && !publisher.contains(['\r', '\n'])),
             "Windows 桌面可信 Publisher 不能为空或包含换行符"
         );
+        assert!(
+            !config.windows_desktop_process_names.is_empty()
+                && config.windows_desktop_process_names.iter().all(|name| {
+                    !name.trim().is_empty()
+                        && !name.contains(['\r', '\n'])
+                        && name
+                            .chars()
+                            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+                }),
+            "Windows 桌面进程名不能为空、包含换行符或特殊字符"
+        );
+        assert!(
+            !config.windows_desktop_trusted_signer_subjects.is_empty()
+                && config
+                    .windows_desktop_trusted_signer_subjects
+                    .iter()
+                    .all(|subject| !subject.trim().is_empty() && !subject.contains(['\r', '\n'])),
+            "Windows 桌面可信签名主体不能为空或包含换行符"
+        );
         config
     })
 }
@@ -71,5 +92,7 @@ mod tests {
         assert!(config.router_base_url.starts_with("https://"));
         assert_eq!(config.windows_desktop_protocol, "codex");
         assert_eq!(config.windows_desktop_trusted_publishers.len(), 1);
+        assert_eq!(config.windows_desktop_process_names, ["ChatGPT"]);
+        assert_eq!(config.windows_desktop_trusted_signer_subjects.len(), 1);
     }
 }

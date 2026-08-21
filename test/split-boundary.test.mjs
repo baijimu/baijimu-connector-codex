@@ -83,7 +83,7 @@ test("desktop manager upgrades its inherited metadata in place and omits redunda
   assert.doesNotMatch(html, /当前生效/);
 });
 
-test("Windows desktop discovery follows the codex protocol instead of package names", async () => {
+test("Windows runtime uses codex protocol activation without AppX discovery", async () => {
   const [desktop, installer] = await Promise.all([
     read("src/desktop.rs"),
     read("installers/windows-configure-terminal-and-login.ps1"),
@@ -96,21 +96,25 @@ test("Windows desktop discovery follows the codex protocol instead of package na
     desktop.indexOf("const LAUNCH_SCRIPT"),
     desktop.indexOf("pub fn stop_for_workspace_switch", desktop.indexOf("const LAUNCH_SCRIPT")),
   );
-  for (const source of [desktopPreamble, installer]) {
-    assert.match(source, /local-name\(\)='Protocol'/);
-    assert.match(source, /CODEX_DESKTOP_PROTOCOL/);
-    assert.match(source, /CODEX_DESKTOP_TRUSTED_PUBLISHERS/);
-    assert.doesNotMatch(source, /CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON/);
-    assert.match(source, /\$identity\[0\]\.Publisher/);
-    assert.match(source, /Windows\.FullTrustApplication/);
-    assert.doesNotMatch(source, /OpenAI\.ChatGPT-Desktop/);
-    assert.doesNotMatch(source, /Get-AppxPackage -Name/);
-  }
+  const desktopWindowsRuntime = desktop.slice(
+    desktop.indexOf("const POWERSHELL_PREAMBLE"),
+    desktop.indexOf("#[cfg(test)]", desktop.indexOf("const POWERSHELL_PREAMBLE")),
+  );
+  assert.match(installer, /local-name\(\)='Protocol'/);
+  assert.match(installer, /CODEX_DESKTOP_PROTOCOL/);
+  assert.match(installer, /CODEX_DESKTOP_TRUSTED_PUBLISHERS/);
+  assert.doesNotMatch(installer, /CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON/);
+  assert.match(installer, /\$identity\[0\]\.Publisher/);
+  assert.match(installer, /Windows\.FullTrustApplication/);
+  assert.doesNotMatch(installer, /OpenAI\.ChatGPT-Desktop/);
+  assert.doesNotMatch(installer, /Get-AppxPackage -Name/);
   assert.match(desktopPreamble, /System\.Text\.UTF8Encoding\(\$false\)/);
-  assert.match(desktopPreamble, /Get-AppxPackage -Publisher \$_/);
-  assert.doesNotMatch(desktopPreamble, /Get-AppxPackage -ErrorAction/);
-  assert.match(desktopPreamble, /Get-Process -Name \$processName/);
-  assert.match(desktopPreamble, /StartsWith\(\$entry\.packageRoot/);
+  assert.match(desktopPreamble, /CODEX_DESKTOP_PROCESS_NAMES/);
+  assert.match(desktopPreamble, /CODEX_DESKTOP_TRUSTED_SIGNER_SUBJECTS/);
+  assert.match(desktopPreamble, /Get-Process -Name \$_/);
+  assert.match(desktopPreamble, /Get-AuthenticodeSignature/);
+  assert.match(desktopPreamble, /SignatureStatus\]::Valid/);
+  assert.doesNotMatch(desktopWindowsRuntime, /Get-AppxPackage|AppxManifest\.xml|PackageFullName/);
   assert.match(installer, /Get-AppxPackage -Publisher \$_/);
   assert.doesNotMatch(installer, /Get-AppxPackage -ErrorAction/);
   assert.doesNotMatch(desktopPreamble, /IApplicationActivationManager|ActivateApplication/);
@@ -120,10 +124,8 @@ test("Windows desktop discovery follows the codex protocol instead of package na
   assert.doesNotMatch(desktopPreamble, /BAIJIMU_CURRENT_WORKSPACE_ID/);
   assert.doesNotMatch(desktopPreamble, /Grant-BaijimuCliAuthStoreReadAccess/);
   assert.doesNotMatch(desktopPreamble, /CodexSandbox|icacls\.exe/);
-  assert.match(desktopLaunch, /Start-Process -FilePath \$entry\[0\]\.executable -PassThru/);
-  assert.equal(desktopLaunch.match(/Get-CodexDesktopEntries/g)?.length, 1);
-  assert.match(desktopLaunch, /currentVersion/);
-  assert.match(desktopLaunch, /minimumVersion/);
+  assert.match(desktopLaunch, /Start-Process -FilePath "\$\{codexDesktopProtocol\}:"/);
+  assert.match(desktopLaunch, /Get-CodexDesktopProcesses/);
   assert.match(desktopLaunch, /activationAccepted = \$true/);
   assert.doesNotMatch(desktopLaunch, /VisibleWindow|EnumWindows|IsWindowVisible|AddSeconds\(45\)/);
   assert.doesNotMatch(desktopLaunch, /CODEX_HOME|appUserModelId/);

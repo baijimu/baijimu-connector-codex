@@ -185,7 +185,9 @@ function Get-CodexDesktopEntries {
   $codexDesktopTrustedPublishers = @($env:CODEX_DESKTOP_TRUSTED_PUBLISHERS -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
   if ($codexDesktopTrustedPublishers.Count -eq 0) { throw "Windows 桌面可信 Publisher 配置为空" }
   $startApps = @(Get-StartApps -ErrorAction SilentlyContinue)
-  $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.InstallLocation })
+  $packages = @($codexDesktopTrustedPublishers | ForEach-Object {
+    Get-AppxPackage -Publisher $_ -ErrorAction SilentlyContinue
+  } | Where-Object { $_.InstallLocation } | Sort-Object PackageFullName -Unique)
   $entries = @($packages | ForEach-Object {
     $package = $_
     try {

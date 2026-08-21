@@ -2,10 +2,10 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex 桌面管理器",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "安装 Codex 桌面应用，并在共享 .codex 中切换百积木工作区凭证。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.4.0"},
+  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.4.1"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
@@ -54,7 +54,7 @@
     }
   ],
   "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex 桌面管理器", "defaultView": true},
-  "releaseNotes": ["安装后默认 .codex 由百积木统一管理，所有工作区共享会话、历史和状态。", "切换工作区时停止 Codex、原子替换 auth.json 中的工作区凭证并直接启动桌面应用。", "移除 Windows 用户环境临时写入和环境变化广播，避免桌面管理操作超时。", "旧版隔离目录只迁移凭证，原有会话和状态文件保留在原位置且不会被合并或删除。"],
+  "releaseNotes": ["管理服务绑定后立即进入健康状态，安装验证不再等待旧档案迁移或桌面进程管理。", "Windows 仅查询配置中的可信 Publisher，并按已解析的可执行文件名和受信安装路径定位 Codex 进程，不再遍历全部 AppX 包和进程。", "安装后默认 .codex 仍由百积木统一管理；工作区切换只原子替换 auth.json 中的凭证。", "旧版隔离目录中的会话和状态文件保持原位，不合并、不删除。"],
   "configSchema": {
     "type": "object",
     "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},

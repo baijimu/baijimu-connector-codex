@@ -88,12 +88,6 @@ pub struct PreparedWorkspaceReauthorization {
     pub credential: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PendingProfileHomeMigration {
-    pub active_home_before: Option<PathBuf>,
-    pub active_home_after: Option<PathBuf>,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LegacyGlobalCodexHomeState {

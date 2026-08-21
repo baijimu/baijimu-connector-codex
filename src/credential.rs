@@ -590,51 +590,6 @@ fn workspace_profile_initialized(profile: &CredentialProfile) -> bool {
         && managed_config_ready(&default_original_codex_home().join("config.toml"))
 }
 
-pub fn pending_profile_home_migration() -> Result<Option<PendingProfileHomeMigration>> {
-    let path = metadata_path();
-    let source = if path.exists() {
-        Some(path)
-    } else if legacy_metadata_path().exists() {
-        Some(legacy_metadata_path())
-    } else {
-        None
-    };
-    let Some(source) = source else {
-        return Ok(None);
-    };
-    let content = fs::read(&source)
-        .with_context(|| format!("读取 Codex 凭证元数据失败: {}", source.display()))?;
-    let mut metadata = crate::json_compat::from_slice::<CredentialMetadata>(&content)
-        .with_context(|| format!("解析 Codex 凭证元数据失败: {}", source.display()))?;
-    if metadata.version >= METADATA_VERSION {
-        return Ok(None);
-    }
-    for profile in &mut metadata.profiles {
-        normalize_profile(profile);
-    }
-    let active_profile = metadata
-        .active_profile_id
-        .as_deref()
-        .and_then(|id| {
-            metadata
-                .profiles
-                .iter()
-                .find(|profile| profile.profile_id == id)
-        })
-        .or_else(|| {
-            metadata.active_workspace_id.and_then(|workspace_id| {
-                metadata
-                    .profiles
-                    .iter()
-                    .find(|profile| profile.workspace_id == workspace_id)
-            })
-        });
-    Ok(Some(PendingProfileHomeMigration {
-        active_home_before: active_profile.map(|profile| PathBuf::from(&profile.codex_home)),
-        active_home_after: Some(default_original_codex_home()),
-    }))
-}
-
 fn capture_original_codex_home(metadata: &mut CredentialMetadata) -> Result<bool> {
     if metadata.original_codex_home_state.captured {
         return Ok(false);
@@ -1223,15 +1178,6 @@ mod legacy_profile_home_tests {
         .unwrap();
 
         let migrated_home = user_home.join(".codex");
-        let pending = pending_profile_home_migration().unwrap().unwrap();
-        assert_eq!(
-            pending.active_home_before.as_deref(),
-            Some(legacy_home.as_path())
-        );
-        assert_eq!(
-            pending.active_home_after.as_deref(),
-            Some(migrated_home.as_path())
-        );
         let metadata = load_metadata().unwrap();
         assert_eq!(metadata.version, METADATA_VERSION);
         assert_eq!(
@@ -1247,7 +1193,6 @@ mod legacy_profile_home_tests {
             fs::read(migrated_home.join("sessions/2026/08/11/thread.jsonl")).unwrap(),
             b"thread-state"
         );
-        assert!(pending_profile_home_migration().unwrap().is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1293,15 +1238,6 @@ mod legacy_profile_home_tests {
         )
         .unwrap();
 
-        let pending = pending_profile_home_migration().unwrap().unwrap();
-        assert_eq!(
-            pending.active_home_before.as_deref(),
-            Some(legacy_home.as_path())
-        );
-        assert_eq!(
-            pending.active_home_after.as_deref(),
-            Some(user_home.join(".codex").as_path())
-        );
         let metadata = load_metadata().unwrap();
         let migrated_home = user_home.join(".codex");
         assert_eq!(
@@ -1312,7 +1248,6 @@ mod legacy_profile_home_tests {
             fs::read(migrated_home.join("state_5.sqlite")).unwrap(),
             b"recovered"
         );
-        assert!(pending_profile_home_migration().unwrap().is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1360,16 +1295,6 @@ mod legacy_profile_home_tests {
         .unwrap();
 
         let default_home = user_home.join(".codex");
-        let pending = pending_profile_home_migration().unwrap().unwrap();
-        assert_eq!(
-            pending.active_home_before.as_deref(),
-            Some(private_home.as_path())
-        );
-        assert_eq!(
-            pending.active_home_after.as_deref(),
-            Some(default_home.as_path())
-        );
-
         let metadata = load_metadata().unwrap();
         assert_eq!(
             metadata.profiles[0].codex_home,

@@ -57,7 +57,9 @@ $codexDesktopTrustedPublishers = @($env:CODEX_DESKTOP_TRUSTED_PUBLISHERS -split 
 if ($codexDesktopTrustedPublishers.Count -eq 0) { throw 'Windows 桌面可信 Publisher 配置为空' }
 
 function Get-CodexDesktopEntries {
-  $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.InstallLocation })
+  $packages = @($codexDesktopTrustedPublishers | ForEach-Object {
+    Get-AppxPackage -Publisher $_ -ErrorAction SilentlyContinue
+  } | Where-Object { $_.InstallLocation } | Sort-Object PackageFullName -Unique)
   $entries = @($packages | ForEach-Object {
     $package = $_
     try {
@@ -87,24 +89,34 @@ function Get-CodexDesktopEntries {
   @($entries | Sort-Object @{ Expression = { [string]$_.package.PackageFullName } })
 }
 
+function Get-CodexDesktopProcesses($entries) {
+  @($entries | ForEach-Object {
+    $entry = $_
+    $processName = [System.IO.Path]::GetFileNameWithoutExtension($entry.executable)
+    if ([string]::IsNullOrWhiteSpace($processName)) { return }
+    Get-Process -Name $processName -ErrorAction SilentlyContinue | Where-Object {
+      try {
+        $path = $_.Path
+        $path -and $path.StartsWith($entry.packageRoot, [System.StringComparison]::OrdinalIgnoreCase)
+      } catch { $false }
+    }
+  } | Sort-Object Id -Unique)
+}
+
 function New-CodexDesktopPackageNotFoundMessage {
-  $visiblePackageCount = @(Get-AppxPackage -ErrorAction SilentlyContinue).Count
-  return "当前 Windows 账户未发现可信 Publisher 签名、声明 $codexDesktopProtocol 协议且具有 FullTrust 可执行入口的桌面应用包（可见 AppX 包：$visiblePackageCount）。请确认百积木与 ChatGPT/Codex 在同一 Windows 账户下运行"
+  return "当前 Windows 账户未发现可信 Publisher 签名、声明 $codexDesktopProtocol 协议且具有 FullTrust 可执行入口的桌面应用包。请确认百积木与 ChatGPT/Codex 在同一 Windows 账户下运行"
 }
 "#;
 
     const STOP_SCRIPT: &str = r#"
 $entries = @(Get-CodexDesktopEntries)
-$roots = @($entries | ForEach-Object { $_.packageRoot } | Where-Object { $_ })
-$targets = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
-  try { $path = $_.Path; $path -and ($roots | Where-Object { $path.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0 } catch { $false }
-})
+$targets = @(Get-CodexDesktopProcesses $entries)
 $wasRunning = $targets.Count -gt 0
 if ($wasRunning) {
   $targets | Stop-Process -Force -ErrorAction Stop
   $deadline = (Get-Date).AddSeconds(15)
   do {
-    $remaining = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $targets.Id -contains $_.Id })
+    $remaining = @(Get-Process -Id $targets.Id -ErrorAction SilentlyContinue)
     if ($remaining.Count -gt 0) { Start-Sleep -Milliseconds 250 }
   } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
   if ($remaining.Count -gt 0) { throw 'ChatGPT/Codex 桌面应用进程未在 15 秒内停止' }
@@ -205,8 +217,13 @@ $process = Start-Process -FilePath $entry[0].executable -PassThru
         use super::*;
         #[test]
         fn launch_has_no_environment_write_or_broadcast() {
-            let source = format!("{POWERSHELL_PREAMBLE}\n{LAUNCH_SCRIPT}");
+            let source = format!("{POWERSHELL_PREAMBLE}\n{STOP_SCRIPT}\n{LAUNCH_SCRIPT}");
             assert!(source.contains("Start-Process"));
+            assert!(source.contains("Get-AppxPackage -Publisher"));
+            assert!(source.contains("Get-Process -Name"));
+            assert!(source.contains("StartsWith($entry.packageRoot"));
+            assert!(!source.contains("Get-AppxPackage -ErrorAction"));
+            assert!(!source.contains("Get-Process -ErrorAction"));
             for forbidden in [
                 concat!("CODEX", "_HOME"),
                 concat!("CurrentUser", ".CreateSubKey"),

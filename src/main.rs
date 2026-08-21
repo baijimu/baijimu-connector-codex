@@ -102,15 +102,6 @@ impl StartupReadiness {
             snapshot.completed_at = Some(timestamp());
         }
     }
-
-    fn fail(&self, error: String) {
-        if let Ok(mut snapshot) = self.inner.lock() {
-            snapshot.phase = StartupPhase::Failed;
-            snapshot.message = "Codex 桌面管理器初始化失败".to_string();
-            snapshot.error = Some(error);
-            snapshot.completed_at = Some(timestamp());
-        }
-    }
 }
 
 impl StartupSnapshot {
@@ -234,19 +225,16 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
         json!({"ok": true, "url": format!("http://{}:{}", options.host, options.port), "pid": std::process::id()})
     );
     let setup = setup::SetupManager::load();
+    let startup = StartupReadiness::initializing();
+    // Process readiness only covers the already-bound management server. Legacy profile
+    // migration and desktop activation belong to explicit management operations; running them
+    // here makes Bridge Agent installation depend on user AppX inventory and desktop state.
+    startup.ready();
     let state = Arc::new(AppState {
         credential_management: Mutex::new(()),
         setup,
         management_token,
-        startup: StartupReadiness::initializing(),
-    });
-    let initializing_state = Arc::clone(&state);
-    thread::spawn(move || match initialize_server() {
-        Ok(()) => initializing_state.startup.ready(),
-        Err(error) => {
-            eprintln!("Codex desktop manager initialization failed: {error}");
-            initializing_state.startup.fail(error);
-        }
+        startup,
     });
     for stream in listener.incoming() {
         match stream {
@@ -260,47 +248,6 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-fn initialize_server() -> Result<(), String> {
-    if test_control_enabled() {
-        if let Ok(delay_ms) = env::var("CODEX_DESKTOP_TEST_STARTUP_DELAY_MS") {
-            let delay_ms = delay_ms
-                .parse::<u64>()
-                .map_err(|error| format!("invalid test startup delay: {error}"))?;
-            thread::sleep(Duration::from_millis(delay_ms.min(30_000)));
-        }
-        if let Ok(error) = env::var("CODEX_DESKTOP_TEST_STARTUP_FAILURE") {
-            if !error.trim().is_empty() {
-                return Err(error);
-            }
-        }
-    }
-    let Some(migration) = credential::pending_profile_home_migration()
-        .map_err(|error| format!("检查旧版 Codex 档案迁移状态失败: {error}"))?
-    else {
-        return Ok(());
-    };
-    let desktop_switch = if migration.active_home_before.is_some() {
-        desktop::stop_for_workspace_switch()
-            .map_err(|error| format!("迁移旧版 Codex 档案前停止桌面应用失败: {error}"))?
-    } else {
-        desktop::DesktopSwitch::default()
-    };
-    match credential::state() {
-        Ok(_) => desktop_switch
-            .restart_if_needed()
-            .map(|_| ())
-            .map_err(|error| format!("旧版 Codex 档案迁移完成，但桌面应用重启失败: {error}")),
-        Err(error) => {
-            let restart_error = desktop_switch.restart_if_needed().err();
-            let mut message = format!("迁移旧版 Codex 档案失败: {error}");
-            if let Some(restart_error) = restart_error {
-                message.push_str(&format!("；恢复桌面应用失败: {restart_error}"));
-            }
-            Err(message)
-        }
-    }
 }
 
 fn test_control_enabled() -> bool {

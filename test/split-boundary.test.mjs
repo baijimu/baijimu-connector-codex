@@ -107,6 +107,12 @@ test("Windows desktop discovery follows the codex protocol instead of package na
     assert.doesNotMatch(source, /Get-AppxPackage -Name/);
   }
   assert.match(desktopPreamble, /System\.Text\.UTF8Encoding\(\$false\)/);
+  assert.match(desktopPreamble, /Get-AppxPackage -Publisher \$_/);
+  assert.doesNotMatch(desktopPreamble, /Get-AppxPackage -ErrorAction/);
+  assert.match(desktopPreamble, /Get-Process -Name \$processName/);
+  assert.match(desktopPreamble, /StartsWith\(\$entry\.packageRoot/);
+  assert.match(installer, /Get-AppxPackage -Publisher \$_/);
+  assert.doesNotMatch(installer, /Get-AppxPackage -ErrorAction/);
   assert.doesNotMatch(desktopPreamble, /IApplicationActivationManager|ActivateApplication/);
   assert.doesNotMatch(desktopPreamble, /CurrentUser\.CreateSubKey|SetValue\(|DeleteValue\(/);
   assert.doesNotMatch(desktop, /SendMessageTimeout|WM_SETTINGCHANGE|BroadcastEnvironmentChange/);

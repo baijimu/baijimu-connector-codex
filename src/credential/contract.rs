@@ -82,6 +82,12 @@ pub struct PreparedWorkspaceProfile {
     pub credential: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct PreparedWorkspaceReauthorization {
+    pub profile: CredentialProfile,
+    pub credential: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingProfileHomeMigration {
     pub active_home_before: Option<PathBuf>,

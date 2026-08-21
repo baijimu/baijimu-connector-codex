@@ -22,8 +22,7 @@ pub(super) fn load_metadata() -> Result<CredentialMetadata> {
     for profile in &mut metadata.profiles {
         normalize_profile(profile);
     }
-    let legacy_profile_homes_migrated = migrate_legacy_profile_homes(&mut metadata)?;
-    let default_home_migrated_profile = migrate_active_profile_to_default_home(&mut metadata)?;
+    let legacy_profile_homes_migrated = migrate_profiles_to_shared_home(&mut metadata)?;
     if previous_version < 2 && metadata.active_profile_id.is_none() {
         metadata.active_profile_id = metadata.active_workspace_id.and_then(|id| {
             metadata
@@ -37,21 +36,24 @@ pub(super) fn load_metadata() -> Result<CredentialMetadata> {
         }
     }
     let baseline_captured = capture_original_codex_home(&mut metadata)?;
+    if !metadata.profiles.is_empty() {
+        metadata.active_mode = AuthMode::Baijimu;
+    }
     metadata.version = METADATA_VERSION;
     if source.as_ref() != Some(&path)
         || needs_version_migration
         || baseline_captured
         || legacy_profile_homes_migrated
-        || default_home_migrated_profile.is_some()
     {
         save_metadata(&metadata)?;
     }
-    if let Some(profile) = default_home_migrated_profile.as_ref() {
-        if read_codex_api_key(&Path::new(&profile.codex_home).join(OWNED_AUTH_FILE))?.is_some()
-            && managed_config_ready(&Path::new(&profile.codex_home).join(OWNED_CONFIG_FILE))
-        {
-            commit_default_home_ownership(profile)?;
-        }
+    if let Some(profile) = metadata.active_profile_id.as_deref().and_then(|id| {
+        metadata
+            .profiles
+            .iter()
+            .find(|profile| profile.profile_id == id)
+    }) {
+        sync_profile_to_shared_home(profile)?;
     }
     if remove_after_import {
         let source = source.expect("legacy source exists when cleanup is requested");
@@ -110,14 +112,59 @@ pub(super) fn atomic_write_private(path: &Path, content: &[u8]) -> Result<()> {
         .map(|d| d.as_nanos())
         .unwrap_or_default();
     let temp = path.with_extension(format!("tmp-{}-{unique}", std::process::id()));
-    fs::write(&temp, content).with_context(|| format!("写入临时文件失败: {}", temp.display()))?;
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp)
+        .with_context(|| format!("创建临时文件失败: {}", temp.display()))?;
+    use std::io::Write;
+    file.write_all(content)
+        .with_context(|| format!("写入临时文件失败: {}", temp.display()))?;
+    file.sync_all()
+        .with_context(|| format!("同步临时文件失败: {}", temp.display()))?;
+    drop(file);
     set_private_file(&temp)?;
-    #[cfg(windows)]
-    if path.exists() {
-        fs::remove_file(path)?;
+    if let Err(error) = replace_file(&temp, path) {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
     }
-    fs::rename(&temp, path).with_context(|| format!("替换文件失败: {}", path.display()))?;
     set_private_file(path)?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_file(temp: &Path, path: &Path) -> Result<()> {
+    fs::rename(temp, path).with_context(|| format!("替换文件失败: {}", path.display()))
+}
+
+#[cfg(windows)]
+fn replace_file(temp: &Path, path: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source = temp
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let target = path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            target.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("原子替换文件失败: {}", path.display()));
+    }
     Ok(())
 }
 pub(super) fn verify_private_file(path: &Path) -> Result<()> {

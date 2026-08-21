@@ -94,36 +94,33 @@ test("Windows desktop discovery follows the codex protocol instead of package na
   );
   const desktopLaunch = desktop.slice(
     desktop.indexOf("const LAUNCH_SCRIPT"),
-    desktop.indexOf("pub fn stop_for_codex_home_switch", desktop.indexOf("const LAUNCH_SCRIPT")),
+    desktop.indexOf("pub fn stop_for_workspace_switch", desktop.indexOf("const LAUNCH_SCRIPT")),
   );
   for (const source of [desktopPreamble, installer]) {
     assert.match(source, /local-name\(\)='Protocol'/);
     assert.match(source, /CODEX_DESKTOP_PROTOCOL/);
     assert.match(source, /CODEX_DESKTOP_TRUSTED_PUBLISHERS/);
     assert.doesNotMatch(source, /CODEX_DESKTOP_TRUSTED_PUBLISHERS_JSON/);
-    assert.match(source, /publisher = \[string\]\$identity\[0\]\.Publisher/);
+    assert.match(source, /\$identity\[0\]\.Publisher/);
     assert.match(source, /Windows\.FullTrustApplication/);
     assert.doesNotMatch(source, /OpenAI\.ChatGPT-Desktop/);
     assert.doesNotMatch(source, /Get-AppxPackage -Name/);
   }
   assert.match(desktopPreamble, /System\.Text\.UTF8Encoding\(\$false\)/);
-  assert.match(desktopPreamble, /IApplicationActivationManager/);
-  assert.match(desktopPreamble, /ActivateApplication/);
-  assert.match(desktopPreamble, /DoNotExpandEnvironmentNames/);
-  assert.match(desktopPreamble, /GetValueKind\(\$name\)/);
-  assert.match(desktopPreamble, /DeleteValue\(\$name, \$false\)/);
-  assert.match(desktopPreamble, /BroadcastEnvironmentChange/);
+  assert.doesNotMatch(desktopPreamble, /IApplicationActivationManager|ActivateApplication/);
+  assert.doesNotMatch(desktopPreamble, /CurrentUser\.CreateSubKey|SetValue\(|DeleteValue\(/);
+  assert.doesNotMatch(desktop, /SendMessageTimeout|WM_SETTINGCHANGE|BroadcastEnvironmentChange/);
   assert.doesNotMatch(desktopPreamble, /BAIJIMU_AUTH_FILE/);
   assert.doesNotMatch(desktopPreamble, /BAIJIMU_CURRENT_WORKSPACE_ID/);
   assert.doesNotMatch(desktopPreamble, /Grant-BaijimuCliAuthStoreReadAccess/);
   assert.doesNotMatch(desktopPreamble, /CodexSandbox|icacls\.exe/);
-  assert.match(desktopLaunch, /Invoke-CodexDesktopActivation/);
+  assert.match(desktopLaunch, /Start-Process -FilePath \$entry\[0\]\.executable -PassThru/);
   assert.equal(desktopLaunch.match(/Get-CodexDesktopEntries/g)?.length, 1);
   assert.match(desktopLaunch, /currentVersion/);
   assert.match(desktopLaunch, /minimumVersion/);
   assert.match(desktopLaunch, /activationAccepted = \$true/);
   assert.doesNotMatch(desktopLaunch, /VisibleWindow|EnumWindows|IsWindowVisible|AddSeconds\(45\)/);
-  assert.doesNotMatch(desktopLaunch, /Start-Process/);
+  assert.doesNotMatch(desktopLaunch, /CODEX_HOME|appUserModelId/);
 });
 
 test("desktop launch only activates an existing profile and starts the desktop app", async () => {
@@ -135,45 +132,47 @@ test("desktop launch only activates an existing profile and starts the desktop a
   assert.doesNotMatch(desktop, /launch_and_verify|restart_and_verify|has_visible_window/);
   assert.doesNotMatch(main, /active_home_snapshot|restore_active_home|启动验证失败|状态指针回滚/);
   assert.doesNotMatch(credential, /pub fn active_home_snapshot|pub fn restore_active_home/);
-  assert.match(main, /desktop::launch\(&selected_home\)/);
+  assert.match(main, /desktop::launch\(\)/);
   const launchRouteStart = main.indexOf('(\"POST\", \"/management/v1/codex/launch\")');
   const launchRoute = main.slice(
     launchRouteStart,
     main.indexOf('_ => Err(HttpError::new(404', launchRouteStart),
   );
   assert.doesNotMatch(launchRoute, /verify_system_compatibility|stop_for_codex_home_switch/);
-  assert.match(launchRoute, /activate_workspace_profile/);
+  assert.match(launchRoute, /stop_for_workspace_switch/);
+  assert.match(launchRoute, /prepare_workspace_activation/);
+  assert.match(launchRoute, /activate_prepared_workspace_profile/);
   assert.doesNotMatch(
     launchRoute,
-    /initialize_workspace_profile|reauthorize_workspace_profile|create_llm_credential|write_workspace_auth|write_workspace_config/,
+    /initialize_workspace_profile|prepare_workspace_reauthorization|create_llm_credential|write_workspace_auth|write_workspace_config/,
   );
-  const desktopLaunchStart = desktop.indexOf("pub fn launch(codex_home");
-  const desktopLaunch = desktop.slice(
-    desktopLaunchStart,
-    desktop.indexOf("impl DesktopSwitch", desktopLaunchStart),
-  );
-  const stopIndex = desktopLaunch.indexOf("platform::stop_for_codex_home_switch()");
-  const launchIndex = desktopLaunch.indexOf("platform::launch(codex_home");
-  assert.ok(stopIndex >= 0 && launchIndex > stopIndex);
+  const stopIndex = launchRoute.indexOf("desktop::stop_for_workspace_switch()");
+  const credentialIndex = launchRoute.indexOf("credential::activate_prepared_workspace_profile(&prepared)");
+  const launchIndex = launchRoute.indexOf("desktop::launch()");
+  assert.ok(stopIndex >= 0 && credentialIndex > stopIndex && launchIndex > credentialIndex);
   assert.doesNotMatch(credential, /PERMISSION_MODE_VISIBILITY_KEY|desktop_defaults_version/);
 });
 
-test("initialization is idempotent and reauthorization only replaces auth", async () => {
+test("initialization preserves shared state and reauthorization only rotates credentials", async () => {
   const [main, credential, app] = await Promise.all([
     read("src/main.rs"),
     read("src/credential.rs"),
     read("ui/app.js"),
   ]);
   assert.match(credential, /initialize_workspace_files/);
-  assert.match(credential, /if !config_path\.is_file\(\)/);
-  assert.match(credential, /reauthorize_workspace_profile/);
-  const reauthorizeStart = credential.indexOf("pub fn reauthorize_workspace_profile");
+  assert.match(credential, /ensure_workspace_config/);
+  assert.match(credential, /profile_credential_path/);
+  assert.match(credential, /sync_credential_to_shared_home/);
+  assert.match(credential, /migrate_profiles_to_shared_home/);
+  assert.doesNotMatch(credential.slice(0, credential.indexOf("mod legacy_profile_home_tests")), /fs::rename\(&source, &target\)/);
+  assert.match(credential, /commit_workspace_reauthorization/);
+  const reauthorizeStart = credential.indexOf("pub fn commit_workspace_reauthorization");
   const reauthorize = credential.slice(
     reauthorizeStart,
     credential.indexOf("fn authorized_workspace", reauthorizeStart),
   );
   assert.match(reauthorize, /write_workspace_auth/);
-  assert.doesNotMatch(reauthorize, /write_workspace_config/);
+  assert.doesNotMatch(reauthorize, /ensure_workspace_config/);
   assert.match(main, /\/management\/v1\/codex\/initialize/);
   assert.match(main, /\/management\/v1\/codex\/reauthorize/);
   assert.match(app, /label: "重新授权"/);

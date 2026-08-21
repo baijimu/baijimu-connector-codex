@@ -3,11 +3,11 @@
 `com.baijimu.connector.codex` 是线上 `codex` 应用的后继版本，产品名称为 Codex 桌面管理器，负责：
 
 - 安装和验证 ChatGPT/Codex 官方桌面应用；
-- 初始化已授权工作区的桌面专用 LLM credential、默认配置和 `CODEX_HOME`；
+- 初始化已授权工作区的桌面专用 LLM credential，并接管默认 `~/.codex` 的认证与百积木路由配置；
 - 展示可用工作区；已初始化工作区可直接启动或显式重新授权；
-- 启动只选择已有 `CODEX_HOME` 并打开桌面应用，不签发凭证、不覆盖配置，也不修改 Codex 权限状态；
-- 保留原有 ChatGPT 登录和所有工作区目录，切换失败时恢复原选择；
-- 在原 Connector 数据目录中原位升级并继续使用既有桌面档案元数据。
+- 所有工作区共享默认 `.codex` 中的会话、历史和状态；启动时只原子替换 `auth.json` 中的工作区凭证；
+- Windows 直接启动可信 AppX 包的 FullTrust 可执行入口，macOS 通过 LaunchServices 启动，不写用户环境变量、不广播环境变化；
+- 从旧版隔离档案升级时只迁移工作区凭证，旧会话目录原样保留，不自动合并状态数据库。
 
 安装结果和百积木路由验证结果相互独立：应用、工作区凭证和配置完成后即可打开 Codex，路由验证会在后台对暂态错误最多尝试三次。验证仍未通过时，安装状态保持成功，界面显示可重新验证的警告；刷新或“重新验证路由”只复用现有工作区凭证进行探测，不会重新安装或重新签发凭证。
 
@@ -15,7 +15,7 @@
 
 ## 状态所有权
 
-Bridge Agent 继续按 `com.baijimu.connector.codex` 注入原有 `BAIJIMU_CONNECTOR_DATA_DIR`。桌面档案、当前桌面工作区、安装状态和管理令牌在同一目录内原位升级；应用不会读取新的外部 Connector 工作区运行档案。
+Bridge Agent 继续按 `com.baijimu.connector.codex` 注入原有 `BAIJIMU_CONNECTOR_DATA_DIR`。各工作区凭证保存在该 Connector 私有目录；默认 `~/.codex` 由本应用管理 `auth.json` 和百积木路由配置，其余会话、历史、技能和状态文件不随工作区切换。
 
 ## 本地运行
 

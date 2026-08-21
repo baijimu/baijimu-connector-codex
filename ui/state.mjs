@@ -34,7 +34,7 @@ export function normalizeCredentialState(value) {
     ? input.profiles.map(normalizeProfile).filter(Boolean)
     : [];
   return {
-    activeMode: input.activeMode === "baijimu" ? "baijimu" : "chatgpt",
+    activeMode: "baijimu",
     currentWorkspaceId: positiveInteger(input.currentWorkspaceId),
     activeWorkspaceId: positiveInteger(input.activeWorkspaceId),
     codexConfigured: input.codexConfigured === true,
@@ -103,7 +103,7 @@ export function profileBadgeMeta({
 } = {}) {
   const badges = [];
   if (active) badges.push({ label: "当前", tone: "current" });
-  if (systemDefault) badges.push({ label: "系统默认", tone: "default" });
+  if (systemDefault) badges.push({ label: "共享 .codex", tone: "default" });
   if (disabled) badges.push({ label: "未授权", tone: "warning" });
   else if (!configured) badges.push({ label: "未初始化", tone: "warning" });
   else if (["missing", "invalid"].includes(credentialStatus)) {

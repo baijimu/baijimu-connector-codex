@@ -1,4 +1,4 @@
-export const DEFAULT_MODEL = "gpt-5.6-sol";
+export const DEFAULT_MODEL = "gpt-5.5";
 
 export function connectorStartupRetryable(error) {
   const code = String(

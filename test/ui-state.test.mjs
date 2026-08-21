@@ -31,6 +31,7 @@ test("personal auth profiles do not require a workspace dimension", () => {
   assert.equal(state.profiles.length, 1);
   assert.equal(state.profiles[0].workspaceId, null);
   assert.equal(state.profiles[0].kind, "personal");
+  assert.equal(state.profiles[0].model, "gpt-5.5");
 });
 
 test("authorization profiles expose source and compact status badges", () => {

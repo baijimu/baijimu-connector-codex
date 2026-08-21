@@ -15,7 +15,8 @@ pub use contract::*;
 mod store;
 use store::*;
 
-const METADATA_VERSION: u32 = 11;
+const METADATA_VERSION: u32 = 12;
+const DEFAULT_MODEL_METADATA_VERSION: u32 = 12;
 const METADATA_FILE: &str = "codex-credentials.json";
 const OWNERSHIP_MARKER_FILE: &str = ".baijimu-owner.json";
 const OWNERSHIP_RESERVATION_FILE: &str = ".baijimu-owner.pending.json";
@@ -616,8 +617,11 @@ fn managed_config_ready(path: &Path) -> bool {
                 .ok()
         })
         .is_some_and(|doc| {
-            doc.get("model_provider").and_then(Item::as_str)
-                == Some(product.router_provider.as_str())
+            doc.get("model").and_then(Item::as_str) == Some(product.default_model.as_str())
+                && doc.get("model_provider").and_then(Item::as_str)
+                    == Some(product.router_provider.as_str())
+                && doc.get("cli_auth_credentials_store").and_then(Item::as_str) == Some("file")
+                && doc.get("forced_login_method").and_then(Item::as_str) == Some("api")
                 && doc
                     .get("model_providers")
                     .and_then(Item::as_table)
@@ -626,7 +630,41 @@ fn managed_config_ready(path: &Path) -> bool {
                     .and_then(|table| table.get("base_url"))
                     .and_then(Item::as_str)
                     == Some(product.router_base_url.as_str())
+                && doc
+                    .get("model_providers")
+                    .and_then(Item::as_table)
+                    .and_then(|table| table.get(product.router_provider.as_str()))
+                    .and_then(Item::as_table)
+                    .and_then(|table| table.get("wire_api"))
+                    .and_then(Item::as_str)
+                    == Some("responses")
+                && doc
+                    .get("model_providers")
+                    .and_then(Item::as_table)
+                    .and_then(|table| table.get(product.router_provider.as_str()))
+                    .and_then(Item::as_table)
+                    .and_then(|table| table.get("requires_openai_auth"))
+                    .and_then(Item::as_bool)
+                    == Some(true)
         })
+}
+
+fn migrate_profile_default_models(
+    metadata: &mut CredentialMetadata,
+    previous_version: u32,
+) -> bool {
+    if previous_version >= DEFAULT_MODEL_METADATA_VERSION {
+        return false;
+    }
+    let default_model = crate::product_config::get().default_model.as_str();
+    let mut changed = false;
+    for profile in &mut metadata.profiles {
+        if profile.model != default_model {
+            profile.model = default_model.to_string();
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn merge_workspace_options(
@@ -2477,6 +2515,68 @@ mod shared_home_tests {
             codex_home: home.display().to_string(),
             credential_status: "verified".to_string(),
         }
+    }
+
+    #[test]
+    fn metadata_v11_migrates_profile_models_without_touching_live_config() {
+        let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "codex-default-model-migration-{}",
+            std::process::id()
+        ));
+        let user_home = root.join("user");
+        let data_home = root.join("data");
+        let _env = EnvRestore::set(&[
+            ("HOME", &user_home),
+            ("USERPROFILE", &user_home),
+            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+        ]);
+        let shared = user_home.join(".codex");
+        fs::create_dir_all(&shared).unwrap();
+        let stale_config = b"model = \"gpt-5.6-sol\"\ncustom_setting = \"keep\"\n";
+        fs::write(shared.join("config.toml"), stale_config).unwrap();
+        let mut workspace = profile(642, &shared);
+        workspace.model = "gpt-5.6-sol".to_string();
+        save_metadata(&CredentialMetadata {
+            version: 11,
+            profiles: vec![workspace],
+            ..CredentialMetadata::default()
+        })
+        .unwrap();
+
+        let migrated = load_metadata().unwrap();
+
+        assert_eq!(migrated.version, METADATA_VERSION);
+        assert!(migrated
+            .profiles
+            .iter()
+            .all(|profile| profile.model == "gpt-5.5"));
+        assert_eq!(fs::read(shared.join("config.toml")).unwrap(), stale_config);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn workspace_config_readiness_requires_the_complete_gpt55_router_contract() {
+        let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("codex-config-readiness-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.toml");
+        fs::write(
+            &path,
+            b"model = \"gpt-5.6-sol\"\nmodel_provider = \"baijimu-router\"\n\n[model_providers.baijimu-router]\nbase_url = \"https://router.baijimu.com/api/claudecode/v1\"\n",
+        )
+        .unwrap();
+        assert!(!managed_config_ready(&path));
+
+        ensure_workspace_config(&path).unwrap();
+
+        assert!(managed_config_ready(&path));
+        let rendered = fs::read_to_string(&path).unwrap();
+        assert!(rendered.contains("model = \"gpt-5.5\""));
+        assert!(rendered.contains("wire_api = \"responses\""));
+        assert!(rendered.contains("requires_openai_auth = true"));
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

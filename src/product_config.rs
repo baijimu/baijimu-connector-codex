@@ -88,6 +88,7 @@ mod tests {
     fn embedded_product_config_is_valid() {
         let config = get();
         assert_eq!(config.schema_version, SCHEMA_VERSION);
+        assert_eq!(config.default_model, "gpt-5.5");
         assert_eq!(config.default_ui_locale, "zh-CN");
         assert!(config.router_base_url.starts_with("https://"));
         assert_eq!(config.windows_desktop_protocol, "codex");

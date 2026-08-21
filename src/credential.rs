@@ -2007,6 +2007,7 @@ mod shared_home_tests {
         fs::write(old_two.join("sessions.jsonl"), b"workspace-two-session").unwrap();
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
+            ("USERPROFILE", &user_home),
             ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
         ]);
         let mut metadata = CredentialMetadata {
@@ -2056,6 +2057,7 @@ mod shared_home_tests {
         let data_home = root.join("data");
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
+            ("USERPROFILE", &user_home),
             ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
         ]);
         let shared = user_home.join(".codex");
@@ -2094,6 +2096,7 @@ mod shared_home_tests {
         let data_home = root.join("data");
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
+            ("USERPROFILE", &user_home),
             ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
         ]);
         let shared = user_home.join(".codex");

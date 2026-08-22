@@ -16,13 +16,13 @@ pub fn verify_system_compatibility() -> Result<()> {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-pub fn launch() -> Result<()> {
-    platform::launch()
+pub fn launch_workspace(codex_home: &std::path::Path) -> Result<()> {
+    platform::launch_workspace(codex_home)
 }
 
 impl DesktopSwitch {
-    pub fn restart_if_needed(&self) -> Result<bool> {
-        platform::restart_if_needed(self)
+    pub fn restart_workspace_if_needed(&self, codex_home: &std::path::Path) -> Result<bool> {
+        platform::restart_workspace_if_needed(self, codex_home)
     }
 }
 
@@ -97,6 +97,8 @@ if ($wasRunning) {
 "#;
 
     const LAUNCH_SCRIPT: &str = r#"
+$codexHome = $env:CODEX_HOME
+if ([string]::IsNullOrWhiteSpace($codexHome)) { throw '启动 Codex 工作区时必须显式提供 CODEX_HOME' }
 Start-Process -FilePath "${codexDesktopProtocol}:"
 $deadline = (Get-Date).AddSeconds(10)
 do {
@@ -111,16 +113,18 @@ if ($targets.Count -eq 0) { throw 'Windows 已接受 codex: 协议请求，但�
 "#;
 
     pub fn stop_for_workspace_switch() -> Result<DesktopSwitch> {
-        let result: StopResult = crate::json_compat::from_slice(&run_powershell(STOP_SCRIPT)?)
-            .context("解析 ChatGPT/Codex 桌面停止结果失败")?;
+        let result: StopResult =
+            crate::json_compat::from_slice(&run_powershell(STOP_SCRIPT, None)?)
+                .context("解析 ChatGPT/Codex 桌面停止结果失败")?;
         Ok(DesktopSwitch {
             was_running: result.was_running,
         })
     }
 
-    pub fn launch() -> Result<()> {
-        let result: LaunchResult = crate::json_compat::from_slice(&run_powershell(LAUNCH_SCRIPT)?)
-            .context("解析 ChatGPT/Codex Windows 启动结果失败")?;
+    pub fn launch_workspace(codex_home: &std::path::Path) -> Result<()> {
+        let result: LaunchResult =
+            crate::json_compat::from_slice(&run_powershell(LAUNCH_SCRIPT, Some(codex_home))?)
+                .context("解析 ChatGPT/Codex Windows 启动结果失败")?;
         anyhow::ensure!(
             result.activation_accepted,
             "Windows 未接受 ChatGPT/Codex 桌面应用启动请求"
@@ -128,15 +132,18 @@ if ($targets.Count -eq 0) { throw 'Windows 已接受 codex: 协议请求，但�
         Ok(())
     }
 
-    pub fn restart_if_needed(state: &DesktopSwitch) -> Result<bool> {
+    pub fn restart_workspace_if_needed(
+        state: &DesktopSwitch,
+        codex_home: &std::path::Path,
+    ) -> Result<bool> {
         if !state.was_running {
             return Ok(false);
         }
-        launch()?;
+        launch_workspace(codex_home)?;
         Ok(true)
     }
 
-    fn run_powershell(script: &str) -> Result<Vec<u8>> {
+    fn run_powershell(script: &str, codex_home: Option<&std::path::Path>) -> Result<Vec<u8>> {
         let mut command = Command::new("powershell.exe");
         crate::child_process::isolate_from_connector_environment(&mut command);
         let product = crate::product_config::get();
@@ -150,16 +157,19 @@ if ($targets.Count -eq 0) { throw 'Windows 已接受 codex: 协议请求，但�
             .env(
                 "CODEX_DESKTOP_TRUSTED_SIGNER_SUBJECTS",
                 product.windows_desktop_trusted_signer_subjects.join("\n"),
-            )
-            .args([
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                &complete,
-            ]);
+            );
+        if let Some(codex_home) = codex_home {
+            command.env("CODEX_HOME", codex_home);
+        }
+        command.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &complete,
+        ]);
         let output = command
             .output()
             .context("启动 PowerShell 管理 ChatGPT/Codex 桌面进程失败")?;
@@ -186,7 +196,6 @@ if ($targets.Count -eq 0) { throw 'Windows 已接受 codex: 协议请求，但�
             assert!(!source.contains("AppxManifest.xml"));
             assert!(!source.contains("Get-Process -ErrorAction"));
             for forbidden in [
-                concat!("CODEX", "_HOME"),
                 concat!("CurrentUser", ".CreateSubKey"),
                 concat!("SendMessage", "Timeout"),
                 concat!("WM_", "SETTINGCHANGE"),
@@ -194,6 +203,7 @@ if ($targets.Count -eq 0) { throw 'Windows 已接受 codex: 协议请求，但�
             ] {
                 assert!(!source.contains(forbidden), "unexpected {forbidden}");
             }
+            assert!(source.contains("CODEX_HOME"));
         }
     }
 }
@@ -231,11 +241,11 @@ mod platform {
         anyhow::bail!("ChatGPT/Codex 桌面应用未在 15 秒内退出")
     }
 
-    pub fn restart_if_needed(state: &DesktopSwitch) -> Result<bool> {
+    pub fn restart_workspace_if_needed(state: &DesktopSwitch, codex_home: &Path) -> Result<bool> {
         if !state.was_running {
             return Ok(false);
         }
-        launch()?;
+        launch_workspace(codex_home)?;
         Ok(true)
     }
 
@@ -247,14 +257,22 @@ mod platform {
         crate::system_compatibility::ensure_supported("macOS", &current, &minimum, "ChatGPT/Codex")
     }
 
-    pub fn launch() -> Result<()> {
+    pub fn launch_workspace(codex_home: &Path) -> Result<()> {
         let path =
             installed_application_path().context("没有找到已安装的 ChatGPT/Codex 桌面应用")?;
         verify_system_compatibility()?;
+        let mut command = open_application_command(&path, codex_home);
+        run_checked(&mut command, "打开 ChatGPT/Codex 桌面应用失败")
+    }
+
+    fn open_application_command(app_path: &Path, codex_home: &Path) -> Command {
         let mut command = Command::new("/usr/bin/open");
         crate::child_process::isolate_from_connector_environment(&mut command);
-        command.arg(&path);
-        run_checked(&mut command, "打开 ChatGPT/Codex 桌面应用失败")
+        let mut assignment = std::ffi::OsString::from("CODEX_HOME=");
+        assignment.push(codex_home);
+        command.arg("--env").arg(assignment);
+        command.arg(app_path);
+        command
     }
 
     fn installed_application_path() -> Option<PathBuf> {
@@ -307,15 +325,23 @@ mod platform {
     mod tests {
         use super::*;
         #[test]
-        fn launch_does_not_override_codex_home() {
-            let mut command = Command::new("/usr/bin/open");
-            crate::child_process::isolate_from_connector_environment(&mut command);
-            command.arg("/Applications/Codex.app");
+        fn workspace_launch_passes_only_the_selected_codex_home() {
+            let command = open_application_command(
+                Path::new("/Applications/Codex.app"),
+                Path::new("/private/codex/workspace-a"),
+            );
             let args = command
                 .get_args()
                 .map(|v| v.to_string_lossy().into_owned())
                 .collect::<Vec<_>>();
-            assert_eq!(args, vec!["/Applications/Codex.app"]);
+            assert_eq!(
+                args,
+                vec![
+                    "--env",
+                    "CODEX_HOME=/private/codex/workspace-a",
+                    "/Applications/Codex.app"
+                ]
+            );
         }
     }
 }
@@ -326,7 +352,10 @@ mod platform {
     pub fn stop_for_workspace_switch() -> Result<DesktopSwitch> {
         Ok(DesktopSwitch::default())
     }
-    pub fn restart_if_needed(_state: &DesktopSwitch) -> Result<bool> {
+    pub fn restart_workspace_if_needed(
+        _state: &DesktopSwitch,
+        _codex_home: &std::path::Path,
+    ) -> Result<bool> {
         Ok(false)
     }
 }

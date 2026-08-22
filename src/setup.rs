@@ -604,6 +604,8 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
 struct SetupDesktopGuard {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     stopped: Option<crate::desktop::DesktopSwitch>,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    codex_home: PathBuf,
     launch_after_setup: bool,
 }
 
@@ -618,6 +620,10 @@ impl SetupDesktopGuard {
         Ok(Self {
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             stopped,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            codex_home: crate::codex_workspace::active()
+                .map(|workspace| PathBuf::from(workspace.codex_home))
+                .unwrap_or_else(|_| crate::credential::default_codex_home()),
             launch_after_setup: activate,
         })
     }
@@ -627,7 +633,9 @@ impl SetupDesktopGuard {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.stopped.take();
-            SetupCompletion::from_desktop_activation(crate::desktop::launch())
+            SetupCompletion::from_desktop_activation(crate::desktop::launch_workspace(
+                &self.codex_home,
+            ))
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
@@ -643,7 +651,7 @@ impl Drop for SetupDesktopGuard {
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(stopped) = self.stopped.take() {
-            if let Err(error) = stopped.restart_if_needed() {
+            if let Err(error) = stopped.restart_workspace_if_needed(&self.codex_home) {
                 eprintln!("安装失败后恢复 ChatGPT/Codex 桌面应用失败: {error}");
             }
         }

@@ -322,6 +322,85 @@ pub fn prepare_profile_activation(profile_id: &str) -> Result<CredentialProfile>
     Ok(profile)
 }
 
+pub fn apply_profile_to_home(
+    profile_id: &str,
+    home: &Path,
+    current_profile_id: Option<&str>,
+    checkpoint_current: bool,
+) -> Result<CredentialProfile> {
+    let previous_metadata = load_metadata()?;
+    let profile = previous_metadata
+        .profiles
+        .iter()
+        .find(|profile| profile.profile_id == profile_id)
+        .cloned()
+        .context("授权档案不存在")?;
+    let target_auth = read_profile_auth(&profile)?;
+    if target_auth
+        .as_deref()
+        .is_some_and(|auth| !auth_is_usable_for_profile(auth, &profile))
+        || (target_auth.is_none() && profile.kind == AuthProfileKind::Baijimu)
+    {
+        anyhow::bail!("授权档案内容无效，请重新授权或重新登录");
+    }
+    fs::create_dir_all(home)
+        .with_context(|| format!("创建 Codex 工作区目录失败: {}", home.display()))?;
+    set_private_directory(home)?;
+    let previous_auth = snapshot_file(home.join(OWNED_AUTH_FILE))?;
+    let previous_config = snapshot_file(home.join(OWNED_CONFIG_FILE))?;
+    let mut metadata = previous_metadata.clone();
+    let activation = (|| -> Result<()> {
+        if checkpoint_current {
+            checkpoint_profile_at_home(&metadata, current_profile_id, home)?;
+        }
+        match target_auth.as_deref() {
+            Some(auth) => atomic_write_private(&home.join(OWNED_AUTH_FILE), auth)?,
+            None if home.join(OWNED_AUTH_FILE).exists() => {
+                fs::remove_file(home.join(OWNED_AUTH_FILE))?;
+            }
+            None => {}
+        }
+        match profile.kind {
+            AuthProfileKind::Personal => restore_profile_config_to_home(&profile, home)?,
+            AuthProfileKind::Baijimu => ensure_workspace_config(&home.join(OWNED_CONFIG_FILE))?,
+        }
+        commit_home_ownership(home)?;
+        let activated_at = now_epoch_seconds();
+        for current in &mut metadata.profiles {
+            if current.profile_id == profile.profile_id {
+                current.activated_at_epoch_seconds = activated_at;
+            }
+        }
+        if home == default_original_codex_home() {
+            metadata.active_mode = match profile.kind {
+                AuthProfileKind::Personal => AuthMode::Chatgpt,
+                AuthProfileKind::Baijimu => AuthMode::Baijimu,
+            };
+            metadata.active_profile_id = Some(profile.profile_id.clone());
+            metadata.active_workspace_id =
+                (profile.kind == AuthProfileKind::Baijimu).then_some(profile.workspace_id);
+        }
+        save_metadata(&metadata)
+    })();
+    if let Err(error) = activation {
+        restore_file_snapshot(&previous_auth)
+            .context("认证通道切换失败，且恢复原 auth.json 失败")?;
+        restore_file_snapshot(&previous_config)
+            .context("认证通道切换失败，且恢复原 config.toml 失败")?;
+        save_metadata(&previous_metadata).context("认证通道切换失败，且恢复档案元数据失败")?;
+        return Err(error).context("切换 Codex 工作区认证通道失败");
+    }
+    metadata
+        .profiles
+        .into_iter()
+        .find(|item| item.profile_id == profile.profile_id)
+        .context("激活后未找到授权档案")
+}
+
+pub fn default_codex_home() -> PathBuf {
+    default_original_codex_home()
+}
+
 fn initialize_workspace_files<F>(
     profile: &CredentialProfile,
     may_issue_initial_credential: bool,
@@ -898,9 +977,13 @@ fn sync_profile_to_shared_home(profile: &CredentialProfile) -> Result<()> {
 
 fn commit_shared_home_ownership() -> Result<()> {
     let home = default_original_codex_home();
-    fs::create_dir_all(&home)
-        .with_context(|| format!("创建默认 Codex 状态目录失败: {}", home.display()))?;
-    set_private_directory(&home)?;
+    commit_home_ownership(&home)
+}
+
+fn commit_home_ownership(home: &Path) -> Result<()> {
+    fs::create_dir_all(home)
+        .with_context(|| format!("创建 Codex 工作区状态目录失败: {}", home.display()))?;
+    set_private_directory(home)?;
     let marker = CodexHomeOwnership {
         schema_version: OWNERSHIP_SCHEMA_VERSION,
         owner: OWNERSHIP_OWNER.to_string(),
@@ -909,7 +992,7 @@ fn commit_shared_home_ownership() -> Result<()> {
         profile_key: None,
     };
     let path = home.join(OWNERSHIP_MARKER_FILE);
-    if read_valid_ownership(&home)
+    if read_valid_ownership(home)
         .ok()
         .flatten()
         .as_ref()
@@ -923,7 +1006,7 @@ fn commit_shared_home_ownership() -> Result<()> {
         return Ok(());
     }
     atomic_write_private(&path, &serde_json::to_vec_pretty(&marker)?)?;
-    read_valid_ownership(&home)?.context("百积木 Codex 所有权标记写入后无法回读")?;
+    read_valid_ownership(home)?.context("百积木 Codex 所有权标记写入后无法回读")?;
     let reservation = home.join(OWNERSHIP_RESERVATION_FILE);
     if reservation.exists() {
         fs::remove_file(&reservation)?;
@@ -996,7 +1079,19 @@ fn read_profile_auth(profile: &CredentialProfile) -> Result<Option<Vec<u8>>> {
 }
 
 fn checkpoint_active_profile(metadata: &CredentialMetadata) -> Result<()> {
-    let Some(active) = metadata.active_profile_id.as_deref().and_then(|id| {
+    checkpoint_profile_at_home(
+        metadata,
+        metadata.active_profile_id.as_deref(),
+        &default_original_codex_home(),
+    )
+}
+
+fn checkpoint_profile_at_home(
+    metadata: &CredentialMetadata,
+    profile_id: Option<&str>,
+    home: &Path,
+) -> Result<()> {
+    let Some(active) = profile_id.and_then(|id| {
         metadata
             .profiles
             .iter()
@@ -1004,7 +1099,6 @@ fn checkpoint_active_profile(metadata: &CredentialMetadata) -> Result<()> {
     }) else {
         return Ok(());
     };
-    let home = default_original_codex_home();
     let auth = read_auth_bytes(&home.join(OWNED_AUTH_FILE))?;
     if let Some(auth) = auth.as_deref() {
         if !auth_is_usable_for_profile(auth, active) {
@@ -1097,11 +1191,12 @@ fn save_profile_config(profile: &CredentialProfile, snapshot: &AuthConfigSnapsho
 }
 
 fn restore_profile_config(profile: &CredentialProfile) -> Result<()> {
+    restore_profile_config_to_home(profile, &default_original_codex_home())
+}
+
+fn restore_profile_config_to_home(profile: &CredentialProfile, home: &Path) -> Result<()> {
     let snapshot = load_profile_config(profile)?;
-    apply_auth_config(
-        &default_original_codex_home().join(OWNED_CONFIG_FILE),
-        &snapshot,
-    )
+    apply_auth_config(&home.join(OWNED_CONFIG_FILE), &snapshot)
 }
 
 fn load_profile_config(profile: &CredentialProfile) -> Result<AuthConfigSnapshot> {

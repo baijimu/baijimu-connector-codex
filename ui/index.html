@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>Codex 默认工作区</title>
+    <title>Codex 工作区</title>
     <link rel="stylesheet" href="./styles.css" />
     <script type="module" src="./app.js"></script>
   </head>
@@ -14,6 +14,28 @@
       <div id="error" class="message error error-with-action" role="alert" hidden>
         <span id="error-text"></span>
         <button id="error-retry-button" class="button secondary compact" type="button" hidden>重试</button>
+      </div>
+
+      <div id="workspace-create-modal" class="modal-backdrop" hidden>
+        <section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-create-title">
+          <div class="modal-heading">
+            <p class="eyebrow">新增工作区</p>
+            <h2 id="workspace-create-title">创建 Codex 工作区</h2>
+          </div>
+          <p class="modal-message">新工作区拥有独立的会话、历史、技能和配置，并可选择当前任一认证通道。</p>
+          <label class="form-field" for="workspace-name-input">
+            <span>工作区名称</span>
+            <input id="workspace-name-input" type="text" maxlength="80" autocomplete="off" placeholder="例如：产品研发" />
+          </label>
+          <label class="form-field" for="workspace-auth-profile-select">
+            <span>初始认证通道</span>
+            <select id="workspace-auth-profile-select"></select>
+          </label>
+          <div class="modal-actions">
+            <button id="workspace-create-cancel" class="button secondary" type="button">取消</button>
+            <button id="workspace-create-confirm" class="button primary" type="button">创建工作区</button>
+          </div>
+        </section>
       </div>
       <div id="warning" class="message warning" role="status" hidden></div>
       <div id="legacy-home-migration" class="message warning error-with-action" role="status" hidden>
@@ -30,7 +52,7 @@
             <h2 id="auth-switch-modal-title">切换认证通道</h2>
           </div>
           <p id="auth-switch-modal-message" class="modal-message">
-            选择 ChatGPT 登录或一个百积木工作区授权。确认后只切换默认工作区的当前认证，不会启动 Codex。
+            选择 ChatGPT 登录或一个百积木工作区授权。确认后只切换目标工作区的当前认证，不会影响其他工作区。
           </p>
           <div id="auth-profile-list" class="profile-list modal-profile-list">
             <div class="empty-state">正在读取认证通道…</div>
@@ -46,7 +68,7 @@
         <div class="operation-heading">
           <span class="operation-spinner" aria-hidden="true"></span>
           <div>
-            <strong id="codex-operation-title">正在处理默认工作区</strong>
+            <strong id="codex-operation-title">正在处理 Codex 工作区</strong>
             <p id="codex-operation-message">请稍候。</p>
           </div>
         </div>
@@ -56,35 +78,19 @@
         <div class="section-heading workspace-heading">
           <div>
             <p class="eyebrow">工作区</p>
-            <h2 id="workspace-title">Codex 默认工作区</h2>
+            <h2 id="workspace-title">Codex 工作区</h2>
           </div>
           <div class="workspace-heading-actions">
-            <span id="workspace-auth-badge" class="status-badge neutral">读取中</span>
-            <button id="restart-codex-button" class="button primary" type="button">重启 Codex</button>
+            <button id="add-workspace-button" class="button primary compact" type="button">新增工作区</button>
           </div>
         </div>
-        <p class="workspace-note">会话、历史、技能和其他 Codex 状态始终保留在这个工作区；切换只影响认证通道。</p>
+        <p class="workspace-note">每个工作区独立保存会话、历史、技能和配置，并可使用当前全部认证通道。</p>
         <div id="workspace-route-notice" class="workspace-route-notice" hidden>
           <span id="workspace-route-message"></span>
           <button id="workspace-route-action" class="button secondary compact" type="button" hidden>重新验证路由</button>
         </div>
-        <div class="workspace-summary">
-          <div class="workspace-current-channel">
-            <span class="field-label">当前认证通道</span>
-            <strong id="current-auth-channel">正在读取…</strong>
-            <small id="current-auth-detail">正在确认当前 Codex 登录方式。</small>
-          </div>
-          <div class="workspace-home">
-            <span class="field-label">Codex Home</span>
-            <code id="workspace-codex-home">正在读取…</code>
-          </div>
-          <button
-            id="auth-channel-toggle"
-            class="button secondary"
-            type="button"
-            aria-haspopup="dialog"
-            aria-controls="auth-switch-modal"
-          >切换认证通道</button>
+        <div id="codex-workspace-list" class="codex-workspace-list">
+          <div class="empty-state">正在读取 Codex 工作区…</div>
         </div>
       </section>
       <section id="setup-panel" class="panel setup-panel" aria-labelledby="setup-title" tabindex="-1">
@@ -118,7 +124,7 @@
           <ol id="setup-step-list" class="setup-step-list" aria-label="Codex 初始化步骤"></ol>
         </div>
         <div id="setup-actions" class="form-actions">
-          <p>这里仅负责 Codex 桌面环境的安装和修复；安装完成后将进入默认工作区。</p>
+          <p>这里仅负责 Codex 桌面环境的安装和修复；安装完成后将进入工作区管理界面。</p>
           <div class="setup-action-buttons">
             <button id="setup-action-button" class="button primary" type="button" hidden>重新安装并修复</button>
           </div>

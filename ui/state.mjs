@@ -33,6 +33,10 @@ export function normalizeCredentialState(value) {
   const profiles = Array.isArray(input.profiles)
     ? input.profiles.map(normalizeProfile).filter(Boolean)
     : [];
+  const codexWorkspaces = Array.isArray(input.codexWorkspaces)
+    ? input.codexWorkspaces.map(normalizeCodexWorkspace).filter(Boolean)
+    : [];
+  const activeCodexWorkspaceId = String(input.activeCodexWorkspaceId || "default").trim() || "default";
   return {
     activeMode: input.activeMode === "chatgpt" ? "chatgpt" : "baijimu",
     currentWorkspaceId: positiveInteger(input.currentWorkspaceId),
@@ -42,6 +46,11 @@ export function normalizeCredentialState(value) {
     activeProfile: normalizeProfile(input.activeProfile),
     profiles,
     workspaces,
+    codexWorkspaces,
+    activeCodexWorkspaceId,
+    activeCodexWorkspace: normalizeCodexWorkspace(input.activeCodexWorkspace)
+      || codexWorkspaces.find((workspace) => workspace.workspaceId === activeCodexWorkspaceId)
+      || null,
     originalCodexHome: String(input.originalCodexHome || ""),
     originalCodexHomeState: {
       captured: input.originalCodexHomeState?.captured === true,
@@ -66,6 +75,44 @@ export function normalizeCredentialState(value) {
       ),
     },
     discoveryWarning: typeof input.discoveryWarning === "string" ? input.discoveryWarning.trim() : "",
+  };
+}
+
+export function normalizeCodexWorkspace(value) {
+  if (!value || typeof value !== "object") return null;
+  const workspaceId = String(value.workspaceId || "").trim();
+  const name = String(value.name || "").trim();
+  const codexHome = String(value.codexHome || "").trim();
+  if (!workspaceId || !name || !codexHome) return null;
+  return {
+    workspaceId,
+    name,
+    codexHome,
+    authProfileId: typeof value.authProfileId === "string" ? value.authProfileId : "",
+    createdAtEpochSeconds: Math.max(0, Number(value.createdAtEpochSeconds) || 0),
+    updatedAtEpochSeconds: Math.max(0, Number(value.updatedAtEpochSeconds) || 0),
+    active: value.active === true,
+    isDefault: value.isDefault === true,
+  };
+}
+
+export function codexWorkspaceMeta(workspace, profiles = []) {
+  const profile = profiles.find((item) => item.profileId === workspace?.authProfileId) || null;
+  const requiresAuthorization = profile
+    && ["missing", "invalid"].includes(profile.credentialStatus);
+  return {
+    profile,
+    channelName: profile
+      ? (profile.kind === "personal"
+        ? "ChatGPT 登录"
+        : profile.name || profile.workspaceName || `工作区 ${profile.workspaceId}`)
+      : "未选择认证通道",
+    channelDetail: profile
+      ? (requiresAuthorization ? "认证通道需要重新授权" : profile.kind === "personal"
+        ? "官方 ChatGPT 账号认证"
+        : `百积木工作区 ${profile.workspaceId} 模型授权`)
+      : "请先选择一个认证通道",
+    channelAvailable: Boolean(profile) && !requiresAuthorization,
   };
 }
 

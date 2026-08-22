@@ -1,7 +1,7 @@
 import {
+  codexWorkspaceMeta,
   codexCapabilityMeta,
   connectorStartupRetryable,
-  defaultWorkspaceMeta,
   normalizeCredentialState,
   normalizeSetupProgress,
   primaryViewMeta,
@@ -16,9 +16,8 @@ const elementIds = [
   "message", "error", "error-text",
   "error-retry-button", "warning",
   "legacy-home-migration", "legacy-home-message", "restore-external-home-button",
-  "auth-profile-list", "workspace-auth-badge", "current-auth-channel",
-  "current-auth-detail", "workspace-codex-home", "auth-channel-toggle",
-  "restart-codex-button", "workspace-route-notice", "workspace-route-message",
+  "auth-profile-list", "add-workspace-button", "codex-workspace-list",
+  "workspace-route-notice", "workspace-route-message",
   "workspace-route-action",
   "setup-message", "setup-action-button", "setup-progress", "setup-progress-label",
   "setup-progress-percent", "setup-progress-track", "setup-progress-bar", "setup-step-list",
@@ -26,6 +25,8 @@ const elementIds = [
   "auth-switch-modal",
   "auth-switch-modal-title", "auth-switch-modal-message", "auth-switch-cancel",
   "auth-switch-confirm",
+  "workspace-create-modal", "workspace-name-input", "workspace-auth-profile-select",
+  "workspace-create-cancel", "workspace-create-confirm",
   "management-workspace-panel",
   "setup-panel", "setup-actions",
 ];
@@ -35,6 +36,7 @@ let credentialState = null;
 let setupState = null;
 let setupMonitorGeneration = 0;
 let selectedAuthProfileId = null;
+let selectedCodexWorkspaceId = null;
 let authModalReturnFocus = null;
 let accountBusy = false;
 let errorRetryAction = null;
@@ -97,8 +99,8 @@ function setAccountBusy(value) {
   accountBusy = value;
   elements["refresh-button"].disabled = value;
   elements["setup-action-button"].disabled = value;
-  elements["auth-channel-toggle"].disabled = value;
-  elements["restart-codex-button"].disabled = value;
+  elements["add-workspace-button"].disabled = value;
+  elements["workspace-create-confirm"].disabled = value || !workspaceCreateCanSubmit();
   elements["workspace-route-action"].disabled = value;
   elements["auth-switch-confirm"].disabled = value || !authSwitchCanSubmit();
   elements["error-retry-button"].disabled = value || !errorRetryAction;
@@ -160,8 +162,11 @@ function profileRow({ key, title, badges, active, disabled, selectable, actions 
 
 function authProfiles() {
   const state = credentialState;
+  const targetWorkspace = state?.codexWorkspaces?.find(
+    (workspace) => workspace.workspaceId === selectedCodexWorkspaceId,
+  );
   const profiles = (state?.profiles || []).map((profile) => {
-    const active = state.activeProfile?.profileId === profile.profileId;
+    const active = targetWorkspace?.authProfileId === profile.profileId;
     const workspace = profile.kind === "baijimu"
       ? state.workspaces.find((item) => item.workspaceId === profile.workspaceId)
       : null;
@@ -239,20 +244,172 @@ function renderAuthProfiles() {
 
 function authSwitchCanSubmit() {
   if (!selectedAuthProfileId) return false;
-  const activeProfileId = credentialState?.activeProfile?.profileId || null;
+  const activeProfileId = credentialState?.codexWorkspaces?.find(
+    (workspace) => workspace.workspaceId === selectedCodexWorkspaceId,
+  )?.authProfileId || null;
   if (selectedAuthProfileId === activeProfileId) return false;
   const profile = credentialState?.profiles?.find((item) => item.profileId === selectedAuthProfileId);
   return Boolean(profile) && !["missing", "invalid"].includes(profile.credentialStatus);
 }
 
+function renderCodexWorkspaces() {
+  const list = elements["codex-workspace-list"];
+  list.replaceChildren();
+  for (const workspace of credentialState?.codexWorkspaces || []) {
+    const meta = codexWorkspaceMeta(workspace, credentialState?.profiles || []);
+    const card = document.createElement("article");
+    card.className = `codex-workspace-card${workspace.active ? " active" : ""}`;
+
+    const copy = document.createElement("div");
+    copy.className = "codex-workspace-copy";
+    const heading = document.createElement("div");
+    heading.className = "profile-heading";
+    const title = document.createElement("strong");
+    title.textContent = workspace.name;
+    heading.append(title);
+    if (workspace.active) {
+      const badge = document.createElement("span");
+      badge.className = "profile-label current";
+      badge.textContent = "当前工作区";
+      heading.append(badge);
+    }
+    if (workspace.isDefault) {
+      const badge = document.createElement("span");
+      badge.className = "profile-label neutral";
+      badge.textContent = "默认";
+      heading.append(badge);
+    }
+    const channel = document.createElement("span");
+    channel.className = "workspace-channel-copy";
+    channel.textContent = `${meta.channelName} · ${meta.channelDetail}`;
+    const home = document.createElement("code");
+    home.textContent = workspace.codexHome;
+    copy.append(heading, channel, home);
+
+    const actions = document.createElement("div");
+    actions.className = "workspace-card-actions";
+    const authButton = document.createElement("button");
+    authButton.type = "button";
+    authButton.className = "button secondary compact profile-action";
+    authButton.textContent = "切换认证通道";
+    authButton.dataset.profileDisabled = "false";
+    authButton.disabled = accountBusy;
+    authButton.addEventListener("click", () => openAuthSwitchModal(workspace.workspaceId));
+    const launchButton = document.createElement("button");
+    launchButton.type = "button";
+    launchButton.className = "button primary compact profile-action";
+    launchButton.textContent = workspace.active ? "重启 Codex" : "打开工作区";
+    launchButton.dataset.profileDisabled = String(!meta.channelAvailable);
+    launchButton.disabled = accountBusy || !meta.channelAvailable;
+    launchButton.addEventListener("click", () => {
+      if (workspace.active) void restartCodex();
+      else void activateCodexWorkspace(workspace.workspaceId);
+    });
+    actions.append(authButton, launchButton);
+    card.append(copy, actions);
+    list.append(card);
+  }
+  if (!list.children.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "还没有 Codex 工作区。";
+    list.append(empty);
+  }
+}
+
+function availableAuthProfiles() {
+  return (credentialState?.profiles || []).filter(
+    (profile) => !["missing", "invalid"].includes(profile.credentialStatus),
+  );
+}
+
+function workspaceCreateCanSubmit() {
+  return Boolean(elements?.["workspace-name-input"]?.value.trim())
+    && Boolean(elements?.["workspace-auth-profile-select"]?.value);
+}
+
+function openWorkspaceCreateModal() {
+  if (accountBusy) return;
+  const select = elements["workspace-auth-profile-select"];
+  select.replaceChildren();
+  for (const profile of availableAuthProfiles()) {
+    const option = document.createElement("option");
+    option.value = profile.profileId;
+    option.textContent = profile.kind === "personal"
+      ? "ChatGPT 登录"
+      : `${profile.name || profile.workspaceName}（工作区 ${profile.workspaceId}）`;
+    select.append(option);
+  }
+  if (!select.children.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "暂无可用认证通道，请先创建或重新授权";
+    option.disabled = true;
+    option.selected = true;
+    select.append(option);
+  }
+  elements["workspace-name-input"].value = "";
+  elements["workspace-create-confirm"].disabled = !workspaceCreateCanSubmit();
+  elements["workspace-create-modal"].hidden = false;
+  elements["workspace-name-input"].focus();
+}
+
+function closeWorkspaceCreateModal() {
+  elements["workspace-create-modal"].hidden = true;
+}
+
+async function createCodexWorkspace() {
+  if (!workspaceCreateCanSubmit()) return;
+  const request = {
+    name: elements["workspace-name-input"].value.trim(),
+    authProfileId: elements["workspace-auth-profile-select"].value,
+  };
+  closeWorkspaceCreateModal();
+  clearNotices();
+  setAccountBusy(true);
+  try {
+    credentialState = normalizeCredentialState(
+      await invokeManagement("createCodexWorkspace", request),
+    );
+    renderCredentialState();
+    setMessage("message", `Codex 工作区“${request.name}”已创建，并已接入所选认证通道。`);
+  } catch (error) {
+    showError(errorMessage(error), {
+      action: openWorkspaceCreateModal,
+      label: "重新创建",
+    });
+  } finally {
+    setAccountBusy(false);
+  }
+}
+
+async function activateCodexWorkspace(codexWorkspaceId) {
+  clearNotices();
+  setAccountBusy(true);
+  elements["codex-operation-title"].textContent = "正在打开 Codex 工作区";
+  elements["codex-operation-message"].textContent = "正在关闭现有 Codex，并使用目标工作区的独立状态目录启动。";
+  elements["codex-operation-progress"].hidden = false;
+  try {
+    credentialState = normalizeCredentialState(await invokeManagement(
+      "activateCodexWorkspace",
+      { codexWorkspaceId },
+    ));
+    renderCredentialState();
+    setMessage("message", "Codex 已使用所选工作区启动。");
+  } catch (error) {
+    showError(errorMessage(error), {
+      action: () => activateCodexWorkspace(codexWorkspaceId),
+      label: "重试打开",
+    });
+  } finally {
+    elements["codex-operation-progress"].hidden = true;
+    setAccountBusy(false);
+  }
+}
+
 function renderCredentialState() {
   const state = credentialState;
-  const workspace = defaultWorkspaceMeta(state);
-  elements["workspace-auth-badge"].textContent = workspace.badge.label;
-  elements["workspace-auth-badge"].className = `status-badge ${workspace.badge.tone}`;
-  elements["current-auth-channel"].textContent = workspace.name;
-  elements["current-auth-detail"].textContent = workspace.detail;
-  elements["workspace-codex-home"].textContent = workspace.codexHome;
+  renderCodexWorkspaces();
   setMessage("warning", state?.discoveryWarning || "");
   const migration = state?.legacyGlobalCodexHome;
   elements["legacy-home-migration"].hidden = !migration?.restoreRequired;
@@ -268,15 +425,22 @@ function renderCredentialState() {
 
 function closeAuthSwitchModal() {
   selectedAuthProfileId = null;
+  selectedCodexWorkspaceId = null;
   elements["auth-switch-modal"].hidden = true;
   if (authModalReturnFocus instanceof HTMLElement) authModalReturnFocus.focus();
   authModalReturnFocus = null;
 }
 
-function openAuthSwitchModal() {
+function openAuthSwitchModal(workspaceId) {
   if (!elements["auth-switch-modal"].hidden || accountBusy) return;
   authModalReturnFocus = document.activeElement;
-  selectedAuthProfileId = credentialState?.activeProfile?.profileId || null;
+  selectedCodexWorkspaceId = workspaceId;
+  const workspace = credentialState?.codexWorkspaces?.find(
+    (item) => item.workspaceId === workspaceId,
+  );
+  selectedAuthProfileId = workspace?.authProfileId || null;
+  elements["auth-switch-modal-title"].textContent = `切换“${workspace?.name || "Codex 工作区"}”的认证通道`;
+  elements["auth-switch-modal-message"].textContent = "该工作区可使用当前全部认证通道；确认后不会影响其他工作区的会话、历史、技能或认证选择。";
   renderAuthProfiles();
   elements["auth-switch-modal"].hidden = false;
   const selected = elements["auth-profile-list"].querySelector("input[name='auth-profile']:checked");
@@ -286,21 +450,22 @@ function openAuthSwitchModal() {
 async function confirmAuthSwitch() {
   if (!authSwitchCanSubmit()) return;
   const authProfileId = selectedAuthProfileId;
+  const codexWorkspaceId = selectedCodexWorkspaceId;
   closeAuthSwitchModal();
-  await switchAuthChannel({ authProfileId });
+  await switchAuthChannel({ authProfileId, codexWorkspaceId });
 }
 
 async function switchAuthChannel(request) {
   clearNotices();
   setAccountBusy(true);
   elements["codex-operation-title"].textContent = "正在切换认证通道";
-  elements["codex-operation-message"].textContent = "正在保存当前认证并原子切换默认工作区的认证通道。";
+  elements["codex-operation-message"].textContent = "正在保存当前认证并原子切换目标工作区的认证通道。";
   elements["codex-operation-progress"].hidden = false;
   try {
     const response = await invokeManagement("switchAuthChannel", request);
     credentialState = normalizeCredentialState(response);
     renderCredentialState();
-    setMessage("message", "认证通道已切换。需要使用新通道时，请在默认工作区重启 Codex。");
+    setMessage("message", "目标工作区的认证通道已切换；其他工作区保持不变。");
   } catch (error) {
     const message = errorMessage(error);
     await loadState({ ensureReady: false, monitor: false });
@@ -318,7 +483,7 @@ async function restartCodex() {
   clearNotices();
   setAccountBusy(true);
   elements["codex-operation-title"].textContent = "正在重启 Codex";
-  elements["codex-operation-message"].textContent = "正在关闭默认工作区的现有进程并重新打开 Codex。";
+  elements["codex-operation-message"].textContent = "正在关闭当前工作区的现有进程并重新打开 Codex。";
   elements["codex-operation-progress"].hidden = false;
   try {
     await invokeManagement("restartCodex", {});
@@ -660,8 +825,18 @@ elements["setup-action-button"].addEventListener("click", () => {
   if (action.operation === "verify") void retryRouterVerification();
   else void retrySetup();
 });
-elements["auth-channel-toggle"].addEventListener("click", openAuthSwitchModal);
-elements["restart-codex-button"].addEventListener("click", () => void restartCodex());
+elements["add-workspace-button"].addEventListener("click", openWorkspaceCreateModal);
+elements["workspace-create-cancel"].addEventListener("click", closeWorkspaceCreateModal);
+elements["workspace-create-confirm"].addEventListener("click", () => void createCodexWorkspace());
+elements["workspace-name-input"].addEventListener("input", () => {
+  elements["workspace-create-confirm"].disabled = accountBusy || !workspaceCreateCanSubmit();
+});
+elements["workspace-auth-profile-select"].addEventListener("change", () => {
+  elements["workspace-create-confirm"].disabled = accountBusy || !workspaceCreateCanSubmit();
+});
+elements["workspace-create-modal"].addEventListener("click", (event) => {
+  if (event.target === elements["workspace-create-modal"]) closeWorkspaceCreateModal();
+});
 elements["workspace-route-action"].addEventListener("click", () => void retryRouterVerification());
 elements["restore-external-home-button"].addEventListener("click", () => void restoreExternalCodexHome());
 elements["error-retry-button"].addEventListener("click", () => {
@@ -674,6 +849,10 @@ elements["auth-switch-modal"].addEventListener("click", (event) => {
   if (event.target === elements["auth-switch-modal"]) closeAuthSwitchModal();
 });
 document.addEventListener("keydown", (event) => {
+  if (!elements["workspace-create-modal"].hidden && event.key === "Escape") {
+    closeWorkspaceCreateModal();
+    return;
+  }
   if (elements["auth-switch-modal"].hidden) return;
   if (event.key === "Escape") {
     closeAuthSwitchModal();

@@ -2,10 +2,10 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex 桌面管理器",
-  "version": "1.4.7",
-  "description": "安装 Codex 桌面应用，并在共享 .codex 中切换 ChatGPT 与百积木工作区授权。",
+  "version": "1.5.0",
+  "description": "安装 Codex 桌面应用，管理多个隔离 Codex 工作区，并让每个工作区使用完整认证通道目录。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.4.7"},
+  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.5.0"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
@@ -36,6 +36,8 @@
       "ensureCodexReady": {"method": "POST", "path": "/management/v1/setup/ensure-ready"},
       "credentialState": {"method": "GET", "path": "/management/v1/credential-state"},
       "initializeWorkspace": {"method": "POST", "path": "/management/v1/codex/initialize"},
+      "createCodexWorkspace": {"method": "POST", "path": "/management/v1/codex/workspaces"},
+      "activateCodexWorkspace": {"method": "POST", "path": "/management/v1/codex/workspaces/activate"},
       "switchAuthChannel": {"method": "POST", "path": "/management/v1/codex/auth-channel"},
       "restartCodex": {"method": "POST", "path": "/management/v1/codex/restart"},
       "reauthorizeWorkspace": {"method": "POST", "path": "/management/v1/codex/reauthorize"},
@@ -55,7 +57,7 @@
     }
   ],
   "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex 桌面管理器", "defaultView": true},
-  "releaseNotes": ["百积木工作区的默认模型改为 Codex 模型接口服务当前支持的 gpt-5.5。", "升级时同步既有认证档案的模型标识，并在配置就绪检查中校验模型、认证方式和 Responses 路由参数。", "切换认证通道时继续保留会话、历史、技能、Codex Home 和其他共享状态。"],
+  "releaseNotes": ["支持用户手动新增彼此隔离的 Codex 工作区。", "每个 Codex 工作区都可以独立选择当前完整的 ChatGPT 与百积木认证通道。", "现有 .codex 自动保留为默认工作区，不迁移或删除历史、会话与技能。"],
   "configSchema": {
     "type": "object",
     "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},

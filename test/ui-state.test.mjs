@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  codexWorkspaceMeta,
   codexCapabilityMeta,
   defaultWorkspaceMeta,
   normalizeCredentialState,
@@ -10,6 +11,45 @@ import {
   setupActionMeta,
   setupStatusMeta,
 } from "../ui/state.mjs";
+
+test("Codex workspaces keep independent authentication channel selections", () => {
+  const state = normalizeCredentialState({
+    activeCodexWorkspaceId: "workspace-a",
+    codexWorkspaces: [{
+      workspaceId: "workspace-a",
+      name: "研发",
+      codexHome: "/private/codex/a",
+      authProfileId: "personal:chatgpt",
+      active: true,
+    }, {
+      workspaceId: "workspace-b",
+      name: "生产排障",
+      codexHome: "/private/codex/b",
+      authProfileId: "workspace:42",
+    }],
+    profiles: [{
+      profileId: "personal:chatgpt",
+      kind: "personal",
+      credentialStatus: "configured",
+    }, {
+      profileId: "workspace:42",
+      kind: "baijimu",
+      name: "平台授权",
+      workspaceId: 42,
+      credentialStatus: "verified",
+    }],
+  });
+
+  assert.equal(state.codexWorkspaces.length, 2);
+  assert.equal(state.activeCodexWorkspace.workspaceId, "workspace-a");
+  assert.equal(codexWorkspaceMeta(state.codexWorkspaces[0], state.profiles).channelName, "ChatGPT 登录");
+  assert.deepEqual(codexWorkspaceMeta(state.codexWorkspaces[1], state.profiles), {
+    profile: state.profiles[1],
+    channelName: "平台授权",
+    channelDetail: "百积木工作区 42 模型授权",
+    channelAvailable: true,
+  });
+});
 
 test("personal auth profiles do not require a workspace dimension", () => {
   const state = normalizeCredentialState({

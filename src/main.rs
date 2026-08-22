@@ -1,6 +1,7 @@
 mod baijimu_cli;
 mod child_process;
 mod cli;
+mod codex_workspace;
 mod credential;
 mod desktop;
 mod json_compat;
@@ -411,21 +412,16 @@ fn handle_management(
                 .credential_management
                 .lock()
                 .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
-            serde_json::to_value(
-                credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
-            )
-            .map_err(|error| HttpError::internal(error.to_string()))
+            credential_state_value()
         }
         ("POST", "/management/v1/codex/restore-external-home") => {
             let _credential_guard = state
                 .credential_management
                 .lock()
                 .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
-            serde_json::to_value(
-                credential::restore_legacy_global_codex_home()
-                    .map_err(|error| HttpError::new(409, error.to_string()))?,
-            )
-            .map_err(|error| HttpError::internal(error.to_string()))
+            credential::restore_legacy_global_codex_home()
+                .map_err(|error| HttpError::new(409, error.to_string()))?;
+            credential_state_value()
         }
         ("POST", "/management/v1/codex/initialize") => {
             let _credential_guard = state
@@ -456,12 +452,13 @@ fn handle_management(
                 .and_then(Value::as_u64)
                 .filter(|value| *value > 0)
                 .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?;
-            let active = credential::state()
-                .map_err(|error| HttpError::internal(error.to_string()))?
-                .active_workspace_id
-                == Some(workspace_id);
             let prepared = credential::prepare_workspace_reauthorization(workspace_id)
                 .map_err(|error| HttpError::new(409, error.to_string()))?;
+            let auth_profile_id = prepared.profile.profile_id.clone();
+            let active_codex_workspace = codex_workspace::active()
+                .map_err(|error| HttpError::internal(error.to_string()))?;
+            let active =
+                active_codex_workspace.auth_profile_id.as_deref() == Some(auth_profile_id.as_str());
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             let desktop_switch = if active && !test_control_enabled() {
                 Some(
@@ -475,15 +472,25 @@ fn handle_management(
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
                 if let Some(desktop_switch) = desktop_switch {
                     desktop_switch
-                        .restart_if_needed()
+                        .restart_workspace_if_needed(std::path::Path::new(
+                            &active_codex_workspace.codex_home,
+                        ))
                         .map_err(desktop_compatibility_http_error)?;
                 }
                 return Err(HttpError::new(409, error.to_string()));
             }
-            serde_json::to_value(
-                credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
-            )
-            .map_err(|error| HttpError::internal(error.to_string()))
+            if let Err(error) = codex_workspace::refresh_auth_profile(&auth_profile_id) {
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                if let Some(desktop_switch) = desktop_switch {
+                    desktop_switch
+                        .restart_workspace_if_needed(std::path::Path::new(
+                            &active_codex_workspace.codex_home,
+                        ))
+                        .map_err(desktop_compatibility_http_error)?;
+                }
+                return Err(HttpError::new(409, error.to_string()));
+            }
+            credential_state_value()
         }
         ("POST", "/management/v1/codex/auth-channel") => {
             let _credential_guard = state
@@ -497,8 +504,80 @@ fn handle_management(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| HttpError::new(400, "必须提供 authProfileId"))?;
-            let prepared = credential::prepare_profile_activation(profile_id)
+            let workspace_id = body
+                .get("codexWorkspaceId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("default");
+            let target = codex_workspace::workspace(workspace_id)
+                .map_err(|error| HttpError::new(404, error.to_string()))?;
+            let active_workspace = codex_workspace::active()
+                .map_err(|error| HttpError::internal(error.to_string()))?;
+            let is_active = active_workspace.workspace_id == workspace_id;
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            let desktop_switch = if is_active && !test_control_enabled() {
+                Some(
+                    desktop::stop_for_workspace_switch()
+                        .map_err(desktop_compatibility_http_error)?,
+                )
+            } else {
+                None
+            };
+            let switched =
+                match codex_workspace::switch_auth_profile(workspace_id, profile_id, is_active) {
+                    Ok(workspace) => workspace,
+                    Err(error) => {
+                        #[cfg(any(target_os = "macos", target_os = "windows"))]
+                        if let Some(desktop_switch) = desktop_switch {
+                            desktop_switch
+                                .restart_workspace_if_needed(std::path::Path::new(
+                                    &target.codex_home,
+                                ))
+                                .map_err(desktop_compatibility_http_error)?;
+                        }
+                        return Err(HttpError::new(409, error.to_string()));
+                    }
+                };
+            let _ = switched;
+            credential_state_value()
+        }
+        ("POST", "/management/v1/codex/workspaces") => {
+            let _credential_guard = state
+                .credential_management
+                .lock()
+                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
+            ensure_default_workspace_ready(state, "新增工作区")?;
+            let name = body
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| HttpError::new(400, "必须提供工作区名称"))?;
+            let profile_id = body
+                .get("authProfileId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| HttpError::new(400, "必须提供 authProfileId"))?;
+            codex_workspace::create(name, profile_id)
                 .map_err(|error| HttpError::new(409, error.to_string()))?;
+            credential_state_value()
+        }
+        ("POST", "/management/v1/codex/workspaces/activate") => {
+            let _credential_guard = state
+                .credential_management
+                .lock()
+                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
+            ensure_default_workspace_ready(state, "打开工作区")?;
+            let workspace_id = body
+                .get("codexWorkspaceId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| HttpError::new(400, "必须提供 codexWorkspaceId"))?;
+            let previous = codex_workspace::active()
+                .map_err(|error| HttpError::internal(error.to_string()))?;
+            let target = codex_workspace::workspace(workspace_id)
+                .map_err(|error| HttpError::new(404, error.to_string()))?;
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             let desktop_switch = if !test_control_enabled() {
                 Some(
@@ -508,23 +587,23 @@ fn handle_management(
             } else {
                 None
             };
-            let transaction = match credential::activate_prepared_profile(&prepared) {
-                Ok(transaction) => transaction,
-                Err(error) => {
-                    #[cfg(any(target_os = "macos", target_os = "windows"))]
+            codex_workspace::activate(workspace_id)
+                .map_err(|error| HttpError::new(409, error.to_string()))?;
+            if !test_control_enabled() {
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                if let Err(error) =
+                    desktop::launch_workspace(std::path::Path::new(&target.codex_home))
+                {
+                    let _ = codex_workspace::activate(&previous.workspace_id);
                     if let Some(desktop_switch) = desktop_switch {
-                        desktop_switch
-                            .restart_if_needed()
-                            .map_err(desktop_compatibility_http_error)?;
+                        let _ = desktop_switch.restart_workspace_if_needed(std::path::Path::new(
+                            &previous.codex_home,
+                        ));
                     }
-                    return Err(HttpError::new(409, error.to_string()));
+                    return Err(desktop_compatibility_http_error(error));
                 }
-            };
-            transaction.commit();
-            serde_json::to_value(
-                credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
-            )
-            .map_err(|error| HttpError::internal(error.to_string()))
+            }
+            credential_state_value()
         }
         ("POST", "/management/v1/codex/restart") => {
             let _credential_guard = state
@@ -532,18 +611,57 @@ fn handle_management(
                 .lock()
                 .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
             ensure_default_workspace_ready(state, "重启 Codex")?;
+            let active = codex_workspace::active()
+                .map_err(|error| HttpError::internal(error.to_string()))?;
             if !test_control_enabled() {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
                 {
                     desktop::stop_for_workspace_switch()
                         .map_err(desktop_compatibility_http_error)?;
-                    desktop::launch().map_err(desktop_compatibility_http_error)?;
+                    desktop::launch_workspace(std::path::Path::new(&active.codex_home))
+                        .map_err(desktop_compatibility_http_error)?;
                 }
             }
             Ok(json!({"restarted": true}))
         }
         _ => Err(HttpError::new(404, format!("未知的管理接口路径：{path}"))),
     }
+}
+
+fn credential_state_value() -> Result<Value, HttpError> {
+    let credential_state =
+        credential::state().map_err(|error| HttpError::internal(error.to_string()))?;
+    let default_profile_id = credential_state
+        .active_profile
+        .as_ref()
+        .map(|profile| profile.profile_id.as_str());
+    let workspace_state = codex_workspace::state(default_profile_id)
+        .map_err(|error| HttpError::internal(error.to_string()))?;
+    let mut value = serde_json::to_value(&credential_state)
+        .map_err(|error| HttpError::internal(error.to_string()))?;
+    value["codexWorkspaces"] = serde_json::to_value(&workspace_state.workspaces)
+        .map_err(|error| HttpError::internal(error.to_string()))?;
+    value["activeCodexWorkspaceId"] = Value::String(workspace_state.active_workspace_id.clone());
+    if let Some(active) = workspace_state
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.workspace_id == workspace_state.active_workspace_id)
+    {
+        value["activeCodexWorkspace"] =
+            serde_json::to_value(active).map_err(|error| HttpError::internal(error.to_string()))?;
+        value["activeCodexHome"] = Value::String(active.codex_home.clone());
+        if let Some(profile_id) = active.auth_profile_id.as_deref() {
+            if let Some(profile) = credential_state
+                .profiles
+                .iter()
+                .find(|profile| profile.profile_id == profile_id)
+            {
+                value["activeProfile"] = serde_json::to_value(profile)
+                    .map_err(|error| HttpError::internal(error.to_string()))?;
+            }
+        }
+    }
+    Ok(value)
 }
 
 fn ensure_default_workspace_ready(state: &AppState, operation: &str) -> Result<(), HttpError> {

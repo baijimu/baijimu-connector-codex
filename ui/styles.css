@@ -227,20 +227,26 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 
 .codex-workspace-list { display: grid; gap: 10px; }
 .codex-workspace-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  display: grid;
+  gap: 14px;
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 15px 16px;
   background: #fbfcfc;
 }
 .codex-workspace-card.active { border-color: #8dc5aa; background: var(--green-soft); box-shadow: inset 4px 0 0 var(--green); }
+.codex-workspace-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .codex-workspace-copy { display: grid; min-width: 0; gap: 6px; }
 .codex-workspace-copy code { overflow-wrap: anywhere; color: #53615b; font-size: 10px; }
 .workspace-channel-copy { color: #42524b; font-size: 12px; line-height: 1.5; }
 .workspace-card-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.default-workspace-children { display: grid; gap: 9px; border-top: 1px solid rgba(42, 67, 56, 0.14); padding-top: 12px; }
+.default-workspace-children-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.default-workspace-children-heading strong { color: var(--ink); font-size: 12px; }
+.default-workspace-children-heading span { color: var(--muted); font-size: 10px; text-align: right; }
+.default-workspace-child-list { display: grid; gap: 7px; padding-left: 12px; }
+.default-workspace-child-list .profile-row { background: rgba(255, 255, 255, 0.72); }
+.empty-state.compact { padding: 10px 12px; font-size: 11px; }
 
 .profile-list { display: grid; gap: 8px; }
 .profile-row {
@@ -390,11 +396,14 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .operation-steps { grid-template-columns: 1fr; }
   .workspace-summary { grid-template-columns: 1fr; align-items: stretch; }
   .workspace-summary > .button { width: 100%; }
-  .codex-workspace-card { align-items: stretch; flex-direction: column; }
+  .codex-workspace-summary { align-items: stretch; flex-direction: column; }
   .workspace-card-actions { width: 100%; }
   .workspace-card-actions .button { flex: 1 1 0; }
   .workspace-heading-actions { width: 100%; justify-content: space-between; }
   .workspace-route-notice { align-items: stretch; flex-direction: column; }
+  .default-workspace-children-heading { align-items: flex-start; flex-direction: column; }
+  .default-workspace-children-heading span { text-align: left; }
+  .default-workspace-child-list { padding-left: 0; }
 }
 
 @media (max-width: 440px) {

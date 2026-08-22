@@ -2,10 +2,10 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex 桌面管理器",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "安装 Codex 桌面应用，管理多个隔离 Codex 工作区，并让每个工作区使用完整认证通道目录。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.5.1"},
+  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.5.2"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
@@ -57,7 +57,7 @@
     }
   ],
   "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex 桌面管理器", "defaultView": true},
-  "releaseNotes": ["支持用户手动新增彼此隔离的 Codex 工作区。", "每个 Codex 工作区都可以独立选择当前完整的 ChatGPT 与百积木认证通道。", "现有 .codex 自动保留为默认工作区，不迁移或删除历史、会话与技能。"],
+  "releaseNotes": ["原有百积木工作区继续显示在默认 Codex 工作区下。", "当前授权但尚未初始化的工作区可直接创建认证通道。", "已不在当前授权目录中的旧档案仍以历史记录保留，不会从界面消失。"],
   "configSchema": {
     "type": "object",
     "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},

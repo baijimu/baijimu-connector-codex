@@ -6,7 +6,7 @@
 - 初始化已授权工作区的桌面专用 LLM credential，并保存为所有 Codex 工作区可选的认证通道；
 - 在每个 Codex 工作区中显式选择 ChatGPT 登录或任一已初始化的百积木工作区授权；
 - 用户可手动新增多个 Codex 工作区；每个工作区使用独立 `CODEX_HOME` 承载会话、历史、技能和其他状态；
-- ChatGPT 与百积木授权作为全局认证通道目录供每个 Codex 工作区独立选择，切换时只原子更新目标工作区的 `auth.json` 与认证相关 `config.toml` 项；
+- ChatGPT 与百积木授权作为全局认证通道目录供每个 Codex 工作区独立选择，切换时只原子更新目标工作区的 `auth.json` 与 provider、登录方式和认证存储等认证相关 `config.toml` 项；模型始终由 Codex 或用户选择；
 - Windows 直接启动可信 AppX 包的 FullTrust 可执行入口，macOS 通过 LaunchServices 启动，不写用户环境变量、不广播环境变化；
 - 从旧版隔离档案升级时只迁移工作区凭证，旧会话目录原样保留，不自动合并状态数据库。
 

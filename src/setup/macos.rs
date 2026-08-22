@@ -32,13 +32,11 @@ pub(super) fn run_install(
     let _ = fs::remove_file(state_dir.join("result.json"));
 
     let work_dir = TemporaryDirectory::create("baijimu-codex-setup")?;
-    let model = credential::default_model().to_string();
     let request = MacosInstallRequest {
         workspace_id,
         native_script_path,
         state_dir: &state_dir,
         work_dir: work_dir.path(),
-        model,
     };
     let mut installer = MacosInstaller::new(request)?;
     let started = Instant::now();
@@ -78,7 +76,6 @@ struct MacosInstallRequest<'a> {
     native_script_path: &'a Path,
     state_dir: &'a Path,
     work_dir: &'a Path,
-    model: String,
 }
 
 impl<'a> MacosInstaller<'a> {
@@ -94,12 +91,7 @@ impl<'a> MacosInstaller<'a> {
             ),
             status_path,
         )?;
-        let result = MacosInstallerResult::pending(
-            started_at,
-            String::new(),
-            request.workspace_id,
-            request.model,
-        );
+        let result = MacosInstallerResult::pending(started_at, String::new(), request.workspace_id);
         Ok(Self {
             workspace_id: request.workspace_id,
             native_script_path: request.native_script_path,

@@ -1,13 +1,13 @@
 use serde::Deserialize;
 use std::sync::OnceLock;
 
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ProductConfig {
     schema_version: u32,
-    pub(crate) default_model: String,
+    pub(crate) route_verification_models: Vec<String>,
     pub(crate) default_ui_locale: String,
     pub(crate) router_provider: String,
     pub(crate) router_base_url: String,
@@ -28,7 +28,14 @@ pub(crate) fn get() -> &'static ProductConfig {
             config.schema_version, SCHEMA_VERSION,
             "Codex 桌面工作区配置版本无效"
         );
-        assert!(!config.default_model.trim().is_empty(), "默认模型不能为空");
+        assert!(
+            !config.route_verification_models.is_empty()
+                && config
+                    .route_verification_models
+                    .iter()
+                    .all(|model| !model.trim().is_empty()),
+            "路由验证模型目录不能为空"
+        );
         assert!(
             config
                 .default_ui_locale
@@ -88,7 +95,7 @@ mod tests {
     fn embedded_product_config_is_valid() {
         let config = get();
         assert_eq!(config.schema_version, SCHEMA_VERSION);
-        assert_eq!(config.default_model, "gpt-5.5");
+        assert_eq!(config.route_verification_models, ["gpt-5.5"]);
         assert_eq!(config.default_ui_locale, "zh-CN");
         assert!(config.router_base_url.starts_with("https://"));
         assert_eq!(config.windows_desktop_protocol, "codex");

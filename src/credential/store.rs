@@ -22,8 +22,6 @@ pub(super) fn load_metadata() -> Result<CredentialMetadata> {
     for profile in &mut metadata.profiles {
         normalize_profile(profile);
     }
-    let profile_default_models_migrated =
-        migrate_profile_default_models(&mut metadata, previous_version);
     let legacy_profile_homes_migrated = migrate_profiles_to_shared_home(&mut metadata)?;
     if previous_version < 2 && metadata.active_profile_id.is_none() {
         metadata.active_profile_id = metadata.active_workspace_id.and_then(|id| {
@@ -46,7 +44,6 @@ pub(super) fn load_metadata() -> Result<CredentialMetadata> {
     metadata.version = METADATA_VERSION;
     if source.as_ref() != Some(&path)
         || needs_version_migration
-        || profile_default_models_migrated
         || baseline_captured
         || legacy_profile_homes_migrated
         || original_auth_captured

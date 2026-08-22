@@ -1,10 +1,5 @@
 use super::*;
 
-#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
-pub fn default_model() -> &'static str {
-    crate::product_config::get().default_model.as_str()
-}
-
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthMode {
@@ -43,7 +38,6 @@ pub struct CredentialProfile {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub workspace_id: u64,
     pub workspace_name: String,
-    pub model: String,
     pub activated_at_epoch_seconds: u64,
     #[serde(default, skip_serializing)]
     pub codex_home: String,

@@ -15,8 +15,7 @@ pub use contract::*;
 mod store;
 use store::*;
 
-const METADATA_VERSION: u32 = 12;
-const DEFAULT_MODEL_METADATA_VERSION: u32 = 12;
+const METADATA_VERSION: u32 = 13;
 const METADATA_FILE: &str = "codex-credentials.json";
 const OWNERSHIP_MARKER_FILE: &str = ".baijimu-owner.json";
 const OWNERSHIP_RESERVATION_FILE: &str = ".baijimu-owner.pending.json";
@@ -76,7 +75,6 @@ impl Default for CredentialMetadata {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct AuthConfigSnapshot {
-    model: Option<String>,
     model_provider: Option<String>,
     forced_login_method: Option<String>,
     cli_auth_credentials_store: Option<String>,
@@ -255,7 +253,6 @@ pub fn state() -> Result<CredentialManagerState> {
 }
 
 pub fn initialize_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspaceProfile> {
-    let product = crate::product_config::get();
     let workspace = authorized_workspace(workspace_id)?;
     let mut metadata = load_metadata()?;
     let existing_profile = select_workspace_profile(&metadata, workspace_id).cloned();
@@ -277,7 +274,6 @@ pub fn initialize_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspa
             client_id: None,
             workspace_id,
             workspace_name: workspace.name,
-            model: product.default_model.clone(),
             activated_at_epoch_seconds: 0,
             codex_home: default_original_codex_home().display().to_string(),
             credential_status: "verified".to_string(),
@@ -655,7 +651,6 @@ fn ensure_workspace_config(path: &Path) -> Result<()> {
     } else {
         DocumentMut::new()
     };
-    document["model"] = value(product.default_model.as_str());
     document["model_provider"] = value(product.router_provider.as_str());
     document["cli_auth_credentials_store"] = value("file");
     document["forced_login_method"] = value("api");
@@ -696,9 +691,8 @@ fn managed_config_ready(path: &Path) -> bool {
                 .ok()
         })
         .is_some_and(|doc| {
-            doc.get("model").and_then(Item::as_str) == Some(product.default_model.as_str())
-                && doc.get("model_provider").and_then(Item::as_str)
-                    == Some(product.router_provider.as_str())
+            doc.get("model_provider").and_then(Item::as_str)
+                == Some(product.router_provider.as_str())
                 && doc.get("cli_auth_credentials_store").and_then(Item::as_str) == Some("file")
                 && doc.get("forced_login_method").and_then(Item::as_str) == Some("api")
                 && doc
@@ -726,24 +720,6 @@ fn managed_config_ready(path: &Path) -> bool {
                     .and_then(Item::as_bool)
                     == Some(true)
         })
-}
-
-fn migrate_profile_default_models(
-    metadata: &mut CredentialMetadata,
-    previous_version: u32,
-) -> bool {
-    if previous_version >= DEFAULT_MODEL_METADATA_VERSION {
-        return false;
-    }
-    let default_model = crate::product_config::get().default_model.as_str();
-    let mut changed = false;
-    for profile in &mut metadata.profiles {
-        if profile.model != default_model {
-            profile.model = default_model.to_string();
-            changed = true;
-        }
-    }
-    changed
 }
 
 fn merge_workspace_options(
@@ -1153,10 +1129,6 @@ fn capture_auth_config(path: &Path) -> Result<AuthConfigSnapshot> {
     };
     let product = crate::product_config::get();
     Ok(AuthConfigSnapshot {
-        model: document
-            .get("model")
-            .and_then(Item::as_str)
-            .map(ToOwned::to_owned),
         model_provider: document
             .get("model_provider")
             .and_then(Item::as_str)
@@ -1226,7 +1198,6 @@ fn apply_auth_config(path: &Path, snapshot: &AuthConfigSnapshot) -> Result<()> {
     } else {
         DocumentMut::new()
     };
-    set_optional_string(&mut document, "model", snapshot.model.as_deref());
     set_optional_string(
         &mut document,
         "model_provider",
@@ -1315,7 +1286,6 @@ fn capture_original_auth_profile(metadata: &mut CredentialMetadata) -> Result<bo
     }) {
         return Ok(false);
     }
-    let product = crate::product_config::get();
     let profile = CredentialProfile {
         profile_id: ORIGINAL_PROFILE_ID.to_string(),
         kind: AuthProfileKind::Personal,
@@ -1325,7 +1295,6 @@ fn capture_original_auth_profile(metadata: &mut CredentialMetadata) -> Result<bo
         client_id: None,
         workspace_id: 0,
         workspace_name: String::new(),
-        model: product.default_model.clone(),
         activated_at_epoch_seconds: 0,
         codex_home: home.display().to_string(),
         credential_status: auth
@@ -1366,7 +1335,6 @@ fn ensure_chatgpt_profile(metadata: &mut CredentialMetadata) -> Result<bool> {
         }
         return Ok(false);
     }
-    let product = crate::product_config::get();
     let profile = CredentialProfile {
         profile_id: ORIGINAL_PROFILE_ID.to_string(),
         kind: AuthProfileKind::Personal,
@@ -1376,7 +1344,6 @@ fn ensure_chatgpt_profile(metadata: &mut CredentialMetadata) -> Result<bool> {
         client_id: None,
         workspace_id: 0,
         workspace_name: String::new(),
-        model: product.default_model.clone(),
         activated_at_epoch_seconds: 0,
         codex_home: default_original_codex_home().display().to_string(),
         credential_status: "login_required".to_string(),
@@ -1389,7 +1356,6 @@ fn ensure_chatgpt_profile(metadata: &mut CredentialMetadata) -> Result<bool> {
 
 fn chatgpt_login_config() -> AuthConfigSnapshot {
     AuthConfigSnapshot {
-        model: None,
         model_provider: None,
         forced_login_method: Some("chatgpt".to_string()),
         cli_auth_credentials_store: None,
@@ -1662,7 +1628,7 @@ mod legacy_profile_home_tests {
         let _config = EnvironmentRestore::set("BAIJIMU_CONFIG_HOME", &config_home);
         let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
         let mut legacy = vec![0xef, 0xbb, 0xbf];
-        legacy.extend(serde_json::to_vec_pretty(&json!({"version":1,"profiles":[{"workspaceId":12,"workspaceName":"测试工作区","model":crate::product_config::get().default_model,"activatedAtEpochSeconds":56}],"activeWorkspaceId":12})).unwrap());
+        legacy.extend(serde_json::to_vec_pretty(&json!({"version":1,"profiles":[{"workspaceId":12,"workspaceName":"测试工作区","model":"legacy-managed-model","activatedAtEpochSeconds":56}],"activeWorkspaceId":12})).unwrap());
         fs::write(legacy_metadata_path(), legacy).unwrap();
         let metadata = load_metadata().unwrap();
         assert_eq!(metadata.active_mode, AuthMode::Baijimu);
@@ -1855,7 +1821,6 @@ mod legacy_profile_home_tests {
             client_id: Some("device-a".to_string()),
             workspace_id: 1390,
             workspace_name: "迁移工作区".to_string(),
-            model: crate::product_config::get().default_model.clone(),
             activated_at_epoch_seconds: 1,
             codex_home: legacy_home.display().to_string(),
             credential_status: "verified".to_string(),
@@ -2134,7 +2099,6 @@ mod legacy_profile_home_tests {
             client_id: Some("device-a".to_string()),
             workspace_id: 1203,
             workspace_name: "工作区 1203".to_string(),
-            model: crate::product_config::get().default_model.clone(),
             activated_at_epoch_seconds: 1,
             codex_home: managed_home.display().to_string(),
             credential_status: "verified".to_string(),
@@ -2272,7 +2236,6 @@ mod legacy_profile_home_tests {
             client_id: Some("device-a".to_string()),
             workspace_id: 1390,
             workspace_name: "既有工作区".to_string(),
-            model: crate::product_config::get().default_model.clone(),
             activated_at_epoch_seconds: 1,
             codex_home: "/isolated/workspace-1390".to_string(),
             credential_status: "verified".to_string(),
@@ -2548,7 +2511,6 @@ mod legacy_profile_home_tests {
             client_id: Some("device-a".to_string()),
             workspace_id,
             workspace_name: format!("工作区 {workspace_id}"),
-            model: crate::product_config::get().default_model.clone(),
             activated_at_epoch_seconds: 0,
             codex_home: data_dir
                 .join("profile-homes")
@@ -2605,7 +2567,6 @@ mod shared_home_tests {
             client_id: None,
             workspace_id,
             workspace_name: format!("workspace-{workspace_id}"),
-            model: crate::product_config::get().default_model.clone(),
             activated_at_epoch_seconds: 0,
             codex_home: home.display().to_string(),
             credential_status: "verified".to_string(),
@@ -2613,10 +2574,10 @@ mod shared_home_tests {
     }
 
     #[test]
-    fn metadata_v11_migrates_profile_models_without_touching_live_config() {
+    fn metadata_v12_drops_legacy_profile_model_without_touching_live_config() {
         let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!(
-            "codex-default-model-migration-{}",
+            "codex-profile-model-retirement-{}",
             std::process::id()
         ));
         let user_home = root.join("user");
@@ -2630,28 +2591,43 @@ mod shared_home_tests {
         fs::create_dir_all(&shared).unwrap();
         let stale_config = b"model = \"gpt-5.6-sol\"\ncustom_setting = \"keep\"\n";
         fs::write(shared.join("config.toml"), stale_config).unwrap();
-        let mut workspace = profile(642, &shared);
-        workspace.model = "gpt-5.6-sol".to_string();
-        save_metadata(&CredentialMetadata {
-            version: 11,
-            profiles: vec![workspace],
-            ..CredentialMetadata::default()
-        })
+        let metadata_json = json!({
+            "version": 12,
+            "profiles": [{
+                "profileId": profile_id("prod", None, None, 642),
+                "kind": "baijimu",
+                "name": "workspace-642",
+                "environment": "prod",
+                "workspaceId": 642,
+                "workspaceName": "workspace-642",
+                "model": "gpt-5.6-sol",
+                "activatedAtEpochSeconds": 0,
+                "credentialStatus": "verified"
+            }]
+        });
+        fs::create_dir_all(&data_home).unwrap();
+        fs::write(
+            metadata_path(),
+            serde_json::to_vec_pretty(&metadata_json).unwrap(),
+        )
         .unwrap();
 
         let migrated = load_metadata().unwrap();
 
         assert_eq!(migrated.version, METADATA_VERSION);
-        assert!(migrated
-            .profiles
+        let persisted: Value =
+            crate::json_compat::from_slice(&fs::read(metadata_path()).unwrap()).unwrap();
+        assert!(persisted["profiles"]
+            .as_array()
+            .unwrap()
             .iter()
-            .all(|profile| profile.model == "gpt-5.5"));
+            .all(|profile| profile.get("model").is_none()));
         assert_eq!(fs::read(shared.join("config.toml")).unwrap(), stale_config);
         fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
-    fn workspace_config_readiness_requires_the_complete_gpt55_router_contract() {
+    fn workspace_config_readiness_requires_the_complete_router_contract_and_preserves_model() {
         let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
         let root =
             std::env::temp_dir().join(format!("codex-config-readiness-{}", std::process::id()));
@@ -2668,9 +2644,32 @@ mod shared_home_tests {
 
         assert!(managed_config_ready(&path));
         let rendered = fs::read_to_string(&path).unwrap();
-        assert!(rendered.contains("model = \"gpt-5.5\""));
+        assert!(rendered.contains("model = \"gpt-5.6-sol\""));
         assert!(rendered.contains("wire_api = \"responses\""));
         assert!(rendered.contains("requires_openai_auth = true"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn new_workspace_config_leaves_model_selection_to_codex() {
+        let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "codex-config-model-ownership-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.toml");
+
+        ensure_workspace_config(&path).unwrap();
+
+        let rendered = fs::read_to_string(&path).unwrap();
+        let document = rendered.parse::<DocumentMut>().unwrap();
+        assert!(document.get("model").is_none());
+        assert_eq!(
+            document.get("model_provider").and_then(Item::as_str),
+            Some("baijimu-router")
+        );
+        assert!(managed_config_ready(&path));
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -3061,7 +3060,6 @@ mod shared_home_tests {
             client_id: None,
             workspace_id: 0,
             workspace_name: String::new(),
-            model: crate::product_config::get().default_model.clone(),
             activated_at_epoch_seconds: 0,
             codex_home: "/private/migration-only".to_string(),
             credential_status: "configured".to_string(),
@@ -3070,6 +3068,7 @@ mod shared_home_tests {
         assert_eq!(value.get("kind").and_then(Value::as_str), Some("personal"));
         assert!(value.get("workspaceId").is_none());
         assert!(value.get("codexHome").is_none());
+        assert!(value.get("model").is_none());
     }
 
     #[test]

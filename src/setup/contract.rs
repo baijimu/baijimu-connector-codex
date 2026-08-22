@@ -167,7 +167,6 @@ pub struct MacosInstallerResult {
     pub config_written: bool,
     pub auth_written: bool,
     pub router_http_status: Option<u16>,
-    pub model: String,
     pub elapsed_ms: u128,
     pub warnings: Vec<String>,
     pub errors: Vec<String>,
@@ -175,12 +174,7 @@ pub struct MacosInstallerResult {
 
 #[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 impl MacosInstallerResult {
-    pub fn pending(
-        started_at: String,
-        codex_home: String,
-        workspace_id: u64,
-        model: String,
-    ) -> Self {
+    pub fn pending(started_at: String, codex_home: String, workspace_id: u64) -> Self {
         Self {
             ok: false,
             platform: "macos".to_string(),
@@ -197,7 +191,6 @@ impl MacosInstallerResult {
             config_written: false,
             auth_written: false,
             router_http_status: None,
-            model,
             elapsed_ms: 0,
             warnings: Vec::new(),
             errors: Vec::new(),

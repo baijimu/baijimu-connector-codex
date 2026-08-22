@@ -1,5 +1,3 @@
-export const DEFAULT_MODEL = "gpt-5.5";
-
 export function connectorStartupRetryable(error) {
   const code = String(
     error?.code || error?.data?.code || error?.data?.error?.code || "",
@@ -130,7 +128,6 @@ export function normalizeProfile(value) {
     clientId: String(value.clientId || ""),
     workspaceId,
     workspaceName: String(value.workspaceName || (workspaceId ? `工作区 ${workspaceId}` : "")).trim(),
-    model: String(value.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL,
     activatedAtEpochSeconds: Math.max(0, Number(value.activatedAtEpochSeconds) || 0),
     credentialStatus: String(value.credentialStatus || ""),
   };

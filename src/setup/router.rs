@@ -33,6 +33,7 @@ struct ProbeFailure {
     message: String,
     http_status: Option<u16>,
     retryable: bool,
+    try_next_model: bool,
 }
 
 #[derive(Serialize)]
@@ -62,14 +63,15 @@ pub(super) fn verify(credential: &str) -> RouteVerification {
         }
     };
 
-    verify_with(
+    verify_models_with(
+        &product.route_verification_models,
         ROUTER_PROBE_ATTEMPTS,
-        || {
+        |model| {
             let response = client
                 .post(&endpoint)
                 .bearer_auth(credential)
                 .json(&RouterProbeRequest {
-                    model: product.default_model.as_str(),
+                    model,
                     input: "Reply with exactly OK",
                 })
                 .send()
@@ -77,6 +79,7 @@ pub(super) fn verify(credential: &str) -> RouteVerification {
                     message: format!("路由 /responses 健康检查请求失败：{error}"),
                     http_status: None,
                     retryable: error.is_timeout() || error.is_connect() || error.is_request(),
+                    try_next_model: false,
                 })?;
             let status = response.status();
             if status.as_u16() == 200 {
@@ -89,47 +92,67 @@ pub(super) fn verify(credential: &str) -> RouteVerification {
                     || status.as_u16() == 425
                     || status.as_u16() == 429
                     || status.is_server_error(),
+                try_next_model: matches!(status.as_u16(), 400 | 404 | 422),
             })
         },
         |attempt| thread::sleep(Duration::from_secs(u64::from(attempt))),
     )
 }
 
-fn verify_with<P, S>(
+fn verify_models_with<P, S>(
+    models: &[String],
     max_attempts: u32,
     mut probe: P,
     mut sleep_before_retry: S,
 ) -> RouteVerification
 where
-    P: FnMut() -> Result<u16, ProbeFailure>,
+    P: FnMut(&str) -> Result<u16, ProbeFailure>,
     S: FnMut(u32),
 {
+    assert!(
+        !models.is_empty(),
+        "route verification requires a model catalog"
+    );
     assert!(
         max_attempts > 0,
         "route verification requires at least one attempt"
     );
-    for attempt in 1..=max_attempts {
-        match probe() {
-            Ok(status) => {
-                return RouteVerification {
-                    attempts: attempt,
-                    http_status: Some(status),
-                    failure: None,
-                };
-            }
-            Err(failure) if failure.retryable && attempt < max_attempts => {
-                sleep_before_retry(attempt);
-            }
-            Err(failure) => {
-                return RouteVerification {
-                    attempts: attempt,
-                    http_status: failure.http_status,
-                    failure: Some(failure.message),
-                };
+    let mut attempts = 0;
+    let mut last_failure = None;
+    for model in models {
+        for model_attempt in 1..=max_attempts {
+            attempts += 1;
+            match probe(model) {
+                Ok(status) => {
+                    return RouteVerification {
+                        attempts,
+                        http_status: Some(status),
+                        failure: None,
+                    };
+                }
+                Err(failure) if failure.retryable && model_attempt < max_attempts => {
+                    sleep_before_retry(model_attempt);
+                }
+                Err(failure) if failure.try_next_model => {
+                    last_failure = Some(failure);
+                    break;
+                }
+                Err(failure) => {
+                    return RouteVerification {
+                        attempts,
+                        http_status: failure.http_status,
+                        failure: Some(failure.message),
+                    };
+                }
             }
         }
     }
-    unreachable!("positive attempt count always returns")
+    let failure = last_failure.expect("every catalog model returned a terminal failure");
+    RouteVerification {
+        attempts,
+        http_status: failure.http_status,
+        failure: Some(failure.message),
+    }
 }
 
 #[cfg(test)]
@@ -141,6 +164,7 @@ mod tests {
             message: message.to_string(),
             http_status: None,
             retryable: true,
+            try_next_model: false,
         }
     }
 
@@ -148,9 +172,10 @@ mod tests {
     fn transient_route_failures_are_retried_until_the_probe_passes() {
         let mut calls = 0;
         let mut delays = Vec::new();
-        let result = verify_with(
+        let result = verify_models_with(
+            &["catalog-model".to_string()],
             3,
-            || {
+            |_| {
                 calls += 1;
                 if calls < 3 {
                     Err(transient("temporary timeout"))
@@ -170,14 +195,16 @@ mod tests {
     #[test]
     fn authorization_failures_are_not_retried() {
         let mut calls = 0;
-        let result = verify_with(
+        let result = verify_models_with(
+            &["catalog-model".to_string()],
             3,
-            || {
+            |_| {
                 calls += 1;
                 Err(ProbeFailure {
                     message: "HTTP 401".to_string(),
                     http_status: Some(401),
                     retryable: false,
+                    try_next_model: false,
                 })
             },
             |_| panic!("a permanent failure must not sleep"),
@@ -192,9 +219,10 @@ mod tests {
     #[test]
     fn the_last_transient_error_is_reported_after_all_attempts() {
         let mut calls = 0;
-        let result = verify_with(
+        let result = verify_models_with(
+            &["catalog-model".to_string()],
             3,
-            || {
+            |_| {
                 calls += 1;
                 Err(transient(&format!("timeout {calls}")))
             },
@@ -204,5 +232,32 @@ mod tests {
         assert!(!result.passed());
         assert_eq!(result.attempts(), 3);
         assert_eq!(result.failure_message(), Some("timeout 3"));
+    }
+
+    #[test]
+    fn unsupported_catalog_model_falls_through_to_the_next_model() {
+        let mut models = Vec::new();
+        let result = verify_models_with(
+            &["retired-model".to_string(), "supported-model".to_string()],
+            3,
+            |model| {
+                models.push(model.to_string());
+                if model == "retired-model" {
+                    Err(ProbeFailure {
+                        message: "HTTP 400".to_string(),
+                        http_status: Some(400),
+                        retryable: false,
+                        try_next_model: true,
+                    })
+                } else {
+                    Ok(200)
+                }
+            },
+            |_| panic!("model fallback must not sleep"),
+        );
+
+        assert!(result.passed());
+        assert_eq!(result.attempts(), 2);
+        assert_eq!(models, ["retired-model", "supported-model"]);
     }
 }

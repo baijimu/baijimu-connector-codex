@@ -212,8 +212,9 @@ test("workspace management is exclusive with installation and auth selection is 
   assert.match(app, /invokeManagement\("restartCodex"/);
   assert.match(app, /invokeManagement\("createCodexWorkspace"/);
   assert.match(app, /invokeManagement\(\s*"activateCodexWorkspace"/);
-  assert.match(app, /defaultWorkspaceChildren\(credentialState\)/);
-  assert.match(app, /原有百积木工作区/);
+  assert.match(app, /workspace\.imported/);
+  assert.match(app, /历史导入/);
+  assert.doesNotMatch(app, /defaultWorkspaceChildren|原有百积木工作区|用于默认工作区/);
   assert.doesNotMatch(app, /invokeManagement\("launchCodex"/);
 });
 

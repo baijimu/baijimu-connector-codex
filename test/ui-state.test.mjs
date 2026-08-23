@@ -5,7 +5,6 @@ import {
   codexWorkspaceMeta,
   codexCapabilityMeta,
   defaultWorkspaceMeta,
-  defaultWorkspaceChildren,
   normalizeCredentialState,
   primaryViewMeta,
   profileBadgeMeta,
@@ -13,7 +12,7 @@ import {
   setupStatusMeta,
 } from "../ui/state.mjs";
 
-test("legacy Baijimu workspaces remain visible under the default Codex workspace", () => {
+test("legacy Codex homes are normalized as peer imported workspaces", () => {
   const state = normalizeCredentialState({
     activeCodexWorkspaceId: "default",
     codexWorkspaces: [{
@@ -23,78 +22,22 @@ test("legacy Baijimu workspaces remain visible under the default Codex workspace
       authProfileId: "workspace:42:current",
       active: true,
       isDefault: true,
-    }],
-    profiles: [{
-      profileId: "workspace:42:old",
-      kind: "baijimu",
-      name: "产品研发",
-      workspaceId: 42,
-      activatedAtEpochSeconds: 10,
-      credentialStatus: "configured",
     }, {
-      profileId: "workspace:42:current",
-      kind: "baijimu",
+      workspaceId: "imported-workspace",
       name: "产品研发",
-      workspaceId: 42,
-      activatedAtEpochSeconds: 20,
-      credentialStatus: "verified",
-    }, {
-      profileId: "workspace:7:archived",
-      kind: "baijimu",
-      name: "历史项目",
-      workspaceId: 7,
-      credentialStatus: "missing",
-    }],
-    workspaces: [{
-      workspaceId: 42,
-      name: "产品研发",
-      authorized: true,
-      configured: true,
-    }, {
-      workspaceId: 88,
-      name: "新授权项目",
-      authorized: true,
-      configured: false,
+      codexHome: "/Users/example/.baijimu/codex/p/abc",
+      authProfileId: "workspace:42:old",
+      imported: true,
     }],
   });
 
-  assert.deepEqual(defaultWorkspaceChildren(state).map((child) => ({
-    workspaceId: child.workspaceId,
-    profileId: child.profile?.profileId || null,
-    profileCount: child.profileCount,
-    active: child.active,
-    authorized: child.authorized,
-    canSelect: child.canSelect,
-    canInitialize: child.canInitialize,
-    canReauthorize: child.canReauthorize,
-  })), [{
-    workspaceId: 42,
-    profileId: "workspace:42:current",
-    profileCount: 2,
-    active: true,
-    authorized: true,
-    canSelect: true,
-    canInitialize: false,
-    canReauthorize: true,
-  }, {
-    workspaceId: 88,
-    profileId: null,
-    profileCount: 0,
-    active: false,
-    authorized: true,
-    canSelect: false,
-    canInitialize: true,
-    canReauthorize: false,
-  }, {
-    workspaceId: 7,
-    profileId: "workspace:7:archived",
-    profileCount: 1,
-    active: false,
-    authorized: false,
-    canSelect: false,
-    canInitialize: false,
-    canReauthorize: false,
-  }]);
+  assert.equal(state.codexWorkspaces.length, 2);
+  assert.equal(state.codexWorkspaces[0].isDefault, true);
+  assert.equal(state.codexWorkspaces[0].imported, false);
+  assert.equal(state.codexWorkspaces[1].isDefault, false);
+  assert.equal(state.codexWorkspaces[1].imported, true);
+  assert.equal(state.codexWorkspaces[1].codexHome, "/Users/example/.baijimu/codex/p/abc");
+  assert.equal(state.codexWorkspaces[1].authProfileId, "workspace:42:old");
 });
 
 test("Codex workspaces keep independent authentication channel selections", () => {

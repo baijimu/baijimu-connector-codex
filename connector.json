@@ -2,10 +2,10 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex 桌面管理器",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "安装 Codex 桌面应用，管理多个隔离 Codex 工作区，并让每个工作区使用完整认证通道目录。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.5.3"},
+  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.5.4"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
@@ -57,7 +57,7 @@
     }
   ],
   "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex 桌面管理器", "defaultView": true},
-  "releaseNotes": ["macOS 安装适配器只使用受控系统工具 PATH，不再把用户 CLI、Homebrew 或本地安装目录混入桌面应用安装环境。"],
+  "releaseNotes": ["恢复旧版本已创建的独立 Codex Home，并将其作为同级“历史导入”工作区展示。", "工作区与认证通道彻底解耦；所有工作区使用一致的打开、重启和认证切换操作。"],
   "configSchema": {
     "type": "object",
     "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},

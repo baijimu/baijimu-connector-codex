@@ -91,6 +91,7 @@ export function normalizeCodexWorkspace(value) {
     updatedAtEpochSeconds: Math.max(0, Number(value.updatedAtEpochSeconds) || 0),
     active: value.active === true,
     isDefault: value.isDefault === true,
+    imported: value.imported === true,
   };
 }
 
@@ -112,80 +113,6 @@ export function codexWorkspaceMeta(workspace, profiles = []) {
       : "请先选择一个认证通道",
     channelAvailable: Boolean(profile) && !requiresAuthorization,
   };
-}
-
-function profileUsable(profile) {
-  return Boolean(profile) && !["missing", "invalid"].includes(profile.credentialStatus);
-}
-
-export function defaultWorkspaceChildren(state) {
-  const input = state && typeof state === "object" ? state : {};
-  const profiles = Array.isArray(input.profiles)
-    ? input.profiles.filter((profile) => profile?.kind === "baijimu" && profile.workspaceId)
-    : [];
-  const workspaces = Array.isArray(input.workspaces) ? input.workspaces : [];
-  const defaultWorkspace = (Array.isArray(input.codexWorkspaces) ? input.codexWorkspaces : [])
-    .find((workspace) => workspace?.isDefault)
-    || (Array.isArray(input.codexWorkspaces) ? input.codexWorkspaces : [])
-      .find((workspace) => workspace?.workspaceId === "default")
-    || null;
-  const children = new Map();
-
-  for (const workspace of workspaces) {
-    if (!workspace?.workspaceId || workspace.authorized !== true) continue;
-    children.set(workspace.workspaceId, {
-      workspaceId: workspace.workspaceId,
-      name: workspace.name || `工作区 ${workspace.workspaceId}`,
-      authorized: true,
-      profiles: [],
-    });
-  }
-  for (const profile of profiles) {
-    const current = children.get(profile.workspaceId) || {
-      workspaceId: profile.workspaceId,
-      name: profile.workspaceName || profile.name || `工作区 ${profile.workspaceId}`,
-      authorized: false,
-      profiles: [],
-    };
-    current.profiles.push(profile);
-    children.set(profile.workspaceId, current);
-  }
-
-  return [...children.values()].map((child) => {
-    const orderedProfiles = [...child.profiles].sort((left, right) => {
-      const leftActive = left.profileId === defaultWorkspace?.authProfileId;
-      const rightActive = right.profileId === defaultWorkspace?.authProfileId;
-      if (leftActive !== rightActive) return leftActive ? -1 : 1;
-      const leftUsable = profileUsable(left);
-      const rightUsable = profileUsable(right);
-      if (leftUsable !== rightUsable) return leftUsable ? -1 : 1;
-      return right.activatedAtEpochSeconds - left.activatedAtEpochSeconds
-        || left.profileId.localeCompare(right.profileId);
-    });
-    const profile = orderedProfiles[0] || null;
-    return {
-      key: `default-workspace-child-${child.workspaceId}`,
-      workspaceId: child.workspaceId,
-      name: child.name,
-      authorized: child.authorized,
-      profile,
-      profileCount: orderedProfiles.length,
-      active: orderedProfiles.some(
-        (item) => item.profileId === defaultWorkspace?.authProfileId,
-      ),
-      configured: Boolean(profile),
-      credentialStatus: profile?.credentialStatus || "",
-      canSelect: profileUsable(profile),
-      canInitialize: child.authorized && !profile,
-      canReauthorize: child.authorized && Boolean(profile),
-    };
-  }).sort((left, right) => {
-    if (left.active !== right.active) return left.active ? -1 : 1;
-    if (left.canSelect !== right.canSelect) return left.canSelect ? -1 : 1;
-    if (left.canInitialize !== right.canInitialize) return left.canInitialize ? -1 : 1;
-    return left.name.localeCompare(right.name, "zh-CN")
-      || left.workspaceId - right.workspaceId;
-  });
 }
 
 export function normalizeProfile(value) {

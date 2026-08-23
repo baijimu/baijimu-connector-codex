@@ -2,7 +2,6 @@ import {
   codexWorkspaceMeta,
   codexCapabilityMeta,
   connectorStartupRetryable,
-  defaultWorkspaceChildren,
   normalizeCredentialState,
   normalizeSetupProgress,
   primaryViewMeta,
@@ -279,7 +278,13 @@ function renderCodexWorkspaces() {
     if (workspace.isDefault) {
       const badge = document.createElement("span");
       badge.className = "profile-label neutral";
-      badge.textContent = "默认";
+      badge.textContent = "系统默认";
+      heading.append(badge);
+    }
+    if (workspace.imported) {
+      const badge = document.createElement("span");
+      badge.className = "profile-label neutral";
+      badge.textContent = "历史导入";
       heading.append(badge);
     }
     const channel = document.createElement("span");
@@ -311,76 +316,6 @@ function renderCodexWorkspaces() {
     actions.append(authButton, launchButton);
     summary.append(copy, actions);
     card.append(summary);
-    if (workspace.isDefault) {
-      const children = defaultWorkspaceChildren(credentialState);
-      const nested = document.createElement("section");
-      nested.className = "default-workspace-children";
-      nested.setAttribute("aria-label", "默认工作区下的原有百积木工作区");
-      const nestedHeading = document.createElement("div");
-      nestedHeading.className = "default-workspace-children-heading";
-      const nestedTitle = document.createElement("strong");
-      nestedTitle.textContent = "原有百积木工作区";
-      const nestedNote = document.createElement("span");
-      nestedNote.textContent = children.length
-        ? `共 ${children.length} 个，保留在默认工作区下，并可供全部 Codex 工作区使用`
-        : "已创建的百积木工作区会保留在这里";
-      nestedHeading.append(nestedTitle, nestedNote);
-      nested.append(nestedHeading);
-      const childList = document.createElement("div");
-      childList.className = "default-workspace-child-list";
-      for (const child of children) {
-        const badges = profileBadgeMeta({
-          active: child.active,
-          configured: child.configured,
-          credentialStatus: child.credentialStatus,
-        });
-        if (!child.authorized) badges.push({ label: "历史记录", tone: "neutral" });
-        if (child.profileCount > 1) {
-          badges.push({ label: `${child.profileCount} 个认证通道`, tone: "neutral" });
-        }
-        const childActions = [];
-        if (child.canSelect && !child.active) {
-          childActions.push({
-            label: "用于默认工作区",
-            tone: "secondary",
-            onClick: () => void switchAuthChannel({
-              authProfileId: child.profile.profileId,
-              codexWorkspaceId: workspace.workspaceId,
-            }),
-          });
-        }
-        if (child.canInitialize) {
-          childActions.push({
-            label: "创建认证通道",
-            tone: "primary",
-            onClick: () => void initializeWorkspace(child.workspaceId),
-          });
-        } else if (child.canReauthorize) {
-          childActions.push({
-            label: "重新授权",
-            tone: "secondary",
-            onClick: () => void reauthorizeWorkspace(child.workspaceId),
-          });
-        }
-        childList.append(profileRow({
-          key: child.key,
-          title: `${child.name}（工作区 ${child.workspaceId}）`,
-          badges,
-          active: child.active,
-          disabled: !child.canSelect && !child.canInitialize,
-          selectable: false,
-          actions: childActions,
-        }));
-      }
-      if (!children.length) {
-        const empty = document.createElement("div");
-        empty.className = "empty-state compact";
-        empty.textContent = "暂无原有百积木工作区；完成工作区授权后会显示在这里。";
-        childList.append(empty);
-      }
-      nested.append(childList);
-      card.append(nested);
-    }
     list.append(card);
   }
   if (!list.children.length) {

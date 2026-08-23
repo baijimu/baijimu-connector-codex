@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -25,6 +26,8 @@ pub struct CodexWorkspace {
     pub active: bool,
     #[serde(default)]
     pub is_default: bool,
+    #[serde(default)]
+    pub imported: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -81,6 +84,7 @@ pub fn create(name: &str, auth_profile_id: &str) -> Result<CodexWorkspace> {
         updated_at_epoch_seconds: now,
         active: false,
         is_default: false,
+        imported: false,
     };
     catalog.workspaces.push(workspace.clone());
     save(&catalog)?;
@@ -231,6 +235,7 @@ fn normalize(
             changed = true;
         }
         workspace.is_default = true;
+        workspace.imported = false;
     } else {
         let now = now_epoch_seconds();
         catalog.workspaces.push(CodexWorkspace {
@@ -242,7 +247,11 @@ fn normalize(
             updated_at_epoch_seconds: now,
             active: false,
             is_default: true,
+            imported: false,
         });
+        changed = true;
+    }
+    if import_legacy_workspaces(catalog, credential::legacy_codex_workspace_candidates()?)? {
         changed = true;
     }
     if !catalog
@@ -265,6 +274,55 @@ fn normalize(
             .then_with(|| left.name.cmp(&right.name))
     });
     Ok(changed)
+}
+
+fn import_legacy_workspaces(
+    catalog: &mut WorkspaceCatalog,
+    candidates: Vec<credential::LegacyCodexWorkspaceCandidate>,
+) -> Result<bool> {
+    let mut changed = false;
+    for candidate in candidates {
+        let codex_home = candidate.codex_home.display().to_string();
+        if catalog
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.codex_home == codex_home)
+        {
+            continue;
+        }
+        let workspace_id = imported_workspace_id(&candidate.profile_id, &candidate.codex_home);
+        anyhow::ensure!(
+            !catalog
+                .workspaces
+                .iter()
+                .any(|workspace| workspace.workspace_id == workspace_id),
+            "历史 Codex 工作区标识冲突: {}",
+            candidate.codex_home.display()
+        );
+        let timestamp = candidate.initialized_at_epoch_seconds;
+        catalog.workspaces.push(CodexWorkspace {
+            workspace_id,
+            name: candidate.workspace_name,
+            codex_home,
+            auth_profile_id: Some(candidate.profile_id),
+            created_at_epoch_seconds: timestamp,
+            updated_at_epoch_seconds: timestamp,
+            active: false,
+            is_default: false,
+            imported: true,
+        });
+        changed = true;
+    }
+    Ok(changed)
+}
+
+fn imported_workspace_id(profile_id: &str, codex_home: &Path) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"baijimu-codex-imported-workspace-v1\0");
+    digest.update(profile_id.as_bytes());
+    digest.update(b"\0");
+    digest.update(codex_home.as_os_str().to_string_lossy().as_bytes());
+    format!("{:x}", digest.finalize())[..24].to_string()
 }
 
 fn validate_name(name: &str) -> Result<String> {
@@ -392,6 +450,24 @@ mod tests {
     use super::*;
     use crate::user_environment::TEST_ENVIRONMENT_LOCK;
 
+    fn workspace_catalog(default_home: &Path) -> WorkspaceCatalog {
+        WorkspaceCatalog {
+            schema_version: CATALOG_SCHEMA_VERSION,
+            active_workspace_id: DEFAULT_WORKSPACE_ID.to_string(),
+            workspaces: vec![CodexWorkspace {
+                workspace_id: DEFAULT_WORKSPACE_ID.to_string(),
+                name: "默认工作区".to_string(),
+                codex_home: default_home.display().to_string(),
+                auth_profile_id: Some("personal:chatgpt".to_string()),
+                created_at_epoch_seconds: 1,
+                updated_at_epoch_seconds: 1,
+                active: true,
+                is_default: true,
+                imported: false,
+            }],
+        }
+    }
+
     #[test]
     fn workspace_names_are_user_data_not_path_segments() {
         assert_eq!(validate_name(" 研发 / Codex ").unwrap(), "研发 / Codex");
@@ -431,5 +507,38 @@ mod tests {
             std::env::remove_var("BAIJIMU_CONNECTOR_DATA_DIR");
         }
         fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[test]
+    fn legacy_homes_are_imported_as_idempotent_peer_workspaces() {
+        let root = std::env::temp_dir().join(format!(
+            "codex-legacy-workspace-import-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let default_home = root.join("default");
+        let legacy_home = root.join("legacy");
+        let mut catalog = workspace_catalog(&default_home);
+        let candidate = credential::LegacyCodexWorkspaceCandidate {
+            profile_id: "prod:user-25:client-device-a:workspace-1390".to_string(),
+            workspace_name: "产品研发".to_string(),
+            codex_home: legacy_home.clone(),
+            initialized_at_epoch_seconds: 42,
+        };
+
+        assert!(import_legacy_workspaces(&mut catalog, vec![candidate.clone()]).unwrap());
+        assert_eq!(catalog.workspaces.len(), 2);
+        let imported = &catalog.workspaces[1];
+        assert!(imported.imported);
+        assert!(!imported.is_default);
+        assert_eq!(imported.name, "产品研发");
+        assert_eq!(imported.codex_home, legacy_home.display().to_string());
+        assert_eq!(
+            imported.auth_profile_id.as_deref(),
+            Some(candidate.profile_id.as_str())
+        );
+        assert_eq!(imported.created_at_epoch_seconds, 42);
+        assert!(!import_legacy_workspaces(&mut catalog, vec![candidate]).unwrap());
+        assert_eq!(catalog.workspaces.len(), 2);
     }
 }

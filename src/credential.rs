@@ -87,6 +87,14 @@ struct FileSnapshot {
     bytes: Option<Vec<u8>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LegacyCodexWorkspaceCandidate {
+    pub profile_id: String,
+    pub workspace_name: String,
+    pub codex_home: PathBuf,
+    pub initialized_at_epoch_seconds: u64,
+}
+
 #[derive(Debug)]
 pub struct ActivationTransaction {
     #[cfg(test)]
@@ -250,6 +258,114 @@ pub fn state() -> Result<CredentialManagerState> {
         codex_auth_path: auth_path.display().to_string(),
         codex_config_path: config_path.display().to_string(),
     })
+}
+
+pub fn legacy_codex_workspace_candidates() -> Result<Vec<LegacyCodexWorkspaceCandidate>> {
+    let metadata = load_metadata()?;
+    let default_home = default_original_codex_home();
+    let mut profiles = metadata
+        .profiles
+        .iter()
+        .filter(|profile| profile.kind == AuthProfileKind::Baijimu)
+        .collect::<Vec<_>>();
+    profiles.sort_by(|left, right| {
+        right
+            .activated_at_epoch_seconds
+            .cmp(&left.activated_at_epoch_seconds)
+            .then_with(|| left.profile_id.cmp(&right.profile_id))
+    });
+
+    let mut candidates = Vec::new();
+    for profile in &profiles {
+        let profile_key = profile_short_key(&profile.profile_id);
+        let path = managed_profile_root().join(&profile_key);
+        if path == default_home {
+            continue;
+        }
+        let Some(ownership) = legacy_workspace_ownership(&path)? else {
+            continue;
+        };
+        if let Some(owner_profile_key) = ownership.profile_key.as_deref() {
+            anyhow::ensure!(
+                owner_profile_key == profile_key,
+                "历史 Codex 工作区所有权与认证档案不一致: {}",
+                path.display()
+            );
+        }
+        candidates.push(legacy_workspace_candidate(profile, path, ownership));
+    }
+
+    let mut inspected_workspace_ids = BTreeSet::new();
+    for profile in &profiles {
+        if !inspected_workspace_ids.insert(profile.workspace_id) {
+            continue;
+        }
+        let path =
+            legacy_managed_profile_root().join(format!("workspace-{}", profile.workspace_id));
+        if path == default_home {
+            continue;
+        }
+        let Some(ownership) = legacy_workspace_ownership(&path)? else {
+            continue;
+        };
+        let owner_profile = if let Some(owner_profile_key) = ownership.profile_key.as_deref() {
+            profiles
+                .iter()
+                .copied()
+                .find(|candidate| {
+                    candidate.workspace_id == profile.workspace_id
+                        && profile_short_key(&candidate.profile_id) == owner_profile_key
+                })
+                .with_context(|| {
+                    format!(
+                        "历史 Codex 工作区所有权找不到对应认证档案: {}",
+                        path.display()
+                    )
+                })?
+        } else {
+            *profile
+        };
+        candidates.push(legacy_workspace_candidate(owner_profile, path, ownership));
+    }
+    candidates.sort_by(|left, right| left.codex_home.cmp(&right.codex_home));
+    Ok(candidates)
+}
+
+fn legacy_workspace_candidate(
+    profile: &CredentialProfile,
+    codex_home: PathBuf,
+    ownership: CodexHomeOwnership,
+) -> LegacyCodexWorkspaceCandidate {
+    LegacyCodexWorkspaceCandidate {
+        profile_id: profile.profile_id.clone(),
+        workspace_name: if profile.workspace_name.trim().is_empty() {
+            format!("百积木工作区 {}", profile.workspace_id)
+        } else {
+            profile.workspace_name.trim().to_string()
+        },
+        codex_home,
+        initialized_at_epoch_seconds: ownership.initialized_at_epoch_seconds,
+    }
+}
+
+fn legacy_workspace_ownership(home: &Path) -> Result<Option<CodexHomeOwnership>> {
+    let metadata = match fs::symlink_metadata(home) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("读取历史 Codex 工作区失败: {}", home.display()))
+        }
+    };
+    anyhow::ensure!(
+        metadata.file_type().is_dir(),
+        "历史 Codex 工作区路径不是普通目录: {}",
+        home.display()
+    );
+    let Some(ownership) = read_valid_ownership(home)? else {
+        return Ok(None);
+    };
+    Ok(Some(ownership))
 }
 
 pub fn initialize_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspaceProfile> {
@@ -3260,6 +3376,161 @@ mod shared_home_tests {
             .unwrap();
         assert_eq!(chatgpt.credential_status, "login_required");
         assert_eq!(migrated.active_profile_id, Some(workspace.profile_id));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn owned_legacy_profile_home_is_discovered_without_restoring_credentials_into_it() {
+        let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "codex-legacy-home-discovery-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let user_home = root.join("user");
+        let data_home = root.join("data");
+        let _env = EnvRestore::set(&[
+            ("HOME", &user_home),
+            ("USERPROFILE", &user_home),
+            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+        ]);
+        let shared = user_home.join(".codex");
+        fs::create_dir_all(&shared).unwrap();
+        let workspace = profile(1390, &shared);
+        save_metadata(&CredentialMetadata {
+            profiles: vec![workspace.clone()],
+            original_codex_home_state: OriginalCodexHomeState {
+                captured: true,
+                value: None,
+                capture_source: "test".to_string(),
+            },
+            ..CredentialMetadata::default()
+        })
+        .unwrap();
+        let profile_key = profile_short_key(&workspace.profile_id);
+        let legacy_home = managed_profile_root().join(&profile_key);
+        fs::create_dir_all(legacy_home.join("sessions")).unwrap();
+        fs::write(legacy_home.join("sessions/thread.jsonl"), b"legacy-state").unwrap();
+        let ownership = CodexHomeOwnership {
+            schema_version: 2,
+            owner: OWNERSHIP_OWNER.to_string(),
+            initialized_at_epoch_seconds: 77,
+            managed_files: vec![OWNED_AUTH_FILE.to_string(), OWNED_CONFIG_FILE.to_string()],
+            profile_key: Some(profile_key),
+        };
+        atomic_write_private(
+            &legacy_home.join(OWNERSHIP_MARKER_FILE),
+            &serde_json::to_vec_pretty(&ownership).unwrap(),
+        )
+        .unwrap();
+
+        let original_legacy_home = legacy_managed_profile_root().join("workspace-1390");
+        fs::create_dir_all(original_legacy_home.join("sessions")).unwrap();
+        fs::write(
+            original_legacy_home.join("sessions/older-thread.jsonl"),
+            b"older-legacy-state",
+        )
+        .unwrap();
+        let original_ownership = CodexHomeOwnership {
+            schema_version: LEGACY_OWNERSHIP_SCHEMA_VERSION,
+            owner: LEGACY_OWNERSHIP_OWNER.to_string(),
+            initialized_at_epoch_seconds: 66,
+            managed_files: vec![OWNED_AUTH_FILE.to_string(), OWNED_CONFIG_FILE.to_string()],
+            profile_key: None,
+        };
+        atomic_write_private(
+            &original_legacy_home.join(OWNERSHIP_MARKER_FILE),
+            &serde_json::to_vec_pretty(&original_ownership).unwrap(),
+        )
+        .unwrap();
+
+        let candidates = legacy_codex_workspace_candidates().unwrap();
+
+        assert_eq!(candidates.len(), 2);
+        let shortened = candidates
+            .iter()
+            .find(|candidate| candidate.codex_home == legacy_home)
+            .unwrap();
+        assert_eq!(shortened.profile_id, workspace.profile_id);
+        assert_eq!(shortened.workspace_name, workspace.workspace_name);
+        assert_eq!(shortened.initialized_at_epoch_seconds, 77);
+        assert_eq!(
+            fs::read(shortened.codex_home.join("sessions/thread.jsonl")).unwrap(),
+            b"legacy-state"
+        );
+        let original = candidates
+            .iter()
+            .find(|candidate| candidate.codex_home == original_legacy_home)
+            .unwrap();
+        assert_eq!(original.profile_id, workspace.profile_id);
+        assert_eq!(original.initialized_at_epoch_seconds, 66);
+        assert_eq!(
+            fs::read(original.codex_home.join("sessions/older-thread.jsonl")).unwrap(),
+            b"older-legacy-state"
+        );
+        assert!(candidates
+            .iter()
+            .all(|candidate| !candidate.codex_home.join("auth.json").exists()));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn legacy_workspace_owner_selects_the_exact_profile_when_a_workspace_has_multiple_profiles() {
+        let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "codex-legacy-owner-profile-selection-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let user_home = root.join("user");
+        let data_home = root.join("data");
+        let _env = EnvRestore::set(&[
+            ("HOME", &user_home),
+            ("USERPROFILE", &user_home),
+            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+        ]);
+        let shared = user_home.join(".codex");
+        fs::create_dir_all(&shared).unwrap();
+        let mut original = profile(1390, &shared);
+        original.profile_id = profile_id("prod", Some(25), Some("device-a"), 1390);
+        original.workspace_name = "原认证档案".to_string();
+        original.activated_at_epoch_seconds = 10;
+        let mut newer = profile(1390, &shared);
+        newer.profile_id = profile_id("prod", Some(25), Some("device-b"), 1390);
+        newer.workspace_name = "新认证档案".to_string();
+        newer.activated_at_epoch_seconds = 20;
+        save_metadata(&CredentialMetadata {
+            profiles: vec![original.clone(), newer],
+            original_codex_home_state: OriginalCodexHomeState {
+                captured: true,
+                value: None,
+                capture_source: "test".to_string(),
+            },
+            ..CredentialMetadata::default()
+        })
+        .unwrap();
+
+        let legacy_home = legacy_managed_profile_root().join("workspace-1390");
+        fs::create_dir_all(&legacy_home).unwrap();
+        let ownership = CodexHomeOwnership {
+            schema_version: 2,
+            owner: OWNERSHIP_OWNER.to_string(),
+            initialized_at_epoch_seconds: 55,
+            managed_files: vec![OWNED_AUTH_FILE.to_string(), OWNED_CONFIG_FILE.to_string()],
+            profile_key: Some(profile_short_key(&original.profile_id)),
+        };
+        atomic_write_private(
+            &legacy_home.join(OWNERSHIP_MARKER_FILE),
+            &serde_json::to_vec_pretty(&ownership).unwrap(),
+        )
+        .unwrap();
+
+        let candidates = legacy_codex_workspace_candidates().unwrap();
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].codex_home, legacy_home);
+        assert_eq!(candidates[0].profile_id, original.profile_id);
+        assert_eq!(candidates[0].workspace_name, "原认证档案");
         fs::remove_dir_all(&root).unwrap();
     }
 }

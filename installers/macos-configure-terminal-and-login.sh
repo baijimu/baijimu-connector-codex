@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-export PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 
 verify_sha256() {
   local archive="$1"

@@ -87,6 +87,8 @@ test("desktop manager neither installs CLI nor exposes invoke routes", async () 
   assert.match(setup, /prepared\.credential/);
   assert.match(setup, /mod router;/);
   assert.doesNotMatch(macosScript, /install_cli|install-cli/);
+  assert.match(macosScript, /export PATH="\/usr\/bin:\/bin:\/usr\/sbin:\/sbin"/);
+  assert.doesNotMatch(macosScript, /\.local\/bin|homebrew|\/usr\/local\/bin/);
 });
 
 test("desktop manager separates the workspace catalog from installation status", async () => {

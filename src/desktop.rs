@@ -97,8 +97,6 @@ if ($wasRunning) {
 "#;
 
     const LAUNCH_SCRIPT: &str = r#"
-$codexHome = $env:CODEX_HOME
-if ([string]::IsNullOrWhiteSpace($codexHome)) { throw '启动 Codex 工作区时必须显式提供 CODEX_HOME' }
 Start-Process -FilePath "${codexDesktopProtocol}:"
 $deadline = (Get-Date).AddSeconds(10)
 do {
@@ -113,18 +111,31 @@ if ($targets.Count -eq 0) { throw 'Windows 已接受 codex: 协议请求，但�
 "#;
 
     pub fn stop_for_workspace_switch() -> Result<DesktopSwitch> {
-        let result: StopResult =
-            crate::json_compat::from_slice(&run_powershell(STOP_SCRIPT, None)?)
-                .context("解析 ChatGPT/Codex 桌面停止结果失败")?;
+        let result: StopResult = crate::json_compat::from_slice(&run_powershell(STOP_SCRIPT)?)
+            .context("解析 ChatGPT/Codex 桌面停止结果失败")?;
         Ok(DesktopSwitch {
             was_running: result.was_running,
         })
     }
 
     pub fn launch_workspace(codex_home: &std::path::Path) -> Result<()> {
-        let result: LaunchResult =
-            crate::json_compat::from_slice(&run_powershell(LAUNCH_SCRIPT, Some(codex_home))?)
-                .context("解析 ChatGPT/Codex Windows 启动结果失败")?;
+        match crate::user_environment::read_codex_home()? {
+            Some(projected_home) => anyhow::ensure!(
+                crate::user_environment::codex_homes_match(&projected_home, codex_home),
+                "用户级 CODEX_HOME 尚未切换到活动工作区：当前 {}，目标 {}",
+                projected_home.display(),
+                codex_home.display()
+            ),
+            None => anyhow::ensure!(
+                crate::user_environment::codex_homes_match(
+                    &crate::credential::default_codex_home(),
+                    codex_home,
+                ),
+                "用户级 CODEX_HOME 尚未切换到活动工作区，请先打开该工作区"
+            ),
+        }
+        let result: LaunchResult = crate::json_compat::from_slice(&run_powershell(LAUNCH_SCRIPT)?)
+            .context("解析 ChatGPT/Codex Windows 启动结果失败")?;
         anyhow::ensure!(
             result.activation_accepted,
             "Windows 未接受 ChatGPT/Codex 桌面应用启动请求"
@@ -143,7 +154,7 @@ if ($targets.Count -eq 0) { throw 'Windows 已接受 codex: 协议请求，但�
         Ok(true)
     }
 
-    fn run_powershell(script: &str, codex_home: Option<&std::path::Path>) -> Result<Vec<u8>> {
+    fn run_powershell(script: &str) -> Result<Vec<u8>> {
         let mut command = Command::new("powershell.exe");
         crate::child_process::isolate_from_connector_environment(&mut command);
         let product = crate::product_config::get();
@@ -158,9 +169,6 @@ if ($targets.Count -eq 0) { throw 'Windows 已接受 codex: 协议请求，但�
                 "CODEX_DESKTOP_TRUSTED_SIGNER_SUBJECTS",
                 product.windows_desktop_trusted_signer_subjects.join("\n"),
             );
-        if let Some(codex_home) = codex_home {
-            command.env("CODEX_HOME", codex_home);
-        }
         command.args([
             "-NoLogo",
             "-NoProfile",
@@ -186,7 +194,7 @@ if ($targets.Count -eq 0) { throw 'Windows 已接受 codex: 协议请求，但�
     mod tests {
         use super::*;
         #[test]
-        fn launch_has_no_environment_write_or_broadcast() {
+        fn launch_only_activates_the_preselected_windows_workspace() {
             let source = format!("{POWERSHELL_PREAMBLE}\n{STOP_SCRIPT}\n{LAUNCH_SCRIPT}");
             assert!(source.contains("Start-Process -FilePath \"${codexDesktopProtocol}:\""));
             assert!(source.contains("Get-Process -Name"));
@@ -203,7 +211,7 @@ if ($targets.Count -eq 0) { throw 'Windows 已接受 codex: 协议请求，但�
             ] {
                 assert!(!source.contains(forbidden), "unexpected {forbidden}");
             }
-            assert!(source.contains("CODEX_HOME"));
+            assert!(!source.contains("CODEX_HOME"));
         }
     }
 }

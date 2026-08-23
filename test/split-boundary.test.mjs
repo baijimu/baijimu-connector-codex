@@ -26,7 +26,10 @@ test("desktop manager exposes only its required read-only status method", async 
     manifest.methods.map(({ name, path, httpMethod }) => ({ name, path, httpMethod })),
     [{ name: "status", path: "/healthz", httpMethod: "GET" }],
   );
-  assert.equal(manifest.management.operations.launchCodex, undefined);
+  assert.deepEqual(manifest.management.operations.launchCodex, {
+    method: "POST",
+    path: "/management/v1/codex/launch",
+  });
   assert.deepEqual(manifest.management.operations.switchAuthChannel, {
     method: "POST",
     path: "/management/v1/codex/auth-channel",
@@ -108,9 +111,10 @@ test("desktop manager separates the workspace catalog from installation status",
   assert.doesNotMatch(html, /integration-unavailable-panel/);
 });
 
-test("Windows runtime uses codex protocol activation without AppX discovery", async () => {
-  const [desktop, installer] = await Promise.all([
+test("Windows switches the persistent Codex home before protocol activation", async () => {
+  const [desktop, userEnvironment, installer] = await Promise.all([
     read("src/desktop.rs"),
+    read("src/user_environment.rs"),
     read("installers/windows-configure-terminal-and-login.ps1"),
   ]);
   const desktopPreamble = desktop.slice(
@@ -145,6 +149,11 @@ test("Windows runtime uses codex protocol activation without AppX discovery", as
   assert.doesNotMatch(desktopPreamble, /IApplicationActivationManager|ActivateApplication/);
   assert.doesNotMatch(desktopPreamble, /CurrentUser\.CreateSubKey|SetValue\(|DeleteValue\(/);
   assert.doesNotMatch(desktop, /SendMessageTimeout|WM_SETTINGCHANGE|BroadcastEnvironmentChange/);
+  assert.match(userEnvironment, /HKCU\\\\Environment/);
+  assert.match(userEnvironment, /set_value\(\s*"CODEX_HOME"/);
+  assert.match(userEnvironment, /SendMessageTimeoutW/);
+  assert.match(userEnvironment, /WM_SETTINGCHANGE/);
+  assert.match(userEnvironment, /SMTO_ABORTIFHUNG/);
   assert.doesNotMatch(desktopPreamble, /BAIJIMU_AUTH_FILE/);
   assert.doesNotMatch(desktopPreamble, /BAIJIMU_CURRENT_WORKSPACE_ID/);
   assert.doesNotMatch(desktopPreamble, /Grant-BaijimuCliAuthStoreReadAccess/);
@@ -153,13 +162,14 @@ test("Windows runtime uses codex protocol activation without AppX discovery", as
   assert.match(desktopLaunch, /Get-CodexDesktopProcesses/);
   assert.match(desktopLaunch, /activationAccepted = \$true/);
   assert.doesNotMatch(desktopLaunch, /VisibleWindow|EnumWindows|IsWindowVisible|AddSeconds\(45\)/);
-  assert.match(desktopLaunch, /CODEX_HOME/);
+  assert.doesNotMatch(desktopLaunch, /CODEX_HOME/);
   assert.doesNotMatch(desktopLaunch, /appUserModelId/);
 });
 
-test("authentication switching and Codex restart are separate management operations", async () => {
-  const [main, desktop, credential] = await Promise.all([
+test("workspace home switching, launch, restart, and authentication are separate operations", async () => {
+  const [main, activation, desktop, credential] = await Promise.all([
     read("src/main.rs"),
+    read("src/codex_workspace_activation.rs"),
     read("src/desktop.rs"),
     read("src/credential.rs"),
   ]);
@@ -169,6 +179,8 @@ test("authentication switching and Codex restart are separate management operati
   assert.match(main, /desktop::launch_workspace/);
   const switchRouteStart = main.indexOf('(\"POST\", \"/management/v1/codex/auth-channel\")');
   const createWorkspaceRouteStart = main.indexOf('(\"POST\", \"/management/v1/codex/workspaces\")');
+  const activateRouteStart = main.indexOf('(\"POST\", \"/management/v1/codex/workspaces/activate\")');
+  const launchRouteStart = main.indexOf('(\"POST\", \"/management/v1/codex/launch\")');
   const restartRouteStart = main.indexOf('(\"POST\", \"/management/v1/codex/restart\")');
   const switchRoute = main.slice(
     switchRouteStart,
@@ -178,6 +190,8 @@ test("authentication switching and Codex restart are separate management operati
     restartRouteStart,
     main.indexOf('_ => Err(HttpError::new(404', restartRouteStart),
   );
+  const activateRoute = main.slice(activateRouteStart, launchRouteStart);
+  const launchRoute = main.slice(launchRouteStart, restartRouteStart);
   assert.doesNotMatch(switchRoute, /verify_system_compatibility|stop_for_codex_home_switch/);
   assert.match(switchRoute, /stop_for_workspace_switch/);
   assert.match(switchRoute, /codex_workspace::switch_auth_profile/);
@@ -186,8 +200,18 @@ test("authentication switching and Codex restart are separate management operati
     switchRoute,
     /initialize_workspace_profile|prepare_workspace_reauthorization|create_llm_credential|write_workspace_auth|write_workspace_config/,
   );
+  assert.match(activateRoute, /codex_workspace_activation::switch/);
+  assert.doesNotMatch(activateRoute, /desktop::launch_workspace/);
+  assert.match(activation, /stop_for_workspace_switch/);
+  assert.match(activation, /project_windows_codex_home/);
+  assert.match(activation, /codex_workspace::activate/);
+  assert.doesNotMatch(activation, /desktop::launch_workspace/);
+  assert.match(launchRoute, /codex_workspace::active/);
+  assert.match(launchRoute, /desktop::launch_workspace/);
+  assert.doesNotMatch(launchRoute, /stop_for_workspace_switch|set_codex_home|codex_workspace::activate/);
   assert.match(restartRoute, /stop_for_workspace_switch/);
   assert.match(restartRoute, /desktop::launch_workspace/);
+  assert.doesNotMatch(restartRoute, /set_codex_home|project_windows_codex_home|codex_workspace::activate/);
   assert.doesNotMatch(
     restartRoute,
     /prepare_profile_activation|activate_prepared_profile|authProfileId|credential::state/,
@@ -212,10 +236,20 @@ test("workspace management is exclusive with installation and auth selection is 
   assert.match(app, /invokeManagement\("restartCodex"/);
   assert.match(app, /invokeManagement\("createCodexWorkspace"/);
   assert.match(app, /invokeManagement\(\s*"activateCodexWorkspace"/);
+  assert.match(app, /invokeManagement\("launchCodex"/);
+  assert.match(app, /正在切换 CODEX_HOME/);
+  assert.match(app, /CODEX_HOME 已切换到所选工作区，但 Codex 启动失败/);
   assert.match(app, /workspace\.imported/);
   assert.match(app, /历史导入/);
   assert.doesNotMatch(app, /defaultWorkspaceChildren|原有百积木工作区|用于默认工作区/);
-  assert.doesNotMatch(app, /invokeManagement\("launchCodex"/);
+  const activateUi = app.slice(
+    app.indexOf("async function activateCodexWorkspace"),
+    app.indexOf("async function launchCodex"),
+  );
+  assert.ok(
+    activateUi.indexOf('invokeManagement(\n      "activateCodexWorkspace"')
+      < activateUi.indexOf('invokeManagement("launchCodex"'),
+  );
 });
 
 test("initialization preserves shared state and reauthorization only rotates credentials", async () => {

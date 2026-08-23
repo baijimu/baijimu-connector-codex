@@ -2,10 +2,10 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex 桌面管理器",
-  "version": "1.5.4",
+  "version": "1.5.5",
   "description": "安装 Codex 桌面应用，管理多个隔离 Codex 工作区，并让每个工作区使用完整认证通道目录。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.5.4"},
+  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v1.5.5"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
@@ -38,6 +38,7 @@
       "initializeWorkspace": {"method": "POST", "path": "/management/v1/codex/initialize"},
       "createCodexWorkspace": {"method": "POST", "path": "/management/v1/codex/workspaces"},
       "activateCodexWorkspace": {"method": "POST", "path": "/management/v1/codex/workspaces/activate"},
+      "launchCodex": {"method": "POST", "path": "/management/v1/codex/launch"},
       "switchAuthChannel": {"method": "POST", "path": "/management/v1/codex/auth-channel"},
       "restartCodex": {"method": "POST", "path": "/management/v1/codex/restart"},
       "reauthorizeWorkspace": {"method": "POST", "path": "/management/v1/codex/reauthorize"},
@@ -57,7 +58,7 @@
     }
   ],
   "ui": {"type": "embedded", "entry": "ui/index.html", "title": "Codex 桌面管理器", "defaultView": true},
-  "releaseNotes": ["恢复旧版本已创建的独立 Codex Home，并将其作为同级“历史导入”工作区展示。", "工作区与认证通道彻底解耦；所有工作区使用一致的打开、重启和认证切换操作。"],
+  "releaseNotes": ["Windows 工作区切换会持久设置并同步通知目标 CODEX_HOME，确保系统启动的 Codex 使用所选状态目录。", "界面分别展示 CODEX_HOME 切换与 Codex 启动阶段；启动失败时保留已切换工作区并支持单独重试。"],
   "configSchema": {
     "type": "object",
     "properties": {"port": {"type": "integer", "default": 18110, "minimum": 1024, "maximum": 65535}},

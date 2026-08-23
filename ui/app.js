@@ -395,20 +395,52 @@ async function createCodexWorkspace() {
 async function activateCodexWorkspace(codexWorkspaceId) {
   clearNotices();
   setAccountBusy(true);
-  elements["codex-operation-title"].textContent = "正在打开 Codex 工作区";
-  elements["codex-operation-message"].textContent = "正在关闭现有 Codex，并使用目标工作区的独立状态目录启动。";
+  let homeSwitched = false;
+  elements["codex-operation-title"].textContent = "正在切换 CODEX_HOME";
+  elements["codex-operation-message"].textContent = "正在关闭现有 Codex 并设置目标工作区目录；系统通知完成前请稍候。";
   elements["codex-operation-progress"].hidden = false;
   try {
     credentialState = normalizeCredentialState(await invokeManagement(
       "activateCodexWorkspace",
       { codexWorkspaceId },
     ));
+    homeSwitched = true;
     renderCredentialState();
+    elements["codex-operation-title"].textContent = "正在启动 Codex";
+    elements["codex-operation-message"].textContent = "CODEX_HOME 已切换，正在启动所选工作区。";
+    await invokeManagement("launchCodex", {});
     setMessage("message", "Codex 已使用所选工作区启动。");
   } catch (error) {
+    if (homeSwitched) {
+      showError(`CODEX_HOME 已切换到所选工作区，但 Codex 启动失败：${errorMessage(error)}`, {
+        action: launchCodex,
+        label: "重试启动",
+      });
+    } else {
+      showError(errorMessage(error), {
+        action: () => activateCodexWorkspace(codexWorkspaceId),
+        label: "重试切换",
+      });
+    }
+  } finally {
+    elements["codex-operation-progress"].hidden = true;
+    setAccountBusy(false);
+  }
+}
+
+async function launchCodex() {
+  clearNotices();
+  setAccountBusy(true);
+  elements["codex-operation-title"].textContent = "正在启动 Codex";
+  elements["codex-operation-message"].textContent = "正在使用已经切换完成的 CODEX_HOME 启动当前工作区。";
+  elements["codex-operation-progress"].hidden = false;
+  try {
+    await invokeManagement("launchCodex", {});
+    setMessage("message", "Codex 已使用当前工作区启动。");
+  } catch (error) {
     showError(errorMessage(error), {
-      action: () => activateCodexWorkspace(codexWorkspaceId),
-      label: "重试打开",
+      action: launchCodex,
+      label: "重试启动",
     });
   } finally {
     elements["codex-operation-progress"].hidden = true;
@@ -499,8 +531,8 @@ async function restartCodex() {
     setMessage("message", "已提交 Codex 重启请求；当前认证通道保持不变。");
   } catch (error) {
     showError(errorMessage(error), {
-      action: restartCodex,
-      label: "重试重启",
+      action: () => activateCodexWorkspace(credentialState?.activeCodexWorkspaceId || "default"),
+      label: "重新打开工作区",
     });
   } finally {
     elements["codex-operation-progress"].hidden = true;

@@ -2,6 +2,7 @@ mod baijimu_cli;
 mod child_process;
 mod cli;
 mod codex_workspace;
+mod codex_workspace_activation;
 mod credential;
 mod desktop;
 mod json_compat;
@@ -21,7 +22,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -419,6 +420,18 @@ fn handle_management(
                 .credential_management
                 .lock()
                 .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
+            if let Some(current) = user_environment::read_codex_home()
+                .map_err(|error| HttpError::new(409, error.to_string()))?
+            {
+                let workspaces = codex_workspace::state(None)
+                    .map_err(|error| HttpError::internal(error.to_string()))?;
+                if codex_home_is_registered(&current, &workspaces.workspaces) {
+                    return Err(HttpError::new(
+                        409,
+                        "当前用户级 CODEX_HOME 是已登记 Codex 工作区的活动投影，不能作为旧版残留恢复",
+                    ));
+                }
+            }
             credential::restore_legacy_global_codex_home()
                 .map_err(|error| HttpError::new(409, error.to_string()))?;
             credential_state_value()
@@ -574,36 +587,30 @@ fn handle_management(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| HttpError::new(400, "必须提供 codexWorkspaceId"))?;
-            let previous = codex_workspace::active()
-                .map_err(|error| HttpError::internal(error.to_string()))?;
-            let target = codex_workspace::workspace(workspace_id)
-                .map_err(|error| HttpError::new(404, error.to_string()))?;
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            let desktop_switch = if !test_control_enabled() {
-                Some(
-                    desktop::stop_for_workspace_switch()
-                        .map_err(desktop_compatibility_http_error)?,
-                )
-            } else {
-                None
-            };
-            codex_workspace::activate(workspace_id)
+            codex_workspace_activation::switch(workspace_id, !test_control_enabled())
                 .map_err(|error| HttpError::new(409, error.to_string()))?;
+
+            credential_state_value()
+        }
+        ("POST", "/management/v1/codex/launch") => {
+            let _credential_guard = state
+                .credential_management
+                .lock()
+                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
+            ensure_default_workspace_ready(state, "启动 Codex")?;
+            let active = codex_workspace::active()
+                .map_err(|error| HttpError::internal(error.to_string()))?;
             if !test_control_enabled() {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
-                if let Err(error) =
-                    desktop::launch_workspace(std::path::Path::new(&target.codex_home))
                 {
-                    let _ = codex_workspace::activate(&previous.workspace_id);
-                    if let Some(desktop_switch) = desktop_switch {
-                        let _ = desktop_switch.restart_workspace_if_needed(std::path::Path::new(
-                            &previous.codex_home,
-                        ));
-                    }
-                    return Err(desktop_compatibility_http_error(error));
+                    desktop::launch_workspace(Path::new(&active.codex_home))
+                        .map_err(desktop_compatibility_http_error)?;
                 }
             }
-            credential_state_value()
+            Ok(json!({
+                "launched": true,
+                "codexWorkspaceId": active.workspace_id,
+            }))
         }
         ("POST", "/management/v1/codex/restart") => {
             let _credential_guard = state
@@ -637,6 +644,10 @@ fn credential_state_value() -> Result<Value, HttpError> {
         .map(|profile| profile.profile_id.as_str());
     let workspace_state = codex_workspace::state(default_profile_id)
         .map_err(|error| HttpError::internal(error.to_string()))?;
+    let intentional_environment_projection = credential_state
+        .external_codex_home
+        .as_deref()
+        .is_some_and(|home| codex_home_is_registered(Path::new(home), &workspace_state.workspaces));
     let mut value = serde_json::to_value(&credential_state)
         .map_err(|error| HttpError::internal(error.to_string()))?;
     value["codexWorkspaces"] = serde_json::to_value(&workspace_state.workspaces)
@@ -661,7 +672,17 @@ fn credential_state_value() -> Result<Value, HttpError> {
             }
         }
     }
+    if intentional_environment_projection {
+        value["legacyGlobalCodexHome"]["restoreRequired"] = Value::Bool(false);
+        value["legacyGlobalCodexHome"]["canRestore"] = Value::Bool(false);
+    }
     Ok(value)
+}
+
+fn codex_home_is_registered(home: &Path, workspaces: &[codex_workspace::CodexWorkspace]) -> bool {
+    workspaces.iter().any(|workspace| {
+        user_environment::codex_homes_match(home, Path::new(&workspace.codex_home))
+    })
 }
 
 fn ensure_default_workspace_ready(state: &AppState, operation: &str) -> Result<(), HttpError> {

@@ -293,6 +293,21 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
         .next()
         .unwrap_or(request.path.as_str())
         .to_string();
+    let test_shutdown = request.method == "POST"
+        && path == "/__shutdown"
+        && env::var("CODEX_DESKTOP_ENABLE_TEST_SHUTDOWN")
+            .ok()
+            .as_deref()
+            == Some("1");
+    if !test_shutdown
+        && !management_authorized(request.authorization.as_deref(), &state.management_token)
+    {
+        return write_json(
+            &mut stream,
+            401,
+            &json!({"ok": false, "error": {"code": "UNAUTHORIZED", "message": "local app authorization required"}}),
+        );
+    }
     let response = match (request.method.as_str(), path.as_str()) {
         ("GET", "/healthz") => {
             let snapshot = state.startup.snapshot();
@@ -321,12 +336,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
             if let Some(response) = startup_not_ready_response(&state.startup) {
                 return write_json(&mut stream, 503, &response);
             }
-            if !management_authorized(request.authorization.as_deref(), &state.management_token) {
-                (
-                    401,
-                    json!({"ok": false, "error": {"message": "management authorization required"}}),
-                )
-            } else {
+            {
                 let body = if request.body.is_empty() {
                     json!({})
                 } else {

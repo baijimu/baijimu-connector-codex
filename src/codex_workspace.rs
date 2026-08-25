@@ -478,7 +478,7 @@ mod tests {
     #[test]
     fn catalog_bootstrap_preserves_the_existing_home_as_default_workspace() {
         let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
-        let previous = std::env::var_os("BAIJIMU_CONNECTOR_DATA_DIR");
+        let previous = std::env::var_os("BAIJIMU_LOCAL_APP_DATA_DIR");
         let data_dir = std::env::temp_dir().join(format!(
             "codex-workspace-catalog-{}-{}",
             std::process::id(),
@@ -487,7 +487,7 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        std::env::set_var("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        std::env::set_var("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
 
         let catalog = state(Some("personal:installation-backup")).unwrap();
 
@@ -502,9 +502,9 @@ mod tests {
         assert!(catalog_path().is_file());
 
         if let Some(previous) = previous {
-            std::env::set_var("BAIJIMU_CONNECTOR_DATA_DIR", previous);
+            std::env::set_var("BAIJIMU_LOCAL_APP_DATA_DIR", previous);
         } else {
-            std::env::remove_var("BAIJIMU_CONNECTOR_DATA_DIR");
+            std::env::remove_var("BAIJIMU_LOCAL_APP_DATA_DIR");
         }
         fs::remove_dir_all(data_dir).unwrap();
     }

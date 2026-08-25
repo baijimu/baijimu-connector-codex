@@ -22,7 +22,7 @@ mod tests {
     fn identifies_connector_private_environment_without_hiding_normal_user_environment() {
         assert!(is_connector_private_environment(OsStr::new("CODEX_HOME")));
         assert!(is_connector_private_environment(OsStr::new(
-            "BAIJIMU_CONNECTOR_EVENT_TOKEN_FILE"
+            "BAIJIMU_LOCAL_APP_EVENT_TOKEN_FILE"
         )));
         assert!(is_connector_private_environment(OsStr::new(
             "CODEX_CONNECTOR_PORT"

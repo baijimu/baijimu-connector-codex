@@ -105,8 +105,17 @@ pub(crate) fn connector_health(options: &ServerOptions) -> Result<Value, String>
     stream
         .set_write_timeout(Some(CONNECTOR_HEALTH_IO_TIMEOUT))
         .map_err(|error| error.to_string())?;
+    let authorization = fs::read_to_string(management_token_path())
+        .ok()
+        .map(|token| token.trim().to_string())
+        .filter(|token| token.len() >= 32)
+        .map(|token| format!("Authorization: Bearer {token}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n{authorization}Connection: close\r\n\r\n"
+    );
     stream
-        .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .write_all(request.as_bytes())
         .map_err(|error| error.to_string())?;
     let mut response = Vec::new();
     (&mut stream)
@@ -168,13 +177,16 @@ pub(crate) fn wait_for_connector_health(
 }
 
 pub(crate) fn connector_home() -> PathBuf {
-    env::var_os("BAIJIMU_CONNECTOR_DATA_DIR")
+    env::var_os("BAIJIMU_LOCAL_APP_DATA_DIR")
         .or_else(|| env::var_os("CODEX_DESKTOP_HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| home_dir().join(".baijimu-connector-codex"))
 }
 
 pub(crate) fn management_token_path() -> PathBuf {
+    if let Some(path) = env::var_os("BAIJIMU_LOCAL_APP_TOKEN_FILE") {
+        return PathBuf::from(path);
+    }
     connector_home().join(MANAGEMENT_TOKEN_FILE)
 }
 

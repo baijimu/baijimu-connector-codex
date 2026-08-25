@@ -19,7 +19,7 @@ test -x "$BAIJIMU_CLI"
 [[ "$LOCAL_APP_OWNER_WORKSPACE_ID" =~ ^[1-9][0-9]*$ ]]
 
 connector_manifest="$(jq -ce --arg version "$version" '
-  select(.schemaVersion == "2.0")
+  select(.schemaVersion == "3.0.0")
   | select(.version == $version)
   | select(.source.type == "github")
   | select(.source.revision == ("v" + $version))
@@ -33,19 +33,17 @@ connector_manifest="$(jq -ce --arg version "$version" '
 ' "$connector_manifest_path")"
 
 oss_manifest="$(jq -ce --arg version "$version" '
-  select(.schemaVersion == "1.0")
+  select(.schemaVersion == "2.0.0")
   | select(.version == $version)
   | select(.releaseTag == ("v" + $version))
-  | select((.applicationId | length) > 0)
-  | select(.connectorId == $connectorId)
+  | select(.appId == $appId)
   | select((.artifacts | length) == 3)
   | select(all(.artifacts[];
       (.source | startswith("https://download.baijimu.com/"))
       and (.checksum | test("^sha256:[0-9a-f]{64}$"))))
-' --arg connectorId "$(printf '%s' "$connector_manifest" | jq -r .id)" "$oss_manifest_path")"
+' --arg appId "$(printf '%s' "$connector_manifest" | jq -r .appId)" "$oss_manifest_path")"
 
-app_id="$(printf '%s' "$oss_manifest" | jq -er .applicationId)"
-connector_id="$(printf '%s' "$connector_manifest" | jq -er .id)"
+app_id="$(printf '%s' "$connector_manifest" | jq -er .appId)"
 source_repo="$(printf '%s' "$connector_manifest" | jq -er .source.repo)"
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/local-app-market.XXXXXX")"
@@ -79,9 +77,8 @@ auth_file="$work_dir/baijimu-auth.json"
 BAIJIMU_AUTH_FILE="$auth_file" "$BAIJIMU_CLI" auth login   --token "$LOCAL_APP_MARKET_PUBLISH_TOKEN"   --workspace-id "$LOCAL_APP_OWNER_WORKSPACE_ID"   --no-browser --json >/dev/null
 
 app_json="$(BAIJIMU_AUTH_FILE="$auth_file" "$BAIJIMU_CLI" local-app get "$app_id" --json)"
-printf '%s' "$app_json" | jq -e   --arg appId "$app_id"   --arg connectorId "$connector_id"   --argjson ownerWorkspaceId "$LOCAL_APP_OWNER_WORKSPACE_ID" '
-  (.data // .).id == $appId
-  and (.data // .).connectorId == $connectorId
+printf '%s' "$app_json" | jq -e   --arg appId "$app_id"   --argjson ownerWorkspaceId "$LOCAL_APP_OWNER_WORKSPACE_ID" '
+  (.data // .).appId == $appId
   and (.data // .).ownerWorkspaceId == $ownerWorkspaceId' >/dev/null
 
 existing_version="$(printf '%s' "$app_json" | jq -c --arg version "$version"   'first((.data // .).versions[]? | select(.version == $version)) // empty')"
@@ -120,4 +117,3 @@ for _ in $(seq 1 20); do
 done
 echo "market publication status did not become visible before timeout" >&2
 exit 1
-

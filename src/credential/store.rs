@@ -77,7 +77,7 @@ pub(super) fn legacy_metadata_path() -> PathBuf {
     legacy_config_dir().join(METADATA_FILE)
 }
 pub(super) fn connector_data_dir() -> PathBuf {
-    std::env::var_os("BAIJIMU_CONNECTOR_DATA_DIR")
+    std::env::var_os("BAIJIMU_LOCAL_APP_DATA_DIR")
         .or_else(|| std::env::var_os("CODEX_DESKTOP_HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| home_dir().join(".baijimu-connector-codex"))

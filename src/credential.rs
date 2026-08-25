@@ -1742,7 +1742,7 @@ mod legacy_profile_home_tests {
         let data_dir = root.join("connector-data");
         fs::create_dir_all(config_home.join("baijimu")).unwrap();
         let _config = EnvironmentRestore::set("BAIJIMU_CONFIG_HOME", &config_home);
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let _data = EnvironmentRestore::set("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
         let mut legacy = vec![0xef, 0xbb, 0xbf];
         legacy.extend(serde_json::to_vec_pretty(&json!({"version":1,"profiles":[{"workspaceId":12,"workspaceName":"测试工作区","model":"legacy-managed-model","activatedAtEpochSeconds":56}],"activeWorkspaceId":12})).unwrap());
         fs::write(legacy_metadata_path(), legacy).unwrap();
@@ -1879,7 +1879,7 @@ mod legacy_profile_home_tests {
         let _home = EnvironmentRestore::set("HOME", &user_home);
         let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
         let _codex = EnvironmentRestore::unset("CODEX_HOME");
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let _data = EnvironmentRestore::set("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
         let mut first = test_workspace_profile(&data_dir, 642);
         first.codex_home = user_home.join(".codex").display().to_string();
         let metadata = CredentialMetadata {
@@ -1928,7 +1928,7 @@ mod legacy_profile_home_tests {
         let _home = EnvironmentRestore::set("HOME", &user_home);
         let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
         let _codex = EnvironmentRestore::unset("CODEX_HOME");
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let _data = EnvironmentRestore::set("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
         let profile_id = "prod:user-25:client-device-a:workspace-1390";
         let profile = CredentialProfile {
             profile_id: profile_id.to_string(),
@@ -1996,7 +1996,7 @@ mod legacy_profile_home_tests {
         let _home = EnvironmentRestore::set("HOME", &user_home);
         let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
         let _codex = EnvironmentRestore::unset("CODEX_HOME");
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let _data = EnvironmentRestore::set("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
         let short_home = profile_home_for_id(profile_id);
         fs::create_dir_all(&short_home).unwrap();
         fs::write(short_home.join("state_5.sqlite"), b"recovered").unwrap();
@@ -2049,7 +2049,7 @@ mod legacy_profile_home_tests {
         let _home = EnvironmentRestore::set("HOME", &user_home);
         let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
         let _codex = EnvironmentRestore::unset("CODEX_HOME");
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let _data = EnvironmentRestore::set("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
         let mut profile = test_workspace_profile(&data_dir, 642);
         profile.codex_home = profile_home_for_id(&profile.profile_id)
             .display()
@@ -2112,7 +2112,7 @@ mod legacy_profile_home_tests {
         let _home = EnvironmentRestore::set("HOME", &user_home);
         let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
         let _codex = EnvironmentRestore::unset("CODEX_HOME");
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let _data = EnvironmentRestore::set("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
         let mut bound = test_workspace_profile(&data_dir, 642);
         bound.codex_home = user_home.join(".codex").display().to_string();
         let isolated = test_workspace_profile(&data_dir, 1390);
@@ -2156,7 +2156,7 @@ mod legacy_profile_home_tests {
         let _home = EnvironmentRestore::set("HOME", &user_home);
         let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
         let _codex = EnvironmentRestore::unset("CODEX_HOME");
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let _data = EnvironmentRestore::set("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
         let mut profile = test_workspace_profile(&data_dir, 1390);
         profile.codex_home = legacy_home.display().to_string();
         let migrated_home = profile_home_for_id(&profile.profile_id);
@@ -2207,7 +2207,7 @@ mod legacy_profile_home_tests {
         let _home = EnvironmentRestore::set("HOME", &user_home);
         let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
         let _codex = EnvironmentRestore::set("CODEX_HOME", &managed_home);
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let _data = EnvironmentRestore::set("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
         let profile = CredentialProfile {
             profile_id: "prod:user-25:client-device-a:workspace-1203".to_string(),
             environment: "prod".to_string(),
@@ -2267,7 +2267,7 @@ mod legacy_profile_home_tests {
         let data_dir = root.join("connector-data");
         fs::create_dir_all(&personal_home).unwrap();
         let _codex = EnvironmentRestore::set("CODEX_HOME", &personal_home);
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let _data = EnvironmentRestore::set("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
         let _config = EnvironmentRestore::unset("BAIJIMU_CONFIG_HOME");
         let profile = test_workspace_profile(&data_dir, 1203);
         fs::create_dir_all(&data_dir).unwrap();
@@ -2317,7 +2317,7 @@ mod legacy_profile_home_tests {
         let data_dir = root.join("connector-data");
         fs::create_dir_all(&original_home).unwrap();
         let _codex = EnvironmentRestore::set("CODEX_HOME", &original_home);
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let _data = EnvironmentRestore::set("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
         let profile = test_workspace_profile(&data_dir, 1203);
         save_metadata(&CredentialMetadata {
             profiles: vec![profile.clone()],
@@ -2379,7 +2379,7 @@ mod legacy_profile_home_tests {
         let data_dir = root.join("connector-data");
         fs::create_dir_all(&personal_home).unwrap();
         let _codex = EnvironmentRestore::set("CODEX_HOME", &personal_home);
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let _data = EnvironmentRestore::set("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
 
         let personal_auth = br#"{"auth_mode":"chatgpt","tokens":{"access_token":"personal-token","account_id":"account-1"}}"#;
         let personal_config = b"model = \"personal-model\"\n";
@@ -2424,7 +2424,7 @@ mod legacy_profile_home_tests {
         let data_dir = root.join("connector-data");
         fs::create_dir_all(&personal_home).unwrap();
         let _codex = EnvironmentRestore::set("CODEX_HOME", &personal_home);
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let _data = EnvironmentRestore::set("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
 
         let profile = test_workspace_profile(&data_dir, 642);
         write_workspace_auth(
@@ -2466,7 +2466,7 @@ mod legacy_profile_home_tests {
         let _home = EnvironmentRestore::set("HOME", &user_home);
         let _profile = EnvironmentRestore::set("USERPROFILE", &user_home);
         let _codex = EnvironmentRestore::unset("CODEX_HOME");
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let _data = EnvironmentRestore::set("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
         let default_home = user_home.join(".codex");
 
         write_workspace_auth(&default_home.join("auth.json"), "workspace-token").unwrap();
@@ -2593,7 +2593,7 @@ mod legacy_profile_home_tests {
             now_epoch_seconds()
         ));
         let data_dir = root.join("connector-data");
-        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let _data = EnvironmentRestore::set("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
         let profile = test_workspace_profile(&data_dir, 642);
         let home = PathBuf::from(&profile.codex_home);
         fs::create_dir_all(&home).unwrap();
@@ -2701,7 +2701,7 @@ mod shared_home_tests {
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
             ("USERPROFILE", &user_home),
-            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
         ]);
         let shared = user_home.join(".codex");
         fs::create_dir_all(&shared).unwrap();
@@ -2815,7 +2815,7 @@ mod shared_home_tests {
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
             ("USERPROFILE", &user_home),
-            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
         ]);
         let mut metadata = CredentialMetadata {
             version: 8,
@@ -2865,7 +2865,7 @@ mod shared_home_tests {
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
             ("USERPROFILE", &user_home),
-            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
         ]);
         let shared = user_home.join(".codex");
         fs::create_dir_all(shared.join("sessions")).unwrap();
@@ -2904,7 +2904,7 @@ mod shared_home_tests {
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
             ("USERPROFILE", &user_home),
-            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
         ]);
         let shared = user_home.join(".codex");
         fs::create_dir_all(&shared).unwrap();
@@ -2966,7 +2966,7 @@ mod shared_home_tests {
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
             ("USERPROFILE", &user_home),
-            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
         ]);
         let shared = user_home.join(".codex");
         fs::create_dir_all(shared.join("sessions")).unwrap();
@@ -3058,7 +3058,7 @@ mod shared_home_tests {
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
             ("USERPROFILE", &user_home),
-            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
         ]);
         let shared = user_home.join(".codex");
         fs::create_dir_all(&shared).unwrap();
@@ -3091,7 +3091,7 @@ mod shared_home_tests {
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
             ("USERPROFILE", &user_home),
-            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
         ]);
         let shared = user_home.join(".codex");
         fs::create_dir_all(&shared).unwrap();
@@ -3137,7 +3137,7 @@ mod shared_home_tests {
             ("HOME", &user_home),
             ("USERPROFILE", &user_home),
             ("CODEX_HOME", &selected_home),
-            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
         ]);
         fs::create_dir_all(&selected_home).unwrap();
         fs::write(
@@ -3197,7 +3197,7 @@ mod shared_home_tests {
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
             ("USERPROFILE", &user_home),
-            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
         ]);
 
         let metadata = load_metadata().unwrap();
@@ -3225,7 +3225,7 @@ mod shared_home_tests {
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
             ("USERPROFILE", &user_home),
-            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
         ]);
         let shared = user_home.join(".codex");
         fs::create_dir_all(shared.join("sessions")).unwrap();
@@ -3292,7 +3292,7 @@ mod shared_home_tests {
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
             ("USERPROFILE", &user_home),
-            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
             ("CODEX_DESKTOP_BAIJIMU_BINARY", &missing_baijimu),
         ]);
         let shared = user_home.join(".codex");
@@ -3349,7 +3349,7 @@ mod shared_home_tests {
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
             ("USERPROFILE", &user_home),
-            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
         ]);
         let shared = user_home.join(".codex");
         fs::create_dir_all(&shared).unwrap();
@@ -3392,7 +3392,7 @@ mod shared_home_tests {
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
             ("USERPROFILE", &user_home),
-            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
         ]);
         let shared = user_home.join(".codex");
         fs::create_dir_all(&shared).unwrap();
@@ -3487,7 +3487,7 @@ mod shared_home_tests {
         let _env = EnvRestore::set(&[
             ("HOME", &user_home),
             ("USERPROFILE", &user_home),
-            ("BAIJIMU_CONNECTOR_DATA_DIR", &data_home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
         ]);
         let shared = user_home.join(".codex");
         fs::create_dir_all(&shared).unwrap();

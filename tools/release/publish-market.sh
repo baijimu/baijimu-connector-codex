@@ -45,6 +45,8 @@ oss_manifest="$(jq -ce --arg version "$version" '
 
 app_id="$(printf '%s' "$connector_manifest" | jq -er .appId)"
 source_repo="$(printf '%s' "$connector_manifest" | jq -er .source.repo)"
+[[ "$source_repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+source_repo_url="https://github.com/$source_repo"
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/local-app-market.XXXXXX")"
 trap 'rm -rf "$work_dir"' EXIT
@@ -70,7 +72,7 @@ market_manifest="$(jq -nc   --argjson connector "$connector_manifest"   --arg ma
   })')"
 capabilities="$(printf '%s' "$connector_manifest" | jq -c '[.remoteCapabilities[]?.name]')"
 publish_body="$work_dir/version.json"
-jq -n   --arg version "$version"   --arg source "${sources[macos]}"   --arg repo "$source_repo"   --arg revision "v$version"   --arg checksum "${checksums[macos]}"   --argjson capabilities "$capabilities"   --argjson manifest "$market_manifest"   '{version:$version,sourceType:"https",source:$source,repo:$repo,revision:$revision,
+jq -n   --arg version "$version"   --arg source "${sources[macos]}"   --arg repo "$source_repo_url"   --arg revision "v$version"   --arg checksum "${checksums[macos]}"   --argjson capabilities "$capabilities"   --argjson manifest "$market_manifest"   '{version:$version,sourceType:"https",source:$source,repo:$repo,revision:$revision,
     checksum:$checksum,capabilities:$capabilities,manifest:$manifest}' > "$publish_body"
 
 auth_file="$work_dir/baijimu-auth.json"
@@ -83,7 +85,7 @@ printf '%s' "$app_json" | jq -e   --arg appId "$app_id"   --argjson ownerWorkspa
 
 existing_version="$(printf '%s' "$app_json" | jq -c --arg version "$version"   'first((.data // .).versions[]? | select(.version == $version)) // empty')"
 if [ -n "$existing_version" ]; then
-  printf '%s' "$existing_version" | jq -e     --arg source "${sources[macos]}"     --arg repo "$source_repo"     --arg revision "v$version"     --arg checksum "${checksums[macos]}"     --argjson expected_manifest "$market_manifest" '
+  printf '%s' "$existing_version" | jq -e     --arg source "${sources[macos]}"     --arg repo "$source_repo_url"     --arg revision "v$version"     --arg checksum "${checksums[macos]}"     --argjson expected_manifest "$market_manifest" '
       .source == $source and .repo == $repo and .revision == $revision
       and .checksum == $checksum and .manifest == $expected_manifest' >/dev/null
 else

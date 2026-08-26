@@ -8,16 +8,21 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (path) => readFile(join(root, path), "utf8");
 
 test("desktop manager exposes only its required read-only status method", async () => {
-  const [manifest, packageManifest] = await Promise.all([
+  const [manifest, packageManifest, releaseWorkflow] = await Promise.all([
     read("connector.json").then(JSON.parse),
     read("package.json").then(JSON.parse),
+    read(".github/workflows/release.yml"),
   ]);
   assert.equal(manifest.schemaVersion, "3.0.0");
-  assert.equal(manifest.appId, "08098e26-a08f-11f1-8622-00163e3536cb");
+  assert.equal(manifest.appId, "codex");
   assert.equal(manifest.name, "Codex 桌面管理器");
   assert.equal(manifest.version, packageManifest.version);
   assert.equal(manifest.source.revision, `v${packageManifest.version}`);
   assert.equal(manifest.source.repo, "baijimu/baijimu-connector-codex");
+  assert.match(releaseWorkflow, /manifest\.appId !== "codex"/);
+  assert.match(releaseWorkflow, /appId:"codex"/);
+  assert.match(releaseWorkflow, /local-app-market\/apps\/codex\?platform=/);
+  assert.doesNotMatch(releaseWorkflow, /08098e26-a08f-11f1-8622-00163e3536cb/);
   assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18110/readyz");
   assert.equal(manifest.transport.baseUrl, "http://127.0.0.1:18110");
   for (const field of ["remoteCapabilities", "events"]) {

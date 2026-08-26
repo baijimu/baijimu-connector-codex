@@ -1,6 +1,6 @@
 # 百积木 Codex 桌面管理器
 
-服务端分配的 appId `08098e26-a08f-11f1-8622-00163e3536cb` 对应 Codex 桌面管理器，负责：
+权威市场 appId `codex` 对应 Codex 桌面管理器，负责：
 
 - 安装和验证 ChatGPT/Codex 官方桌面应用；
 - 初始化已授权工作区的桌面专用 LLM credential，并保存为所有 Codex 工作区可选的认证通道；
@@ -17,7 +17,7 @@
 
 ## 状态所有权
 
-Bridge Agent 按 appId `08098e26-a08f-11f1-8622-00163e3536cb` 注入迁移后的 `BAIJIMU_LOCAL_APP_DATA_DIR`。认证通道凭证、ChatGPT 授权快照和新增工作区目录保存在该本地应用私有目录；现有 `~/.codex` 原样登记为默认工作区。客户端启动和状态刷新只识别现场，不改写任何工作区的 `auth.json` 或 `config.toml`。只有用户创建工作区或明确切换认证通道时，本应用才管理目标工作区这两个文件中的认证内容；其余文件始终不动。
+Bridge Agent 按 appId `codex` 注入迁移后的 `BAIJIMU_LOCAL_APP_DATA_DIR`。认证通道凭证、ChatGPT 授权快照和新增工作区目录保存在该本地应用私有目录；现有 `~/.codex` 原样登记为默认工作区。客户端启动和状态刷新只识别现场，不改写任何工作区的 `auth.json` 或 `config.toml`。只有用户创建工作区或明确切换认证通道时，本应用才管理目标工作区这两个文件中的认证内容；其余文件始终不动。
 
 ## 本地运行
 

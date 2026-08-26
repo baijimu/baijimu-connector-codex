@@ -308,7 +308,7 @@ jobs:
           const [packageDir, expectedVersion] = process.argv.slice(2);
           const manifest = JSON.parse(fs.readFileSync(path.join(packageDir, "connector.json"), "utf8"));
           if (manifest.version !== expectedVersion) throw new Error("connector package version mismatch");
-          if (manifest.appId !== "08098e26-a08f-11f1-8622-00163e3536cb" || manifest.name !== "Codex 桌面管理器") throw new Error("desktop connector identity mismatch");
+          if (manifest.appId !== "codex" || manifest.name !== "Codex 桌面管理器") throw new Error("desktop connector identity mismatch");
           if (manifest.source?.type !== "github" || manifest.source?.repo !== process.env.GITHUB_REPOSITORY || manifest.source?.revision !== `v${expectedVersion}`) throw new Error("connector source identity mismatch");
           const methods = manifest.methods?.map(({ name, path, httpMethod }) => ({ name, path, httpMethod }));
           if (manifest.schemaVersion !== "3.0.0" || manifest.runtime?.type !== "process" || manifest.runtime?.processOwnership !== "host" || manifest.runtime?.healthCheck?.url !== "http://127.0.0.1:18110/readyz" || manifest.transport?.type !== "http" || JSON.stringify(methods) !== JSON.stringify([{ name: "status", path: "/healthz", httpMethod: "GET" }]) || manifest.remoteCapabilities !== undefined || manifest.events !== undefined || manifest.ui?.type !== "embedded") throw new Error("desktop manager package contract is invalid");
@@ -468,7 +468,7 @@ jobs:
           windows_name="baijimu-codex-desktop-${VERSION}-windows-x64.zip"
           linux_name="baijimu-codex-desktop-${VERSION}-linux-x64.zip"
           artifacts="[$(upload_one macos universal "$macos_name"),$(upload_one windows x86_64 "$windows_name"),$(upload_one linux x86_64 "$linux_name")]"
-          jq -n --arg version "$VERSION" --arg tag "$RELEASE_TAG" --argjson artifacts "$artifacts" '{schemaVersion:"2.0.0",appId:"08098e26-a08f-11f1-8622-00163e3536cb",releaseTag:$tag,version:$version,artifacts:$artifacts}' > "$manifest"
+          jq -n --arg version "$VERSION" --arg tag "$RELEASE_TAG" --argjson artifacts "$artifacts" '{schemaVersion:"2.0.0",appId:"codex",releaseTag:$tag,version:$version,artifacts:$artifacts}' > "$manifest"
           manifest_url="$public_base/$prefix/manifest.json"
           existing_manifest="$RUNNER_TEMP/existing-oss-manifest.json"
           if curl -fsSL --retry 3 "$manifest_url" -o "$existing_manifest" 2>/dev/null; then
@@ -585,7 +585,7 @@ jobs:
             PUBLISHED)
               for target in 'macos&arch=aarch64' 'windows&arch=x86_64' 'linux&arch=x86_64'; do
                 curl -fsS --retry 5 --retry-all-errors --retry-delay 3 \
-                  "https://api.baijimu.com/lowcode3/api/local-app-market/apps/08098e26-a08f-11f1-8622-00163e3536cb?platform=${target}&hostVersion=0.6.0&hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1,connector.presentation.icon.v1" \
+                  "https://api.baijimu.com/lowcode3/api/local-app-market/apps/codex?platform=${target}&hostVersion=0.6.0&hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1,connector.presentation.icon.v1" \
                   | jq -e --arg version "$VERSION" '
                     (.data // .).latestVersion.version == $version and
                     (.data // .).latestVersion.compatibility.compatible == true and
@@ -648,7 +648,7 @@ jobs:
           oss_manifest="$release_dir/baijimu-codex-desktop-${VERSION}-oss-manifest.json"
           jq -e --arg version "$VERSION" '
             .schemaVersion == "2.0.0" and
-            .appId == "08098e26-a08f-11f1-8622-00163e3536cb" and
+            .appId == "codex" and
             .releaseTag == ("v" + $version) and
             .version == $version and
             (.artifacts | length) == 3' "$oss_manifest" >/dev/null

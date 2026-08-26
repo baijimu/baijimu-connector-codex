@@ -2,11 +2,10 @@
   "schemaVersion": "3.0.0",
   "appId": "codex",
   "name": "Codex 桌面管理器",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "安装 Codex 桌面应用，管理多个隔离 Codex 工作区，并让每个工作区使用完整认证通道目录。",
-  "releaseNotes": "恢复权威市场 appId codex，使现有 1.x 安装可以原地升级，并继续使用 Connector 3.0.0 与 Bridge Agent 0.6.0 的受管进程契约。",
   "publisher": {"name": "Baijimu", "homepage": "https://baijimu.com"},
-  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v2.0.1"},
+  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v2.0.2"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",

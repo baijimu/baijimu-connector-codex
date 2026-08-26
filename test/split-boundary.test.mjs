@@ -19,6 +19,17 @@ test("desktop manager exposes only its required read-only status method", async 
   assert.equal(manifest.version, packageManifest.version);
   assert.equal(manifest.source.revision, `v${packageManifest.version}`);
   assert.equal(manifest.source.repo, "baijimu/baijimu-connector-codex");
+  const bridgeAgent060ManifestKeys = new Set([
+    "schemaVersion", "appId", "name", "version", "description", "publisher", "source",
+    "runtime", "management", "setup", "hostRequirements", "managedToolDependencies", "icon",
+    "ui", "configSchema", "upgradeReview", "database", "remoteCapabilities", "permissions",
+    "legacyAutostartLabels", "transport", "methods", "events", "hooks",
+  ]);
+  assert.deepEqual(
+    Object.keys(manifest).filter((key) => !bridgeAgent060ManifestKeys.has(key)),
+    [],
+    "connector.json must remain parseable by the declared minimum Bridge Agent 0.6.0 host",
+  );
   assert.match(releaseWorkflow, /manifest\.appId !== "codex"/);
   assert.match(releaseWorkflow, /appId:"codex"/);
   assert.match(releaseWorkflow, /local-app-market\/apps\/codex\?platform=/);

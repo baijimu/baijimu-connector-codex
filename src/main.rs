@@ -299,7 +299,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
             .ok()
             .as_deref()
             == Some("1");
-    if !test_shutdown
+    if requires_management_authorization(&request.method, &path, test_shutdown)
         && !management_authorized(request.authorization.as_deref(), &state.management_token)
     {
         return write_json(
@@ -354,6 +354,10 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
         _ => (404, json!({"ok": false, "error": {"message": "not found"}})),
     };
     write_json(&mut stream, response.0, &response.1)
+}
+
+fn requires_management_authorization(method: &str, path: &str, test_shutdown: bool) -> bool {
+    !test_shutdown && !(method == "GET" && path == "/readyz")
 }
 
 fn startup_not_ready_response(startup: &StartupReadiness) -> Option<Value> {
@@ -894,6 +898,27 @@ fn parse_content_length(headers: &[u8]) -> Option<usize> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod http_authorization_tests {
+    use super::requires_management_authorization;
+
+    #[test]
+    fn bridge_agent_readiness_probe_is_public() {
+        assert!(!requires_management_authorization("GET", "/readyz", false));
+    }
+
+    #[test]
+    fn application_and_management_routes_remain_protected() {
+        assert!(requires_management_authorization("GET", "/healthz", false));
+        assert!(requires_management_authorization(
+            "POST",
+            "/management/v1/setup/retry",
+            false,
+        ));
+        assert!(requires_management_authorization("POST", "/readyz", false));
+    }
 }
 
 fn print_help() {

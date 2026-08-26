@@ -1,6 +1,6 @@
 [package]
 name = "baijimu-codex-desktop"
-version = "2.0.2"
+version = "2.0.3"
 edition = "2021"
 license = "MIT"
 description = "负责 Codex 桌面安装与工作区切换的百积木本地应用。"

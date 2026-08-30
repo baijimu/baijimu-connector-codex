@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use baijimu_cmodel_core::CModelResponse;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -34,54 +35,8 @@ struct AuthStatusContract {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PlatformEnvelope<T> {
-    error_code: String,
-    value: Option<String>,
-    data: T,
-}
-
-impl<T> PlatformEnvelope<T> {
-    fn into_data(self, operation: &str) -> Result<T> {
-        if self.error_code != "0" {
-            bail!(
-                "baijimu CLI {operation} 失败（{}）：{}",
-                self.error_code,
-                self.value.as_deref().unwrap_or("平台操作失败")
-            );
-        }
-        Ok(self.data)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct WorkspaceListContract {
     current_workspace_id: Option<u64>,
-    data: WorkspaceListDataContract,
-    error_code: String,
-    value: Option<String>,
-}
-
-impl WorkspaceListContract {
-    fn into_page(self) -> Result<WorkspacePage> {
-        if self.error_code != "0" {
-            bail!(
-                "baijimu CLI workspace list 失败（{}）：{}",
-                self.error_code,
-                self.value.as_deref().unwrap_or("平台操作失败")
-            );
-        }
-        Ok(WorkspacePage {
-            current_workspace_id: self.current_workspace_id,
-            items: self.data.list,
-            total_pages: self.data.total_pages,
-        })
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkspaceListDataContract {
     list: Vec<WorkspaceContract>,
     total_pages: u64,
 }
@@ -132,7 +87,7 @@ pub fn list_workspaces() -> Result<Vec<Workspace>> {
     loop {
         let page_text = page.to_string();
         let page_size_text = WORKSPACE_PAGE_SIZE.to_string();
-        let contract: WorkspaceListContract = run_json(
+        let contract: WorkspaceListContract = run_cmodel_json(
             "workspace list",
             &[
                 "workspace",
@@ -144,7 +99,11 @@ pub fn list_workspaces() -> Result<Vec<Workspace>> {
                 &page_size_text,
             ],
         )?;
-        let result = contract.into_page()?;
+        let result = WorkspacePage {
+            current_workspace_id: contract.current_workspace_id,
+            items: contract.list,
+            total_pages: contract.total_pages,
+        };
         match expected_current_workspace {
             None => expected_current_workspace = result.current_workspace_id,
             Some(expected) if result.current_workspace_id != Some(expected) => {
@@ -177,11 +136,10 @@ pub fn list_workspaces() -> Result<Vec<Workspace>> {
 pub fn get_workspace(workspace_id: u64) -> Result<Workspace> {
     require_workspace_id(workspace_id)?;
     let workspace_text = workspace_id.to_string();
-    let envelope: PlatformEnvelope<WorkspaceContract> = run_json(
+    let workspace: WorkspaceContract = run_cmodel_json(
         "workspace get",
         &["workspace", "get", &workspace_text, "--json"],
     )?;
-    let workspace = envelope.into_data("workspace get")?;
     if workspace.id != workspace_id {
         bail!(
             "baijimu CLI workspace get 返回的工作区不匹配：expected={workspace_id}, actual={}",
@@ -257,6 +215,23 @@ where
         .with_context(|| format!("baijimu CLI {operation} 未返回合法 JSON"))
 }
 
+fn run_cmodel_json<T>(operation: &str, args: &[&str]) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    let response: CModelResponse<T> = run_json(operation, args)?;
+    cmodel_data(response, operation)
+}
+
+fn cmodel_data<T>(response: CModelResponse<T>, operation: &str) -> Result<T> {
+    if !response.is_success() {
+        bail!("baijimu CLI {operation} 失败（{}）", response.error_code());
+    }
+    response
+        .into_data()
+        .with_context(|| format!("baijimu CLI {operation} 成功响应缺少 data"))
+}
+
 fn required_text(value: String, field: &str) -> Result<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -322,17 +297,18 @@ mod tests {
 
     #[test]
     fn workspace_contract_rejects_failed_envelopes() {
-        let envelope: PlatformEnvelope<WorkspaceContract> = crate::json_compat::from_slice(
+        let envelope: CModelResponse<WorkspaceContract> = crate::json_compat::from_slice(
             r#"{
-                "errorCode": "401",
-                "value": "PAT 无效或已过期",
-                "data": {"id": 642, "name": "不会使用"}
+                "errorCode": "BAIJIMU_UNAUTHORIZED",
+                "value": "这个旧字段必须被忽略",
+                "data": null
             }"#
             .as_bytes(),
         )
         .unwrap();
-        let error = envelope.into_data("workspace get").unwrap_err();
-        assert!(error.to_string().contains("PAT 无效或已过期"));
+        let error = cmodel_data(envelope, "workspace get").unwrap_err();
+        assert!(error.to_string().contains("BAIJIMU_UNAUTHORIZED"));
+        assert!(!error.to_string().contains("这个旧字段必须被忽略"));
     }
 
     #[test]

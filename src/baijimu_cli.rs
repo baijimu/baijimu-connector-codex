@@ -135,11 +135,9 @@ pub fn list_workspaces() -> Result<Vec<Workspace>> {
 
 pub fn get_workspace(workspace_id: u64) -> Result<Workspace> {
     require_workspace_id(workspace_id)?;
-    let workspace_text = workspace_id.to_string();
-    let workspace: WorkspaceContract = run_cmodel_json(
-        "workspace get",
-        &["workspace", "get", &workspace_text, "--json"],
-    )?;
+    let args = workspace_get_args(workspace_id);
+    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let workspace: WorkspaceContract = run_cmodel_json("workspace get", &args)?;
     if workspace.id != workspace_id {
         bail!(
             "baijimu CLI workspace get 返回的工作区不匹配：expected={workspace_id}, actual={}",
@@ -247,6 +245,16 @@ fn require_workspace_id(workspace_id: u64) -> Result<()> {
     Ok(())
 }
 
+fn workspace_get_args(workspace_id: u64) -> Vec<String> {
+    vec![
+        "workspace".to_string(),
+        "get".to_string(),
+        "--workspace-id".to_string(),
+        workspace_id.to_string(),
+        "--json".to_string(),
+    ]
+}
+
 fn positive_unique_ids(mut ids: Vec<u64>, field: &str) -> Result<Vec<u64>> {
     if ids.contains(&0) {
         bail!("baijimu CLI 响应中的 {field} 包含非法 ID");
@@ -309,6 +317,14 @@ mod tests {
         let error = cmodel_data(envelope, "workspace get").unwrap_err();
         assert!(error.to_string().contains("BAIJIMU_UNAUTHORIZED"));
         assert!(!error.to_string().contains("这个旧字段必须被忽略"));
+    }
+
+    #[test]
+    fn workspace_get_uses_the_current_cli_workspace_option_contract() {
+        assert_eq!(
+            workspace_get_args(1272),
+            vec!["workspace", "get", "--workspace-id", "1272", "--json"]
+        );
     }
 
     #[test]

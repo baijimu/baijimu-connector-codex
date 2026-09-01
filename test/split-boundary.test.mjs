@@ -19,6 +19,16 @@ test("desktop manager exposes only its required read-only status method", async 
   assert.equal(manifest.version, packageManifest.version);
   assert.equal(manifest.source.revision, `v${packageManifest.version}`);
   assert.equal(manifest.source.repo, "baijimu/baijimu-connector-codex");
+  assert.deepEqual(
+    manifest.managedToolDependencies.find(({ id }) => id === "baijimu-cli"),
+    {
+      id: "baijimu-cli",
+      minimumVersion: "0.29.0",
+      requiredFor: ["install", "start"],
+      executablePathEnv: "CODEX_DESKTOP_BAIJIMU_BINARY",
+    },
+    "workspace CLI calls require the --workspace-id contract released in baijimu CLI 0.29.0",
+  );
   const bridgeAgent060ManifestKeys = new Set([
     "schemaVersion", "appId", "name", "version", "description", "publisher", "source",
     "runtime", "management", "setup", "hostRequirements", "managedToolDependencies", "icon",

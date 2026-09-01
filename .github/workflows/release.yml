@@ -48,6 +48,20 @@ jobs:
           fetch-tags: true
           ref: ${{ github.event_name == 'push' && github.ref_name || inputs.release_ref }}
 
+      - name: Configure private Gitee dependencies
+        shell: bash
+        env:
+          GITEE_READ_USER: ${{ secrets.GITEE_READ_USER }}
+          GITEE_READ_TOKEN: ${{ secrets.GITEE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GITEE_READ_USER"
+          test -n "$GITEE_READ_TOKEN"
+          umask 077
+          printf 'machine gitee.com\nlogin %s\npassword %s\n' \
+            "$GITEE_READ_USER" "$GITEE_READ_TOKEN" > "$HOME/.netrc"
+          echo 'CARGO_NET_GIT_FETCH_WITH_CLI=true' >> "$GITHUB_ENV"
+
       - name: Validate immutable release identity
         id: release
         shell: bash
@@ -139,6 +153,20 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.validate.outputs.sha }}
+
+      - name: Configure private Gitee dependencies
+        shell: bash
+        env:
+          GITEE_READ_USER: ${{ secrets.GITEE_READ_USER }}
+          GITEE_READ_TOKEN: ${{ secrets.GITEE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GITEE_READ_USER"
+          test -n "$GITEE_READ_TOKEN"
+          umask 077
+          printf 'machine gitee.com\nlogin %s\npassword %s\n' \
+            "$GITEE_READ_USER" "$GITEE_READ_TOKEN" > "$HOME/.netrc"
+          echo 'CARGO_NET_GIT_FETCH_WITH_CLI=true' >> "$GITHUB_ENV"
 
       - name: Set up Rust
         shell: bash

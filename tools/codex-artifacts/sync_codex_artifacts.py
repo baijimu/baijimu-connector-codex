@@ -32,12 +32,26 @@ CLI_ASSETS = (
         "platform": "macos",
         "arch": "aarch64",
         "install_layout": "legacy_single_binary_archive",
+        "deprecated": True,
     },
     {
         "name": "codex-x86_64-apple-darwin.tar.gz",
         "platform": "macos",
         "arch": "x86_64",
         "install_layout": "legacy_single_binary_archive",
+        "deprecated": True,
+    },
+    {
+        "name": "codex-package-aarch64-apple-darwin.tar.gz",
+        "platform": "macos",
+        "arch": "aarch64",
+        "install_layout": "codex_package_v1",
+    },
+    {
+        "name": "codex-package-x86_64-apple-darwin.tar.gz",
+        "platform": "macos",
+        "arch": "x86_64",
+        "install_layout": "codex_package_v1",
     },
     {
         "name": "codex-aarch64-pc-windows-msvc.exe.zip",
@@ -432,23 +446,28 @@ def validate_manifest(manifest: dict[str, Any], kind: str = "full") -> None:
         package_assets = [
             asset
             for asset in assets
-            if asset.get("platform") == "windows" and asset.get("install_layout") == "codex_package_v1"
+            if asset.get("install_layout") == "codex_package_v1"
         ]
-        if {(asset.get("arch"), asset.get("deprecated")) for asset in package_assets} != {
-            ("aarch64", False),
-            ("x86_64", False),
+        if {
+            (asset.get("platform"), asset.get("arch"), asset.get("deprecated"))
+            for asset in package_assets
+        } != {
+            ("macos", "aarch64", False),
+            ("macos", "x86_64", False),
+            ("windows", "aarch64", False),
+            ("windows", "x86_64", False),
         }:
-            raise RuntimeError("manifest does not contain the canonical Windows Codex packages")
-        legacy_windows_assets = [
+            raise RuntimeError("manifest does not contain the canonical Codex packages")
+        legacy_cli_assets = [
             asset
             for asset in assets
-            if asset.get("platform") == "windows"
-            and asset.get("install_layout") == "legacy_flat_windows_archive"
+            if asset.get("install_layout")
+            in ("legacy_single_binary_archive", "legacy_flat_windows_archive")
         ]
-        if len(legacy_windows_assets) != 2 or not all(
-            asset.get("deprecated") is True for asset in legacy_windows_assets
+        if len(legacy_cli_assets) != 4 or not all(
+            asset.get("deprecated") is True for asset in legacy_cli_assets
         ):
-            raise RuntimeError("legacy Windows Codex archives must be explicitly deprecated")
+            raise RuntimeError("legacy Codex archives must be explicitly deprecated")
     for asset in assets:
         if not asset.get("mirror_url", "").startswith("https://"):
             raise RuntimeError(f"asset has invalid mirror URL: {asset.get('name')}")

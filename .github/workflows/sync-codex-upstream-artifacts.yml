@@ -168,7 +168,7 @@ jobs:
                 .schema_version == 3 and
                 .manifest_kind == "baijimu.codex.customer-install-artifacts" and
                 (.snapshot_id | length) == 64 and
-                (.assets | length) == 10 and
+                (.assets | length) == 12 and
                 ([.assets[].name] | sort) == ([
                   "codex-aarch64-apple-darwin.tar.gz",
                   "codex-app-aarch64-apple-darwin.dmg",
@@ -177,11 +177,14 @@ jobs:
                   "codex-app-x86_64-apple-darwin.dmg",
                   "codex-x86_64-apple-darwin.tar.gz",
                   "codex-aarch64-pc-windows-msvc.exe.zip",
+                  "codex-package-aarch64-apple-darwin.tar.gz",
                   "codex-package-aarch64-pc-windows-msvc.tar.gz",
+                  "codex-package-x86_64-apple-darwin.tar.gz",
                   "codex-package-x86_64-pc-windows-msvc.tar.gz",
                   "codex-x86_64-pc-windows-msvc.exe.zip"
                 ] | sort) and
-                ([.assets[] | select(.install_layout == "codex_package_v1" and .platform == "windows")] | length) == 2 and
+                ([.assets[] | select(.install_layout == "codex_package_v1" and .deprecated == false)] | length) == 4 and
+                ([.assets[] | select(((.install_layout // "") | startswith("legacy_")) and .deprecated == true)] | length) == 4 and
                 all(.assets[];
                   (.mirror_url | startswith("https://download.baijimu.com/codex-artifacts/assets/sha256/")) and
                   (.sha256 | length) == 64 and
@@ -193,7 +196,9 @@ jobs:
             | jq -e '
                 .schema_version == 4 and
                 .manifest_kind == "baijimu.codex.customer-install-artifacts" and
-                (.assets | length) == 10 and
+                (.assets | length) == 12 and
+                ([.assets[] | select(.install_layout == "codex_package_v1" and .deprecated == false)] | length) == 4 and
+                ([.assets[] | select(((.install_layout // "") | startswith("legacy_")) and .deprecated == true)] | length) == 4 and
                 all(.assets[] | select(.component == "codex_desktop_app");
                   (.host_requirements.minimum_os_version | test("^[0-9]+(\\.[0-9]+)*$"))
                 ) and

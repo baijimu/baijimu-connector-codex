@@ -334,7 +334,7 @@ impl SetupManager {
             }
             Err(error) => {
                 let classification = classify_setup_failure(&error);
-                let error = compact_error(&error.to_string());
+                let error = setup_error_detail(&error);
                 let completed = SetupStatus {
                     schema_version: SETUP_STATUS_SCHEMA_VERSION,
                     attempt_id: background.attempt_id.clone(),
@@ -753,6 +753,10 @@ fn set_private_file(_path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn setup_error_detail(error: &anyhow::Error) -> String {
+    compact_error(&format!("{error:#}"))
+}
+
 fn compact_error(error: &str) -> String {
     error
         .split_whitespace()
@@ -772,6 +776,18 @@ fn now_epoch_seconds() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn setup_failure_preserves_the_cli_cause_and_error_code() {
+        let error = anyhow::anyhow!("LLM_CREDENTIAL_CREDENTIAL_DENIED: 无权使用该模型凭证")
+            .context("baijimu CLI llm-credential create 失败")
+            .context("baijimu CLI 签发工作区 LLM credential 失败");
+        let detail = super::setup_error_detail(&error);
+        assert!(detail.contains("签发工作区"));
+        assert!(detail.contains("llm-credential create"));
+        assert!(detail.contains("LLM_CREDENTIAL_CREDENTIAL_DENIED"));
+        assert!(detail.contains("无权使用该模型凭证"));
+    }
+
     use super::*;
 
     fn persisted_status(status: &str, connector_version: Option<&str>) -> SetupStatus {

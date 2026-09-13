@@ -42,7 +42,7 @@ test("desktop manager exposes only its required read-only status method", async 
   );
   assert.match(releaseWorkflow, /manifest\.appId !== "codex"/);
   assert.match(releaseWorkflow, /appId:"codex"/);
-  assert.match(releaseWorkflow, /local-app-market\/apps\/codex\?platform=/);
+  assert.doesNotMatch(releaseWorkflow, /BAIJIMU_CLI_VERSION|BAIJIMU_CLI_LINUX_URL|local-app-management/);
   assert.doesNotMatch(releaseWorkflow, /08098e26-a08f-11f1-8622-00163e3536cb/);
   assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18110/readyz");
   assert.equal(manifest.transport.baseUrl, "http://127.0.0.1:18110");

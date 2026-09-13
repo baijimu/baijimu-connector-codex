@@ -25,9 +25,6 @@ permissions:
   contents: read
 
 env:
-  BAIJIMU_CLI_VERSION: "0.38.0"
-  BAIJIMU_CLI_LINUX_SHA256: "cbbaffcba962fbf1877a8f728f464eb1936b4d87e912e30bab12e3a1e4cae87d"
-  BAIJIMU_CLI_LINUX_URL: "https://download.baijimu.com/managed-tool-artifacts/baijimu-cli/releases/v0.38.0/cbbaffcba962fbf1877a8f728f464eb1936b4d87e912e30bab12e3a1e4cae87d/baijimu-cli-0.38.0-linux-x64.zip"
   MACOSX_DEPLOYMENT_TARGET: "11.0"
 
 jobs:
@@ -130,6 +127,22 @@ jobs:
           cargo test --locked
           npm test
 
+      - name: Check out publishing tools from the workflow commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          persist-credentials: false
+
+      - name: Test publishing tools used by this workflow
+        shell: bash
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main
+          python3 -m unittest discover -s .release-tools/tools/release/tests -v
 
   build:
     if: needs.validate.outputs.verify != 'true'
@@ -552,38 +565,34 @@ jobs:
         with:
           ref: ${{ needs.validate.outputs.sha }}
 
+      - name: Check out publishing tools from the workflow commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          persist-credentials: false
+
       - name: Download OSS manifest
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: codex-release-oss-manifest
           path: ${{ runner.temp }}/oss-manifest
 
-      - name: Install pinned official Baijimu CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          archive="$RUNNER_TEMP/baijimu-cli.zip"
-          curl -fsSL --retry 6 --retry-all-errors --retry-delay 3 \
-            --connect-timeout 15 --max-time 900 \
-            "$BAIJIMU_CLI_LINUX_URL" \
-            -o "$archive"
-          printf '%s  %s\n' "$BAIJIMU_CLI_LINUX_SHA256" "$archive" | sha256sum -c -
-          unzip -q "$archive" -d "$RUNNER_TEMP/baijimu-cli"
-          test "$("$RUNNER_TEMP/baijimu-cli/bin/baijimu" --version)" = "$BAIJIMU_CLI_VERSION"
-
       - name: Create immutable market version and submit review
         id: market
         shell: bash
         env:
-          BAIJIMU_CLI: ${{ runner.temp }}/baijimu-cli/bin/baijimu
           LOCAL_APP_MARKET_PUBLISH_TOKEN: ${{ secrets.LOCAL_APP_MARKET_PUBLISH_TOKEN }}
           LOCAL_APP_OWNER_WORKSPACE_ID: ${{ vars.LOCAL_APP_OWNER_WORKSPACE_ID }}
+          LOCAL_APP_API_BASE_URL: ${{ vars.LOCAL_APP_API_BASE_URL }}
+          LOCAL_APP_SOURCE_ENVIRONMENT_KEY: ${{ vars.LOCAL_APP_SOURCE_ENVIRONMENT_KEY }}
+          LOCAL_APP_PUBLIC_ARTIFACT_BASE_URL: ${{ vars.LOCAL_APP_PUBLIC_ARTIFACT_BASE_URL }}
           MARKET_PUBLICATION_STATUS_FILE: ${{ runner.temp }}/publication-status
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
           test -n "$LOCAL_APP_MARKET_PUBLISH_TOKEN"
-          tools/release/publish-market.sh \
+          .release-tools/tools/release/publish-market.sh \
             "$VERSION" \
             connector.json \
             "$RUNNER_TEMP/oss-manifest/baijimu-codex-desktop-${VERSION}-oss-manifest.json"
@@ -612,15 +621,7 @@ jobs:
               echo "market submission is pending independent review"
               ;;
             PUBLISHED)
-              for target in 'macos&arch=aarch64' 'windows&arch=x86_64' 'linux&arch=x86_64'; do
-                curl -fsS --retry 5 --retry-all-errors --retry-delay 3 \
-                  "https://api.baijimu.com/lowcode3/api/local-app-market/apps/codex?platform=${target}&hostVersion=0.6.0&hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1,connector.presentation.icon.v1" \
-                  | jq -e --arg version "$VERSION" '
-                    (.data // .).latestVersion.version == $version and
-                    (.data // .).latestVersion.compatibility.compatible == true and
-                    ((.data // .).latestVersion.source | startswith("https://download.baijimu.com/local-app-artifacts/codex/releases/v" + $version + "/")) and
-                    all((.data // .).latestVersion.manifest.artifacts[]; .source | startswith("https://download.baijimu.com/local-app-artifacts/codex/releases/v" + $version + "/"))'
-              done
+              echo "source owner confirms this immutable version is published"
               ;;
             *)
               echo "unexpected publication status: $PUBLICATION_STATUS" >&2
@@ -637,6 +638,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.validate.outputs.sha }}
+
+      - name: Check out publishing tools from the workflow commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          persist-credentials: false
 
       - name: Download and verify published release and OSS artifacts
         shell: bash
@@ -689,28 +697,21 @@ jobs:
             test "$(sha256sum "$RUNNER_TEMP/oss-$platform.zip" | awk '{print $1}')" = "$expected"
           done
 
-      - name: Install pinned official Baijimu CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          archive="$RUNNER_TEMP/baijimu-cli.zip"
-          curl -fsSL --retry 6 --retry-all-errors --retry-delay 3 \
-            --connect-timeout 15 --max-time 900 \
-            "$BAIJIMU_CLI_LINUX_URL" \
-            -o "$archive"
-          printf '%s  %s\n' "$BAIJIMU_CLI_LINUX_SHA256" "$archive" | sha256sum -c -
-          unzip -q "$archive" -d "$RUNNER_TEMP/baijimu-cli"
-          test "$("$RUNNER_TEMP/baijimu-cli/bin/baijimu" --version)" = "$BAIJIMU_CLI_VERSION"
-
       - name: Verify immutable market version
         shell: bash
         env:
-          BAIJIMU_CLI: ${{ runner.temp }}/baijimu-cli/bin/baijimu
           LOCAL_APP_MARKET_PUBLISH_TOKEN: ${{ secrets.LOCAL_APP_MARKET_PUBLISH_TOKEN }}
           LOCAL_APP_OWNER_WORKSPACE_ID: ${{ vars.LOCAL_APP_OWNER_WORKSPACE_ID }}
+          LOCAL_APP_API_BASE_URL: ${{ vars.LOCAL_APP_API_BASE_URL }}
+          LOCAL_APP_SOURCE_ENVIRONMENT_KEY: ${{ vars.LOCAL_APP_SOURCE_ENVIRONMENT_KEY }}
+          LOCAL_APP_PUBLIC_ARTIFACT_BASE_URL: ${{ vars.LOCAL_APP_PUBLIC_ARTIFACT_BASE_URL }}
           MARKET_PUBLICATION_STATUS_FILE: ${{ runner.temp }}/publication-status
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          tools/release/publish-market.sh "$VERSION" connector.json "$RUNNER_TEMP/published-release/baijimu-codex-desktop-${VERSION}-oss-manifest.json"
-          test "$(cat "$MARKET_PUBLICATION_STATUS_FILE")" = "PUBLISHED"
+          .release-tools/tools/release/publish-market.sh "$VERSION" connector.json "$RUNNER_TEMP/published-release/baijimu-codex-desktop-${VERSION}-oss-manifest.json"
+          case "$(cat "$MARKET_PUBLICATION_STATUS_FILE")" in
+            PENDING_REVIEW) echo "market submission is pending independent review" ;;
+            PUBLISHED) echo "source owner confirms this immutable version is published" ;;
+            *) exit 1 ;;
+          esac

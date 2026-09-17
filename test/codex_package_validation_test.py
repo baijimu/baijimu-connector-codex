@@ -5,6 +5,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -104,6 +105,33 @@ class PackageValidationTest(unittest.TestCase):
 
 
 class PublicationOrderingTest(unittest.TestCase):
+    def test_cli_component_preserves_the_published_v4_consumer_contract(self):
+        fixture = json.loads((Path(__file__).parent / "fixtures/codex-artifacts-manifest-v4.json").read_text())
+        generated = sync.manifest_v4_for({"tag_name": "rust-v1.2.3"}, [],
+                                         "https://example.invalid", "artifacts")
+        # Released Connector parsers reject unknown component fields. Package
+        # layout belongs on each asset, without extending that closed contract.
+        self.assertEqual(set(generated["components"]["codex_cli"]),
+                         set(fixture["components"]["codex_cli"]))
+
+    def test_component_metadata_correction_is_published_even_for_same_assets(self):
+        release = {"tag_name": "rust-v1.2.3"}
+        legacy = sync.manifest_for(release, [], sync.DEFAULT_PUBLIC_BASE, sync.DEFAULT_PREFIX)
+        full = sync.manifest_v4_for(release, [], sync.DEFAULT_PUBLIC_BASE, sync.DEFAULT_PREFIX)
+        desktop = sync.desktop_manifest_v4_for(full)
+        for changed in (False, True):
+            current = json.loads(json.dumps([legacy, full, desktop]))
+            if changed:
+                current[1]["components"]["codex_cli"]["macos_install_layout"] = "codex_package_v1"
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(sync, "request_json", return_value=release), \
+                    patch.object(sync, "select_assets", return_value=[]), \
+                    patch.object(sync, "validate_manifest"), \
+                    patch.object(sync, "fetch_existing_manifest", side_effect=current), \
+                    patch.object(sync, "publish") as publish:
+                sync.run(SimpleNamespace(release_json=None, work_dir=directory, prepare_only=False))
+                self.assertEqual(publish.call_count, int(changed))
+
     def test_failed_immutable_manifest_verification_preserves_latest(self):
         manifest = {"assets": [], "snapshot_id": "test"}
         with tempfile.TemporaryDirectory() as directory, \

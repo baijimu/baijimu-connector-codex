@@ -433,9 +433,7 @@ def manifest_for(
                 "published_at": release.get("published_at"),
                 "html_url": release.get("html_url"),
                 "windows_install_layout": "codex_package_v1",
-                "macos_install_layout": "codex_package_v1",
                 "legacy_windows_archives_retained_for": "pre-package-layout-connectors",
-                "legacy_macos_archives_retained_for": "pre-package-layout-connectors",
             },
             "codex_desktop_app": {
                 "source": "official OpenAI static distribution and Microsoft Store signed packages",
@@ -678,6 +676,9 @@ def run(args: argparse.Namespace) -> int:
         and current.get("snapshot_id") == manifest["snapshot_id"]
         and legacy_current.get("snapshot_id") == legacy_manifest["snapshot_id"]
         and desktop_current.get("snapshot_id") == desktop_manifest["snapshot_id"]
+        and current.get("components") == manifest["components"]
+        and legacy_current.get("components") == legacy_manifest["components"]
+        and desktop_current.get("components") == desktop_manifest["components"]
     ):
         # Keep the current fetched_at/immutable manifest stable, but fully verify
         # every content-addressed customer object before declaring a no-op.

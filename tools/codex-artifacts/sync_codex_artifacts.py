@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 from typing import Any
 import urllib.error
@@ -264,6 +265,60 @@ def download_asset(asset: dict[str, Any], destination: Path) -> dict[str, Any]:
     }
 
 
+def validate_cli_package(asset: dict[str, Any], archive: Path, version: str) -> None:
+    """Validate the official package contract before any public manifest is changed."""
+    if asset.get("install_layout") != "codex_package_v1":
+        return
+
+    def package_path(value: str) -> str:
+        if not isinstance(value, str) or not value:
+            raise RuntimeError("Codex package contains an invalid path")
+        value = value.replace("\\", "/").rstrip("/")
+        if value.startswith("/") or ":" in value or ".." in value.split("/"):
+            raise RuntimeError(f"Codex package contains an unsafe path: {value}")
+        return value.removeprefix("./")
+
+    with tarfile.open(archive, "r:gz") as package:
+        members = {}
+        for member in package.getmembers():
+            name = package_path(member.name)
+            if name in members:
+                raise RuntimeError(f"Codex package contains duplicate member: {name}")
+            members[name] = member
+
+        def required_file(name: str) -> tarfile.TarInfo:
+            member = members.get(name)
+            if member is None or not member.isfile() or member.size <= 0:
+                raise RuntimeError(f"Codex package is missing required file: {name}")
+            return member
+
+        metadata = required_file("codex-package.json")
+        if metadata.size > 1024 * 1024:
+            raise RuntimeError("Codex package metadata is unexpectedly large")
+        with package.extractfile(metadata) as source:
+            manifest = json.load(source)
+        target = asset["name"].removeprefix("codex-package-").removesuffix(".tar.gz")
+        if (
+            manifest.get("layoutVersion") != 1
+            or manifest.get("variant") != "codex"
+            or manifest.get("target") != target
+            or manifest.get("version") != version
+        ):
+            raise RuntimeError(f"Codex package metadata does not match release: {asset['name']}")
+        suffix = ".exe" if asset["platform"] == "windows" else ""
+        entrypoint = package_path(manifest.get("entrypoint"))
+        if entrypoint != f"bin/codex{suffix}":
+            raise RuntimeError(f"Codex package has unexpected entrypoint: {entrypoint}")
+        path_dir = package_path(manifest.get("pathDir"))
+        resources_dir = package_path(manifest.get("resourcesDir"))
+        if path_dir != "codex-path" or resources_dir != "codex-resources":
+            raise RuntimeError("Codex package has unsupported resource directories")
+        for name in (entrypoint, f"bin/codex-code-mode-host{suffix}", f"{path_dir}/rg{suffix}"):
+            required_file(name)
+        if not any(name.startswith(resources_dir + "/") for name in members):
+            raise RuntimeError("Codex package is missing bundled resources")
+
+
 def snapshot_id(assets: list[dict[str, Any]]) -> str:
     identity = [
         {"name": asset["name"], "sha256": asset["sha256"], "size": asset["size"]}
@@ -378,7 +433,9 @@ def manifest_for(
                 "published_at": release.get("published_at"),
                 "html_url": release.get("html_url"),
                 "windows_install_layout": "codex_package_v1",
+                "macos_install_layout": "codex_package_v1",
                 "legacy_windows_archives_retained_for": "pre-package-layout-connectors",
+                "legacy_macos_archives_retained_for": "pre-package-layout-connectors",
             },
             "codex_desktop_app": {
                 "source": "official OpenAI static distribution and Microsoft Store signed packages",
@@ -511,6 +568,22 @@ def publish(
             if not public_asset_is_exact(asset["mirror_url"], source):
                 raise RuntimeError(f"public OSS read-back verification failed: {asset['name']}")
 
+    # Preserve and verify each immutable manifest before changing any latest pointer.
+    for name, document in (
+        ("manifest-v3.json", legacy_manifest),
+        ("manifest-v4.json", manifest),
+        ("desktop-manifest-v4.json", desktop_manifest),
+    ):
+        path = work_dir / name
+        path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        key = f"{prefix}/manifests/sha256/{sha256_file(path)}.json"
+        url = f"{public_base}/{key}"
+        if not public_asset_is_exact(url, path):
+            oss_cp(path, f"oss://{bucket}/{key}", "application/json", "public,max-age=31536000,immutable")
+        if not public_asset_is_exact(url, path):
+            raise RuntimeError(f"immutable manifest public read-back verification failed: {name}")
+        print(f"verified immutable manifest {url}", flush=True)
+
     legacy_manifest_path = work_dir / "manifest-v3.json"
     legacy_manifest_path.write_text(
         json.dumps(legacy_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -571,7 +644,9 @@ def run(args: argparse.Namespace) -> int:
     completed_assets = []
     for asset in selected:
         print(f"downloading {asset['name']} from {asset['upstream_url']}", flush=True)
-        completed_assets.append(download_asset(asset, downloads / asset["name"]))
+        completed = download_asset(asset, downloads / asset["name"])
+        validate_cli_package(asset, completed["path"], release["tag_name"].removeprefix("rust-v"))
+        completed_assets.append(completed)
     prefix = os.environ.get("OSS_PREFIX", DEFAULT_PREFIX).strip("/")
     public_base = os.environ.get("OSS_PUBLIC_BASE_URL", DEFAULT_PUBLIC_BASE)
     legacy_manifest = manifest_for(release, completed_assets, public_base, prefix)

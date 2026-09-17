@@ -6,6 +6,14 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+test("package contents and manifest publication ordering pass regression checks", () => {
+  const result = spawnSync("python3", ["test/codex_package_validation_test.py"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
 test("artifact sync promotes complete macOS Codex packages and deprecates legacy archives", () => {
   const program = String.raw`
 import importlib.util

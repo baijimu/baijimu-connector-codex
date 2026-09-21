@@ -23,6 +23,7 @@ mod source;
 #[cfg(any(target_os = "windows", test))]
 use contract::InstallerResultEnvelope;
 pub use contract::InstallerStatus;
+mod windows_recovery;
 
 const SETUP_STATUS_FILE: &str = "setup-status.json";
 const SETUP_STATUS_SCHEMA_VERSION: u32 = 2;
@@ -88,7 +89,13 @@ struct SetupFailureClassification {
 fn classify_setup_failure(error: &anyhow::Error) -> SetupFailureClassification {
     let unsupported_os = crate::system_compatibility::unsupported_os_version(error).is_some()
         || crate::system_compatibility::message_is_unsupported_os_version(&error.to_string());
-    if unsupported_os {
+    if error.to_string().contains("MSIX_ELEVATION_REQUIRED") {
+        SetupFailureClassification {
+            message: "安装此应用需要管理员权限，安装包已下载完成，请授权后重试。",
+            error_code: "MSIX_ELEVATION_REQUIRED",
+            retryable: true,
+        }
+    } else if unsupported_os {
         SetupFailureClassification {
             message: "当前系统版本不支持 ChatGPT/Codex 桌面应用",
             error_code: crate::system_compatibility::ERROR_CODE_UNSUPPORTED_OS_VERSION,
@@ -237,10 +244,48 @@ impl SetupManager {
             }
             _ => None,
         };
+        if matches!(status.status.as_str(), "failed" | "interrupted")
+            && status
+                .installer_status
+                .as_ref()
+                .is_some_and(|installer| installer.package_recovery.is_some())
+        {
+            if let Err(error) =
+                windows_recovery::recovery_package(&status, &installer_state_dir(), false)
+            {
+                if let Some(installer) = status.installer_status.as_mut() {
+                    installer.package_recovery = None;
+                }
+                status.error = Some(error.to_string());
+                status.error_code = Some("MSIX_PACKAGE_UNAVAILABLE".to_string());
+            }
+        }
         status
     }
 
     pub fn start(&self, workspace_id: u64, force: bool) -> Result<SetupStatus> {
+        self.start_with_elevation(workspace_id, force, false)
+    }
+
+    pub fn reveal_installer_package(&self) -> Result<()> {
+        let status = self.state();
+        let package = windows_recovery::recovery_package(&status, &installer_state_dir(), false)?;
+        windows_recovery::reveal(&package)
+    }
+
+    pub fn start_with_elevation(
+        &self,
+        workspace_id: u64,
+        force: bool,
+        elevate: bool,
+    ) -> Result<SetupStatus> {
+        if elevate {
+            let status = self.state();
+            if !cfg!(target_os = "windows") || status.workspace_id != Some(workspace_id) {
+                anyhow::bail!("只能为当前 Windows 工作区重试管理员安装");
+            }
+            windows_recovery::recovery_package(&status, &installer_state_dir(), true)?;
+        }
         if workspace_id == 0 {
             anyhow::bail!("workspaceId 必须是正整数");
         }
@@ -299,7 +344,7 @@ impl SetupManager {
 
         let manager = self.clone();
         let background = running.clone();
-        thread::spawn(move || match run_install(workspace_id) {
+        thread::spawn(move || match run_install(workspace_id, elevate) {
             Ok(installed) => {
                 let verifying = SetupStatus {
                     schema_version: SETUP_STATUS_SCHEMA_VERSION,
@@ -475,7 +520,9 @@ fn recover_persisted_status(mut status: SetupStatus) -> (SetupStatus, bool) {
     (status, false)
 }
 
-fn run_install(workspace_id: u64) -> Result<SetupInstallation> {
+fn run_install(workspace_id: u64, elevate: bool) -> Result<SetupInstallation> {
+    #[cfg(not(target_os = "windows"))]
+    let _ = elevate;
     #[cfg(target_os = "macos")]
     {
         let setup_dir = connector_home().join("setup");
@@ -495,7 +542,7 @@ fn run_install(workspace_id: u64) -> Result<SetupInstallation> {
 
     #[cfg(target_os = "windows")]
     {
-        run_windows_install(workspace_id)
+        run_windows_install(workspace_id, elevate)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -506,7 +553,7 @@ fn run_install(workspace_id: u64) -> Result<SetupInstallation> {
 }
 
 #[cfg(target_os = "windows")]
-fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
+fn run_windows_install(workspace_id: u64, elevate: bool) -> Result<SetupInstallation> {
     let setup_dir = connector_home().join("setup");
     fs::create_dir_all(&setup_dir)
         .with_context(|| format!("创建安装目录失败: {}", setup_dir.display()))?;
@@ -539,6 +586,7 @@ fn run_windows_install(workspace_id: u64) -> Result<SetupInstallation> {
             .env("CODEX_ARTIFACT_MANIFEST_URL", source::manifest_url()?)
             .env("CODEX_INSTALL_STATE_DIR", &state_dir)
             .env("CODEX_INSTALL_QUIET", "1")
+            .env("CODEX_INSTALL_ELEVATE", if elevate { "1" } else { "0" })
             .env("CODEX_UI_LOCALE", &product_config.default_ui_locale)
             .env("CODEX_HOME", &profile_home)
             .env(
@@ -662,8 +710,11 @@ impl Drop for SetupDesktopGuard {
 fn windows_install_script_bytes() -> Vec<u8> {
     const UTF8_BOM: &[u8] = &[0xef, 0xbb, 0xbf];
     let source = include_bytes!("../installers/windows-configure-terminal-and-login.ps1");
-    let mut script = Vec::with_capacity(UTF8_BOM.len() + source.len());
+    let helper = include_bytes!("../installers/windows-msix-install.ps1");
+    let mut script = Vec::with_capacity(UTF8_BOM.len() + helper.len() + source.len() + 1);
     script.extend_from_slice(UTF8_BOM);
+    script.extend_from_slice(helper);
+    script.push(b'\n');
     script.extend_from_slice(source);
     script
 }
@@ -776,6 +827,16 @@ fn now_epoch_seconds() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_permission_failure_has_a_specific_actionable_code() {
+        let result = super::classify_setup_failure(&anyhow::anyhow!(
+            "MSIX_ELEVATION_REQUIRED: permission denied"
+        ));
+        assert_eq!(result.error_code, "MSIX_ELEVATION_REQUIRED");
+        assert!(result.retryable);
+        assert!(result.message.contains("请授权后重试"));
+    }
+
     #[test]
     fn setup_failure_preserves_the_cli_cause_and_error_code() {
         let error = anyhow::anyhow!("LLM_CREDENTIAL_CREDENTIAL_DENIED: 无权使用该模型凭证")

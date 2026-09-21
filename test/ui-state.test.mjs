@@ -9,6 +9,7 @@ import {
   primaryViewMeta,
   profileBadgeMeta,
   setupActionMeta,
+  installerRecoveryMeta,
   setupStatusMeta,
 } from "../ui/state.mjs";
 
@@ -258,4 +259,30 @@ test("an actual installation failure still requires installation repair", () => 
     operation: "retry",
     label: "重新安装并修复",
   });
+});
+
+
+test("Windows permission failures offer elevation and the recorded package directory", () => {
+  const setup = {
+    status: "failed", retryable: true,
+    installerStatus: { platform: "windows", packageRecovery: {
+      packagePath: "C:\\Users\\测试 用户\\installer.msix", sha256: "a".repeat(64), requiresElevation: true,
+    } },
+  };
+  assert.deepEqual(installerRecoveryMeta(setup), { canReveal: true, canElevate: true });
+  assert.deepEqual(setupActionMeta(setup), {
+    visible: true, operation: "elevate", label: "以管理员权限重试安装",
+  });
+  for (const status of ["running", "succeeded", "pending"]) {
+    assert.deepEqual(installerRecoveryMeta({ ...setup, status }), { canReveal: false, canElevate: false });
+  }
+  setup.installerStatus.packageRecovery.requiresElevation = false;
+  assert.equal(setupActionMeta(setup).operation, "retry");
+  assert.equal(installerRecoveryMeta(setup).canReveal, true);
+  setup.installerStatus.platform = "macos";
+  assert.deepEqual(installerRecoveryMeta(setup), { canReveal: false, canElevate: false });
+  setup.installerStatus.platform = "windows";
+  setup.installerStatus.packageRecovery = null;
+  assert.equal(setupActionMeta(setup).operation, "retry");
+  assert.equal(installerRecoveryMeta(setup).canReveal, false);
 });

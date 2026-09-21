@@ -7,6 +7,7 @@ import {
   primaryViewMeta,
   profileBadgeMeta,
   setupActionMeta,
+  installerRecoveryMeta,
   setupStatusMeta,
   shouldShowSetupProgress,
 } from "./state.mjs";
@@ -19,7 +20,7 @@ const elementIds = [
   "auth-profile-list", "add-workspace-button", "codex-workspace-list",
   "workspace-route-notice", "workspace-route-message",
   "workspace-route-action",
-  "setup-message", "setup-action-button", "setup-progress", "setup-progress-label",
+  "setup-message", "setup-action-button", "setup-reveal-package-button", "setup-progress", "setup-progress-label",
   "setup-progress-percent", "setup-progress-track", "setup-progress-bar", "setup-step-list",
   "codex-operation-progress", "codex-operation-title", "codex-operation-message",
   "auth-switch-modal",
@@ -99,6 +100,7 @@ function setAccountBusy(value) {
   accountBusy = value;
   elements["refresh-button"].disabled = value;
   elements["setup-action-button"].disabled = value;
+  elements["setup-reveal-package-button"].disabled = value;
   elements["add-workspace-button"].disabled = value;
   elements["workspace-create-confirm"].disabled = value || !workspaceCreateCanSubmit();
   elements["workspace-route-action"].disabled = value;
@@ -602,6 +604,7 @@ function renderSetupState() {
   setAccountBusy(status === "running");
   elements["setup-actions"].hidden = false;
   elements["setup-action-button"].hidden = !action.visible;
+  elements["setup-reveal-package-button"].hidden = !installerRecoveryMeta(setupState).canReveal;
   elements["setup-action-button"].textContent = action.label;
 }
 
@@ -707,8 +710,8 @@ async function monitorSetup() {
       }
       if (setupState?.status === "failed") {
         showError(setupState?.error || "Codex 初始化失败。", {
-          action: retrySetup,
-          label: "重新安装并修复",
+          action: () => retrySetup(setupActionMeta(setupState).operation === "elevate"),
+          label: setupActionMeta(setupState).label,
         });
         return;
       }
@@ -740,8 +743,8 @@ async function ensureCodexReady() {
       return;
     case "failed":
       showError(readiness?.message || "Codex 初始化失败，请检查失败步骤后重新安装修复。", {
-        action: retrySetup,
-        label: "重新安装并修复",
+        action: () => retrySetup(setupActionMeta(setupState).operation === "elevate"),
+        label: setupActionMeta(setupState).label,
       });
       return;
     case "needs_workspace":
@@ -784,7 +787,7 @@ async function loadState({ ensureReady = false, monitor = true } = {}) {
   }
 }
 
-async function retrySetup() {
+async function retrySetup(elevate = false) {
   clearNotices();
   const workspaceId = credentialState?.currentWorkspaceId;
   if (!workspaceId) {
@@ -796,14 +799,14 @@ async function retrySetup() {
   }
   setAccountBusy(true);
   try {
-    setupState = await invokeManagement("setupRetry", { workspaceId });
+    setupState = await invokeManagement("setupRetry", { workspaceId, elevate });
     renderSetupState();
-    setMessage("message", "已开始重新安装并修复本机 Codex。");
+    setMessage("message", elevate ? "请在 Windows 授权窗口中允许安装；安装成功后会继续配置。" : "已开始重新安装并修复本机 Codex。");
     void monitorSetup();
   } catch (error) {
     setAccountBusy(false);
     showError(errorMessage(error), {
-      action: retrySetup,
+      action: () => retrySetup(elevate),
       label: "重试修复",
     });
   }
@@ -861,10 +864,24 @@ async function restoreExternalCodexHome() {
 }
 
 elements["refresh-button"].addEventListener("click", () => void refreshState());
+elements["setup-reveal-package-button"].addEventListener("click", async () => {
+  if (accountBusy) return;
+  clearNotices();
+  elements["setup-reveal-package-button"].disabled = true;
+  try {
+    await invokeManagement("revealInstallerPackage", {});
+    setMessage("message", "已打开安装包所在目录并选中文件。手动安装完成后，点击重试即可继续配置。");
+  } catch (error) {
+    showError(errorMessage(error));
+  } finally {
+    elements["setup-reveal-package-button"].disabled = accountBusy;
+  }
+});
+
 elements["setup-action-button"].addEventListener("click", () => {
   const action = setupActionMeta(setupState);
   if (action.operation === "verify") void retryRouterVerification();
-  else void retrySetup();
+  else void retrySetup(action.operation === "elevate");
 });
 elements["add-workspace-button"].addEventListener("click", openWorkspaceCreateModal);
 elements["workspace-create-cancel"].addEventListener("click", closeWorkspaceCreateModal);

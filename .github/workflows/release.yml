@@ -252,6 +252,8 @@ jobs:
             $parseErrors | ForEach-Object { Write-Error $_.Message }
             throw "Windows installer PowerShell syntax validation failed"
           }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-msix-install.Tests.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Windows MSIX recovery tests failed" }
           cargo test --locked
           cargo build --locked --release
           $binDir = Join-Path $env:RUNNER_TEMP "codex-local-app\bin\${{ matrix.platform_dir }}"

@@ -38,6 +38,14 @@ pub struct InstallerStep {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageRecovery {
+    pub package_path: String,
+    pub sha256: String,
+    pub requires_elevation: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstallerStatus {
     pub title: String,
     pub locale: String,
@@ -48,6 +56,8 @@ pub struct InstallerStatus {
     pub status_path: String,
     pub result_path: String,
     pub steps: Vec<InstallerStep>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_recovery: Option<PackageRecovery>,
 }
 
 #[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
@@ -60,6 +70,7 @@ impl InstallerStatus {
             updated_at: started_at.clone(),
             started_at,
             current_step: 0,
+            package_recovery: None,
             status_path,
             result_path,
             steps: MACOS_STEP_NAMES

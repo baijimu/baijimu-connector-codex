@@ -313,8 +313,21 @@ export function primaryViewMeta(value) {
   };
 }
 
+export function installerRecoveryMeta(value) {
+  const installer = value?.installerStatus;
+  const recovery = installer?.packageRecovery;
+  const available = ["failed", "interrupted"].includes(value?.status)
+    && installer?.platform === "windows"
+    && Boolean(recovery?.packagePath)
+    && /^[a-f0-9]{64}$/i.test(recovery?.sha256 || "");
+  return { canReveal: available, canElevate: available && recovery.requiresElevation === true };
+}
+
 export function setupActionMeta(value) {
   const meta = setupStatusMeta(value);
+  if (installerRecoveryMeta(value).canElevate) {
+    return { visible: true, operation: "elevate", label: "以管理员权限重试安装" };
+  }
   if (meta.status === "succeeded" && value?.retryable === true) {
     return {
       visible: true,

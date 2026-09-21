@@ -375,6 +375,13 @@ fn handle_management(
         ("GET", "/management/v1/setup/state") => serde_json::to_value(state.setup.state())
             .map_err(|error| HttpError::internal(error.to_string())),
         ("POST", "/management/v1/setup/ensure-ready") => ensure_codex_ready(state),
+        ("POST", "/management/v1/setup/reveal-package") => {
+            state
+                .setup
+                .reveal_installer_package()
+                .map_err(|error| HttpError::new(409, error.to_string()))?;
+            Ok(json!({"opened": true}))
+        }
         ("POST", "/management/v1/setup/retry") => {
             let _credential_guard = state
                 .credential_management
@@ -388,7 +395,13 @@ fn handle_management(
             serde_json::to_value(
                 state
                     .setup
-                    .start(workspace_id, true)
+                    .start_with_elevation(
+                        workspace_id,
+                        true,
+                        body.get("elevate")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    )
                     .map_err(|error| HttpError::new(409, error.to_string()))?,
             )
             .map_err(|error| HttpError::internal(error.to_string()))
@@ -916,6 +929,11 @@ mod http_authorization_tests {
             "POST",
             "/management/v1/setup/retry",
             false,
+        ));
+        assert!(requires_management_authorization(
+            "POST",
+            "/management/v1/setup/reveal-package",
+            false
         ));
         assert!(requires_management_authorization("POST", "/readyz", false));
     }

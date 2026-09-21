@@ -49,6 +49,7 @@ function Write-Utf8NoBomFile([string]$path, [AllowEmptyString()][string]$content
   }
 }
 
+$script:PackageRecovery = $null
 $script:CurrentStepIndex = 0
 $script:InstallSteps = @(
   [pscustomobject]@{ index = 1; name = "检查 ChatGPT 桌面应用"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
@@ -103,6 +104,7 @@ function Write-InstallStatus {
     currentStep = $script:CurrentStepIndex
     statusPath = $statusPath
     resultPath = $resultPath
+    packageRecovery = $script:PackageRecovery
     steps = $script:InstallSteps
   }
   Write-Utf8NoBomFile $statusPath (($status | ConvertTo-Json -Depth 8) + "`n")
@@ -316,25 +318,59 @@ function Get-CodexCacheAsset([string]$assetName) {
 }
 
 function Install-CodexAppFromBaijimuCache {
-  $assetName = Get-CodexWindowsAppAssetName
-  $asset = Get-CodexCacheAsset $assetName
-  $packagePath = Join-Path $env:TEMP $assetName
-  $assetSize = 0
-  if ($asset.size_bytes) { $assetSize = [Int64]$asset.size_bytes }
-  elseif ($asset.size) { $assetSize = [Int64]$asset.size }
-  elseif ($asset.file_size) { $assetSize = [Int64]$asset.file_size }
-  Save-WebFileWithProgress $asset.mirror_url $packagePath 3 "正在下载官方 ChatGPT 桌面应用安装包" $assetSize
-  Set-InstallStep 4 "running" "正在校验安装包 SHA256"
-  $actual = (Get-FileHash -Algorithm SHA256 -Path $packagePath).Hash.ToLowerInvariant()
-  $expected = [string]$asset.sha256
-  if ($actual -ne $expected.ToLowerInvariant()) {
-    throw "制品 SHA256 不匹配：$assetName"
+  $receiptPath = Join-Path $installStateDir "package-recovery.json"
+  $elevated = $env:CODEX_INSTALL_ELEVATE -eq "1"
+  if ($elevated) {
+    # Resume the exact verified download, even if the upstream catalog has advanced.
+    $receipt = Get-Content -Raw -Encoding UTF8 -LiteralPath $receiptPath | ConvertFrom-Json
+    $packagePath = [string]$receipt.packagePath
+    $expected = [string]$receipt.sha256
+    Set-InstallStep 2 "completed" "已读取上次下载的安装包记录"
+    Set-InstallStep 3 "completed" "使用已下载的安装包，无需重新下载"
+  } else {
+    $assetName = Get-CodexWindowsAppAssetName
+    $asset = Get-CodexCacheAsset $assetName
+    $expected = [string]$asset.sha256
+    if ($expected -notmatch '^[a-fA-F0-9]{64}$') { throw "安装清单 SHA256 格式无效" }
+    $packageDirectory = Join-Path (Join-Path $installStateDir "packages") $expected
+    New-Item -ItemType Directory -Force -Path $packageDirectory | Out-Null
+    $packagePath = Join-Path $packageDirectory $assetName
+    $assetSize = 0
+    if ($asset.size_bytes) { $assetSize = [Int64]$asset.size_bytes }
+    elseif ($asset.size) { $assetSize = [Int64]$asset.size }
+    elseif ($asset.file_size) { $assetSize = [Int64]$asset.file_size }
+    if ((Test-Path -LiteralPath $packagePath -PathType Leaf) -and
+        (Get-FileHash -Algorithm SHA256 -LiteralPath $packagePath).Hash -ieq $expected) {
+      Set-InstallStep 3 "completed" "使用已下载的安装包，无需重新下载"
+    } else {
+      Save-WebFileWithProgress $asset.mirror_url $packagePath 3 "正在下载官方 ChatGPT 桌面应用安装包" $assetSize
+    }
   }
+  Set-InstallStep 4 "running" "正在校验安装包 SHA256"
+  if ($expected -notmatch '^[a-fA-F0-9]{64}$' -or
+      (Get-FileHash -Algorithm SHA256 -LiteralPath $packagePath).Hash -ine $expected) {
+    throw "安装包 SHA256 不匹配，请重新下载后再安装。"
+  }
+  $script:PackageRecovery = [ordered]@{ packagePath = $packagePath; sha256 = $expected; requiresElevation = $elevated }
+  Write-Utf8NoBomFile $receiptPath ($script:PackageRecovery | ConvertTo-Json)
   Set-InstallStep 4 "completed" "安装包 SHA256 校验通过"
-  Unblock-File -Path $packagePath -ErrorAction SilentlyContinue
+  Unblock-File -LiteralPath $packagePath -ErrorAction SilentlyContinue
   $script:result.appInstallMethod = "baijimu-cache-msix"
-  Set-InstallStep 5 "running" "正在安装 ChatGPT 桌面应用"
-  Add-AppxPackage -Path $packagePath
+  Set-InstallStep 5 "running" $(if ($elevated) { "请在 Windows 授权窗口中允许安装，正在等待管理员安装结果" } else { "正在安装 ChatGPT 桌面应用" })
+  try {
+    if ($elevated) {
+      Install-MsixElevated $packagePath $expected $installStateDir
+    } else {
+      Add-AppxPackage -Path $packagePath -ErrorAction Stop
+    }
+  } catch {
+    if (($_ | Out-String) -match '(?i)80073d28') {
+      $script:PackageRecovery.requiresElevation = $true
+      throw "MSIX_ELEVATION_REQUIRED: 安装此应用需要管理员权限，安装包已下载完成，请授权后重试。"
+    }
+    throw
+  }
+  $script:PackageRecovery.requiresElevation = $false
   Set-InstallStep 5 "completed" "ChatGPT 桌面应用已安装"
 }
 
@@ -373,7 +409,7 @@ function Ensure-CodexApp {
   try {
     Install-CodexAppFromBaijimuCache
   } catch {
-    if ($_.Exception.Message -like "*UNSUPPORTED_OS_VERSION*") { throw }
+    if ($_.Exception.Message -like "*UNSUPPORTED_OS_VERSION*" -or $script:PackageRecovery) { throw }
     Add-Warning "使用百积木缓存安装失败：$($_.Exception.Message)"
     if ($env:CODEX_ALLOW_OFFICIAL_WINDOWS_INSTALLER_FALLBACK -eq "1") {
       $script:result.appInstallMethod = "official-installer"
@@ -456,6 +492,11 @@ $result.ok = ($result.errors.Count -eq 0)
 $resultJson = $result | ConvertTo-Json -Depth 6
 Write-Utf8NoBomFile $resultPath ($resultJson + "`n")
 if ($result.ok) {
+  if ($script:PackageRecovery) {
+    Remove-Item -LiteralPath $script:PackageRecovery.packagePath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $installStateDir "package-recovery.json") -Force -ErrorAction SilentlyContinue
+    $script:PackageRecovery = $null
+  }
   Complete-PendingInstallSteps "skipped" "安装已完成"
   Write-InstallConsole ""
   Write-InstallConsole "ChatGPT 桌面应用和 Codex 配置已完成，可以关闭此窗口。"

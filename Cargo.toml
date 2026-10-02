@@ -24,3 +24,6 @@ toml_edit = "0.22"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_Security"] }
 winreg = "0.55"
+
+[target.'cfg(unix)'.dependencies]
+sysinfo = "0.33"

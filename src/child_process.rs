@@ -87,7 +87,7 @@ pub fn output(
         std::thread::sleep(Duration::from_millis(10));
     };
     // Reap orphaned descendants before reading/removing the capture files.
-    tree.terminate()?;
+    tree.finish()?;
     let read = |file: &mut std::fs::File| -> anyhow::Result<Vec<u8>> {
         file.seek(SeekFrom::Start(0))?;
         let mut bytes = Vec::new();
@@ -165,25 +165,91 @@ mod tree {
     pub fn configure(command: &mut Command) {
         command.process_group(0);
     }
-    pub struct Tree(u32);
+    pub struct Tree {
+        pid: Option<u32>,
+        finished: std::sync::atomic::AtomicBool,
+    }
     impl Tree {
         pub fn attach(child: &std::process::Child) -> anyhow::Result<Self> {
-            Ok(Self(child.id()))
+            let pid = child.id();
+            Ok(Self {
+                pid: Some(pid),
+                finished: std::sync::atomic::AtomicBool::new(false),
+            })
         }
         pub fn terminate(&self) -> anyhow::Result<()> {
-            let result = unsafe { libc::kill(-(self.0 as i32), libc::SIGKILL) };
+            if self.finished.load(std::sync::atomic::Ordering::Acquire) {
+                return Ok(());
+            }
+            let Some(pid) = self.pid else {
+                return Ok(());
+            };
+            let result = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
             if result != 0 {
                 let error = std::io::Error::last_os_error();
                 if error.raw_os_error() != Some(libc::ESRCH) {
-                    return Err(error.into());
+                    // Darwin may report EPERM for a group containing only zombies.
+                    // Confirm there is no executable member before accepting it.
+                    let mut system = sysinfo::System::new();
+                    if error.raw_os_error() != Some(libc::EPERM)
+                        || group_has_live_members(pid, &mut system)
+                    {
+                        return Err(error.into());
+                    }
                 }
             }
             Ok(())
         }
     }
+    impl Tree {
+        /// A single killpg can race a descendant's in-flight fork. Recheck the
+        /// owned group until no member can execute; zombies cannot fork or hold I/O.
+        pub fn finish(&self) -> anyhow::Result<()> {
+            let Some(pid) = self.pid else {
+                return Ok(());
+            };
+            if self.finished.load(std::sync::atomic::Ordering::Acquire) {
+                return Ok(());
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            let mut system = sysinfo::System::new();
+            let mut empty_scans = 0;
+            loop {
+                self.terminate()?;
+                let live = group_has_live_members(pid, &mut system);
+                if !live {
+                    empty_scans += 1;
+                } else {
+                    empty_scans = 0;
+                }
+                if empty_scans >= 2 {
+                    self.finished
+                        .store(true, std::sync::atomic::Ordering::Release);
+                    return Ok(());
+                }
+                anyhow::ensure!(
+                    std::time::Instant::now() < deadline,
+                    "owned process group exit could not be confirmed within 2 seconds"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+    }
+    fn group_has_live_members(pid: u32, system: &mut sysinfo::System) -> bool {
+        system.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::All,
+            true,
+            sysinfo::ProcessRefreshKind::nothing(),
+        );
+        system.processes().iter().any(|(process_id, process)| {
+            process.status() != sysinfo::ProcessStatus::Zombie
+                && unsafe { libc::getpgid(process_id.as_u32() as libc::pid_t) }
+                    == pid as libc::pid_t
+        })
+    }
     impl Drop for Tree {
         fn drop(&mut self) {
-            let _ = self.terminate();
+            let _ = self.finish();
         }
     }
 }
@@ -268,6 +334,38 @@ mod tree {
                 anyhow::bail!("找不到受控子进程的主线程");
             }
         }
+        pub fn finish(&self) -> anyhow::Result<()> {
+            use windows_sys::Win32::System::JobObjects::{
+                JobObjectBasicAccountingInformation, QueryInformationJobObject,
+                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+            };
+            self.terminate()?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION =
+                    unsafe { std::mem::zeroed() };
+                if unsafe {
+                    QueryInformationJobObject(
+                        self.0 .0,
+                        JobObjectBasicAccountingInformation,
+                        &mut info as *mut _ as _,
+                        std::mem::size_of_val(&info) as u32,
+                        std::ptr::null_mut(),
+                    )
+                } == 0
+                {
+                    return Err(std::io::Error::last_os_error().into());
+                }
+                if info.ActiveProcesses == 0 {
+                    return Ok(());
+                }
+                anyhow::ensure!(
+                    std::time::Instant::now() < deadline,
+                    "owned job exit could not be confirmed within 2 seconds"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
         pub fn terminate(&self) -> anyhow::Result<()> {
             if unsafe { TerminateJobObject(self.0 .0, 1) } == 0 {
                 return Err(std::io::Error::last_os_error().into());
@@ -343,5 +441,29 @@ mod deadline_tests {
             std::thread::sleep(Duration::from_millis(1600));
             assert!(!marker.exists(), "descendant survived its owned operation");
         }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn termination_catches_descendants_forking_as_the_leader_exits() {
+        let scratch = Capture::new().unwrap();
+        let mut markers = Vec::new();
+        for index in 0..8 {
+            let marker = scratch.0.join(format!("fork-{index}"));
+            let mut command = Command::new("/bin/sh");
+            command
+                .args([
+                    "-c",
+                    "(sleep 1; printf survived > \"$OWNED_FORK_MARKER\") & exit 0",
+                ])
+                .env("OWNED_FORK_MARKER", &marker);
+            let result = output(&mut command, Duration::from_secs(5)).unwrap();
+            assert!(result.status.success());
+            markers.push(marker);
+        }
+        std::thread::sleep(Duration::from_millis(1100));
+        assert!(
+            markers.iter().all(|marker| !marker.exists()),
+            "a descendant escaped process group termination"
+        );
     }
 }

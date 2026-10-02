@@ -1,28 +1,52 @@
 use super::*;
 
+// Reading never migrates, imports, creates profiles, or writes files.
 pub(super) fn load_metadata() -> Result<CredentialMetadata> {
-    let path = metadata_path();
-    let (source, remove_after_import) = if path.exists() {
-        (Some(path.clone()), false)
-    } else if legacy_metadata_path().exists() {
-        (Some(legacy_metadata_path()), true)
-    } else {
-        (None, false)
+    read_metadata(&metadata_path()).map(|metadata| metadata.unwrap_or_default())
+}
+
+fn read_metadata(path: &Path) -> Result<Option<CredentialMetadata>> {
+    let content = match fs::read(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("读取 Codex 凭证元数据失败: {}", path.display()))
+        }
     };
-    let mut metadata = if let Some(source) = source.as_ref() {
-        let content = fs::read(source)
-            .with_context(|| format!("读取 Codex 凭证元数据失败: {}", source.display()))?;
-        crate::json_compat::from_slice::<CredentialMetadata>(&content)
-            .with_context(|| format!("解析 Codex 凭证元数据失败: {}", source.display()))?
-    } else {
-        CredentialMetadata::default()
+    let metadata: CredentialMetadata = crate::json_compat::from_slice(&content)
+        .with_context(|| format!("解析 Codex 凭证元数据失败: {}", path.display()))?;
+    anyhow::ensure!(
+        metadata.version <= METADATA_VERSION,
+        "Codex 凭证元数据版本不受支持"
+    );
+    Ok(Some(metadata))
+}
+
+// Explicit import: only remove the legacy source after the new copy is durable.
+pub(super) fn import_legacy_metadata() -> Result<()> {
+    if read_metadata(&metadata_path())?.is_some() {
+        return Ok(());
+    }
+    if let Some(metadata) = read_metadata(&legacy_metadata_path())? {
+        save_metadata(&metadata)?;
+        fs::remove_file(legacy_metadata_path()).context("清理已导入的旧版元数据失败")?;
+    }
+    Ok(())
+}
+
+pub(super) fn migrate_metadata() -> Result<()> {
+    let Some(mut metadata) = read_metadata(&metadata_path())? else {
+        return Ok(());
     };
-    let previous_version = source.as_ref().map(|_| metadata.version).unwrap_or(0);
-    let needs_version_migration = previous_version < METADATA_VERSION;
+    if metadata.version == METADATA_VERSION {
+        return Ok(());
+    }
+    let previous_version = metadata.version;
     for profile in &mut metadata.profiles {
         normalize_profile(profile);
     }
-    let legacy_profile_homes_migrated = migrate_profiles_to_shared_home(&mut metadata)?;
+    migrate_profiles_to_shared_home(&mut metadata)?;
     if previous_version < 2 && metadata.active_profile_id.is_none() {
         metadata.active_profile_id = metadata.active_workspace_id.and_then(|id| {
             metadata
@@ -35,30 +59,30 @@ pub(super) fn load_metadata() -> Result<CredentialMetadata> {
             metadata.active_mode = AuthMode::Baijimu;
         }
     }
-    let baseline_captured = capture_original_codex_home(&mut metadata)?;
-    let original_auth_captured = capture_original_auth_profile(&mut metadata)?;
-    let chatgpt_profile_created = ensure_chatgpt_profile(&mut metadata)?;
-    // Migration and status reads must never reactivate archived credentials into
-    // the shared Codex home. They only reconcile connector metadata to live files.
-    let active_profile_reconciled = reconcile_active_profile_from_shared_home(&mut metadata)?;
     metadata.version = METADATA_VERSION;
-    if source.as_ref() != Some(&path)
-        || needs_version_migration
-        || baseline_captured
-        || legacy_profile_homes_migrated
-        || original_auth_captured
-        || chatgpt_profile_created
-        || active_profile_reconciled
-    {
+    save_metadata(&metadata)
+}
+
+pub(super) fn bootstrap_profiles() -> Result<()> {
+    let mut metadata = load_metadata()?;
+    let before = serde_json::to_vec(&metadata)?;
+    capture_original_codex_home(&mut metadata)?;
+    capture_original_auth_profile(&mut metadata)?;
+    ensure_chatgpt_profile(&mut metadata)?;
+    if !metadata_path().exists() || before != serde_json::to_vec(&metadata)? {
         save_metadata(&metadata)?;
     }
-    if remove_after_import {
-        let source = source.expect("legacy source exists when cleanup is requested");
-        fs::remove_file(&source)
-            .with_context(|| format!("清理旧版元数据失败: {}", source.display()))?;
-    }
-    Ok(metadata)
+    Ok(())
 }
+
+pub(super) fn reconcile_profiles() -> Result<()> {
+    let mut metadata = load_metadata()?;
+    if reconcile_active_profile_from_shared_home(&mut metadata)? {
+        save_metadata(&metadata)?;
+    }
+    Ok(())
+}
+
 pub(super) fn save_metadata(metadata: &CredentialMetadata) -> Result<()> {
     atomic_write_private(&metadata_path(), &serde_json::to_vec_pretty(metadata)?)?;
     verify_private_file(&metadata_path())

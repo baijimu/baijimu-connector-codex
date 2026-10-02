@@ -122,36 +122,7 @@ impl ActivationTransaction {
 pub fn state() -> Result<CredentialManagerState> {
     let mut metadata = load_metadata()?;
     let shared_home = default_original_codex_home();
-    let auth_status = baijimu_cli::auth_status();
-    let mut warning = auth_status.as_ref().err().map(ToString::to_string);
-    let (current_workspace_id, authorized_workspace_ids) = match auth_status.as_ref() {
-        Ok(status) => (
-            status.current_workspace_id,
-            status
-                .workspace_ids
-                .iter()
-                .copied()
-                .collect::<BTreeSet<_>>(),
-        ),
-        Err(_) => (None, BTreeSet::new()),
-    };
-    let discovered = if auth_status
-        .as_ref()
-        .is_ok_and(|status| status.authenticated)
-    {
-        match baijimu_cli::list_workspaces() {
-            Ok(workspaces) => Some(workspaces),
-            Err(error) => {
-                warning = Some(format!("暂时无法通过 baijimu CLI 读取工作区：{error}"));
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let mut workspaces =
-        merge_workspace_options(&authorized_workspace_ids, discovered.as_deref(), &metadata);
-
+    let mut workspaces = merge_workspace_options(&BTreeSet::new(), None, &metadata);
     let active_profile_id = metadata.active_profile_id.clone();
     for profile in &mut metadata.profiles {
         normalize_profile(profile);
@@ -237,7 +208,7 @@ pub fn state() -> Result<CredentialManagerState> {
     workspaces.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(CredentialManagerState {
         active_mode: metadata.active_mode.clone(),
-        current_workspace_id,
+        current_workspace_id: None,
         active_workspace_id: active_profile
             .as_ref()
             .filter(|profile| profile.kind == AuthProfileKind::Baijimu)
@@ -247,7 +218,7 @@ pub fn state() -> Result<CredentialManagerState> {
         active_profile,
         profiles: metadata.profiles,
         workspaces,
-        discovery_warning: warning,
+        discovery_warning: None,
         original_codex_home_state: metadata.original_codex_home_state.clone(),
         original_codex_home: shared_home.display().to_string(),
         active_codex_home: active_home.display().to_string(),
@@ -258,6 +229,71 @@ pub fn state() -> Result<CredentialManagerState> {
         codex_auth_path: auth_path.display().to_string(),
         codex_config_path: config_path.display().to_string(),
     })
+}
+
+// Explicit lifecycle steps, invoked by prepare-local-state, never by a reader.
+pub fn initialize_local_data() -> Result<()> {
+    import_legacy_metadata()?;
+    migrate_metadata()?;
+    bootstrap_profiles()?;
+    reconcile_profiles()
+}
+
+pub fn local_data_ready() -> Result<bool> {
+    let metadata = load_metadata()?;
+    Ok(metadata_path().is_file()
+        && metadata.version == METADATA_VERSION
+        && metadata.original_codex_home_state.captured
+        && metadata
+            .profiles
+            .iter()
+            .any(|p| p.kind == AuthProfileKind::Personal))
+}
+
+pub fn default_auth_profile_id() -> Result<Option<String>> {
+    Ok(load_metadata()?.active_profile_id)
+}
+
+pub fn discover_workspaces() -> Result<Value> {
+    let auth_status = baijimu_cli::auth_status();
+    let mut warning = auth_status.as_ref().err().map(ToString::to_string);
+    let (current_workspace_id, authorized_workspace_ids) = match auth_status.as_ref() {
+        Ok(status) => (
+            status.current_workspace_id,
+            status
+                .workspace_ids
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+        ),
+        Err(_) => (None, BTreeSet::new()),
+    };
+    let discovered = if auth_status
+        .as_ref()
+        .is_ok_and(|status| status.authenticated)
+    {
+        match baijimu_cli::list_workspaces() {
+            Ok(workspaces) => Some(workspaces),
+            Err(error) => {
+                warning = Some(format!("暂时无法通过 baijimu CLI 读取工作区：{error}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let _read = crate::state_access::read()?;
+    let workspaces = merge_workspace_options(
+        &authorized_workspace_ids,
+        discovered.as_deref(),
+        &load_metadata()?,
+    );
+
+    Ok(json!({
+        "currentWorkspaceId": current_workspace_id,
+        "workspaces": workspaces,
+        "discoveryWarning": warning,
+    }))
 }
 
 pub fn legacy_codex_workspace_candidates() -> Result<Vec<LegacyCodexWorkspaceCandidate>> {
@@ -395,10 +431,17 @@ pub fn initialize_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspa
             credential_status: "verified".to_string(),
         }
     };
-    let credential = initialize_workspace_files(&profile, !profile_preexisting, || {
-        baijimu_cli::create_llm_credential(workspace_id)
-            .context("baijimu CLI 签发工作区 LLM credential 失败")
-    })?;
+    // Remote issuance happens before entering the local multi-file commit.
+    let existing = read_codex_api_key(&profile_credential_path(&profile));
+    let issued = match existing {
+        Ok(Some(value)) => value,
+        Ok(None) if !profile_preexisting => baijimu_cli::create_llm_credential(workspace_id)
+            .context("baijimu CLI 签发工作区 LLM credential 失败")?,
+        Ok(None) => anyhow::bail!("该工作区凭证缺失，请使用重新授权"),
+        Err(error) => return Err(error).context("该工作区凭证损坏，请使用重新授权"),
+    };
+    let _write = crate::state_access::write()?;
+    let credential = initialize_workspace_files(&profile, !profile_preexisting, || Ok(issued))?;
     profile.credential_status = "verified".to_string();
     let profile_id = profile.profile_id.clone();
     metadata
@@ -703,8 +746,10 @@ pub fn should_auto_activate_workspace_after_setup() -> Result<bool> {
 }
 
 pub fn finalize_workspace_setup(profile: &CredentialProfile, auto_activate: bool) -> Result<()> {
+    let _write = crate::state_access::write()?;
     if auto_activate {
         activate_prepared_profile(profile)?.commit();
+        crate::codex_workspace::update_default_auth_profile(Some(&profile.profile_id))?;
     }
     if !codex_ready_for_workspace(profile.workspace_id) {
         anyhow::bail!("工作区凭证未完成配置");
@@ -932,6 +977,9 @@ fn capture_original_codex_home(metadata: &mut CredentialMetadata) -> Result<bool
 }
 
 fn default_original_codex_home() -> PathBuf {
+    if let Some(original) = captured_original_codex_home_from_disk() {
+        return original;
+    }
     if let Some(current) = user_environment::read_codex_home().ok().flatten() {
         if !current.starts_with(legacy_managed_profile_root())
             && !current.starts_with(managed_profile_root())
@@ -951,15 +999,18 @@ fn captured_original_codex_home_from_disk() -> Option<PathBuf> {
         .find_map(|path| {
             let bytes = fs::read(path).ok()?;
             let value: Value = crate::json_compat::from_slice(&bytes).ok()?;
-            value
-                .get("originalCodexHomeState")
-                .and_then(|state| state.get("value"))
+            let state = value.get("originalCodexHomeState")?;
+            if state.get("captured").and_then(Value::as_bool) != Some(true) {
+                return None;
+            }
+            let original = state
+                .get("value")
                 .and_then(Value::as_str)
                 .map(PathBuf::from)
-                .filter(|path| {
-                    !path.starts_with(legacy_managed_profile_root())
-                        && !path.starts_with(managed_profile_root())
-                })
+                .unwrap_or_else(|| home_dir().join(".codex"));
+            (!original.starts_with(legacy_managed_profile_root())
+                && !original.starts_with(managed_profile_root()))
+            .then_some(original)
         })
 }
 
@@ -2728,6 +2779,7 @@ mod shared_home_tests {
         )
         .unwrap();
 
+        initialize_local_data().unwrap();
         let migrated = load_metadata().unwrap();
 
         assert_eq!(migrated.version, METADATA_VERSION);
@@ -2979,6 +3031,7 @@ mod shared_home_tests {
         .unwrap();
         fs::write(shared.join("sessions/thread.jsonl"), b"keep-session").unwrap();
 
+        initialize_local_data().unwrap();
         let mut metadata = load_metadata().unwrap();
         let personal = metadata
             .profiles
@@ -3100,6 +3153,7 @@ mod shared_home_tests {
             b"cli_auth_credentials_store = \"keyring\"\nmodel_provider = \"openai\"\n",
         )
         .unwrap();
+        initialize_local_data().unwrap();
         let mut metadata = load_metadata().unwrap();
         let personal = metadata
             .profiles
@@ -3151,13 +3205,15 @@ mod shared_home_tests {
         )
         .unwrap();
 
+        initialize_local_data().unwrap();
         let metadata = load_metadata().unwrap();
         assert_eq!(default_original_codex_home(), selected_home);
         assert_eq!(
             metadata.original_codex_home_state.value,
             Some(selected_home.display().to_string())
         );
-        assert!(metadata
+        assert!(state()
+            .unwrap()
             .profiles
             .iter()
             .all(|profile| { Path::new(&profile.codex_home) == selected_home }));
@@ -3200,6 +3256,7 @@ mod shared_home_tests {
             ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
         ]);
 
+        initialize_local_data().unwrap();
         let metadata = load_metadata().unwrap();
         let personal = metadata
             .profiles
@@ -3245,6 +3302,7 @@ mod shared_home_tests {
         })
         .unwrap();
 
+        initialize_local_data().unwrap();
         let metadata = load_metadata().unwrap();
         let personal = metadata
             .profiles
@@ -3313,6 +3371,7 @@ mod shared_home_tests {
         })
         .unwrap();
 
+        initialize_local_data().unwrap();
         let first = load_metadata().unwrap();
         let second = load_metadata().unwrap();
         let first_state = state().unwrap();
@@ -3367,6 +3426,7 @@ mod shared_home_tests {
         })
         .unwrap();
 
+        initialize_local_data().unwrap();
         let migrated = load_metadata().unwrap();
         assert_eq!(migrated.version, METADATA_VERSION);
         let chatgpt = migrated
@@ -3532,5 +3592,35 @@ mod shared_home_tests {
         assert_eq!(candidates[0].profile_id, original.profile_id);
         assert_eq!(candidates[0].workspace_name, "原认证档案");
         fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn legacy_import_only_runs_as_an_explicit_command() {
+        let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("codex-explicit-import-{}", std::process::id()));
+        let user = root.join("user");
+        let data = root.join("data");
+        let config = root.join("config");
+        let home = user.join(".codex");
+        let _env = EnvRestore::set(&[
+            ("HOME", &user),
+            ("USERPROFILE", &user),
+            ("CODEX_HOME", &home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data),
+            ("BAIJIMU_CONFIG_HOME", &config),
+        ]);
+        fs::create_dir_all(legacy_config_dir()).unwrap();
+        let legacy = br#"{"version":1,"profiles":[]}"#;
+        fs::write(legacy_metadata_path(), legacy).unwrap();
+        assert!(state().unwrap().profiles.is_empty());
+        assert!(!metadata_path().exists());
+        assert_eq!(fs::read(legacy_metadata_path()).unwrap(), legacy);
+        initialize_local_data().unwrap();
+        assert!(!legacy_metadata_path().exists());
+        assert_eq!(load_metadata().unwrap().version, METADATA_VERSION);
+        let before = fs::read(metadata_path()).unwrap();
+        state().unwrap();
+        assert_eq!(fs::read(metadata_path()).unwrap(), before);
+        fs::remove_dir_all(root).unwrap();
     }
 }

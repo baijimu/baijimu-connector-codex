@@ -19,7 +19,7 @@ class Element {
   setAttribute() {}
 }
 
-async function failedInstallerPage() {
+async function failedInstallerPage(discover = async () => ({ currentWorkspaceId: 42 })) {
   const elements = new Map();
   const calls = [];
   const setup = {
@@ -43,6 +43,7 @@ async function failedInstallerPage() {
       setTimeout: () => {},
       baijimuLocalApp: { version: 1, async invoke(operation, args) {
         calls.push({ operation, args });
+        if (operation === "discoverWorkspaces") return discover();
         if (operation === "credentialState") return { currentWorkspaceId: 42 };
         if (operation === "setupState") return setup;
         if (operation === "ensureCodexReady") return { readiness: "failed", setup };
@@ -81,4 +82,17 @@ test("open-directory button uses the backend record without submitting a path", 
   const request = calls.find((call) => call.operation === "revealInstallerPackage");
   assert.deepEqual(Object.keys(request.args), []);
   assert.match(elements.get("message").textContent, /选中文件/);
+});
+
+
+test("slow or failed workspace discovery does not hide local installation state", async () => {
+  let reject;
+  const pending = new Promise((_, rejectPromise) => { reject = rejectPromise; });
+  const { elements, calls } = await failedInstallerPage(() => pending);
+  assert.ok(calls.some((call) => call.operation === "discoverWorkspaces"));
+  assert.equal(elements.get("setup-action-button").textContent, "以管理员权限重试安装");
+  reject(new Error("平台发现超时"));
+  await new Promise(setImmediate);
+  assert.match(elements.get("warning").textContent, /平台发现超时/);
+  assert.notEqual(elements.get("runtime-status-badge").textContent, "检查失败");
 });

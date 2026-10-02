@@ -85,10 +85,11 @@ pub fn message_is_unsupported_os_version(message: &str) -> bool {
 
 #[cfg(target_os = "macos")]
 pub fn current_macos_version() -> Result<String> {
-    let output = Command::new("/usr/bin/sw_vers")
-        .arg("-productVersion")
-        .output()
-        .map_err(|error| anyhow::anyhow!("读取当前 macOS 版本失败：{error}"))?;
+    let output = crate::child_process::output(
+        Command::new("/usr/bin/sw_vers").arg("-productVersion"),
+        std::time::Duration::from_secs(5),
+    )
+    .map_err(|error| anyhow::anyhow!("读取当前 macOS 版本失败：{error}"))?;
     if !output.status.success() {
         anyhow::bail!(
             "读取当前 macOS 版本失败：{}",

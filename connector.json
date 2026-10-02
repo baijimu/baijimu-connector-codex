@@ -30,6 +30,8 @@
     "baseUrl": "http://127.0.0.1:18110",
     "auth": {"type": "connector_token"},
     "operations": {
+      "prepareLocalState": { "method": "POST", "path": "/management/v1/prepare-local-state" },
+      "discoverWorkspaces": { "method": "POST", "path": "/management/v1/workspace-discovery" },
       "setupState": {"method": "GET", "path": "/management/v1/setup/state"},
       "revealInstallerPackage": {"method": "POST", "path": "/management/v1/setup/reveal-package"},
       "setupRetry": {"method": "POST", "path": "/management/v1/setup/retry"},

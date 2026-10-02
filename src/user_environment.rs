@@ -30,8 +30,14 @@ pub fn set_codex_home(value: Option<&Path>) -> Result<CodexHomeUpdate> {
     Ok(CodexHomeUpdate {
         previous,
         current,
-        environment_broadcast: platform::broadcast_environment_change()?,
+        environment_broadcast: false,
     })
+}
+
+// Notify desktop processes only after the local state transaction is committed.
+// HWND_BROADCAST can wait for other applications and must not hold the data lock.
+pub fn notify_environment_change() -> Result<bool> {
+    platform::broadcast_environment_change()
 }
 
 pub fn restore_codex_home(value: Option<&Path>) -> Result<CodexHomeUpdate> {

@@ -45,9 +45,8 @@ pub struct WorkspaceState {
     pub workspaces: Vec<CodexWorkspace>,
 }
 
-pub fn state(default_auth_profile_id: Option<&str>) -> Result<WorkspaceState> {
-    let mut catalog = load(default_auth_profile_id)?;
-    normalize(&mut catalog, default_auth_profile_id)?;
+pub fn state() -> Result<WorkspaceState> {
+    let mut catalog = load()?;
     let active_workspace_id = catalog.active_workspace_id.clone();
     for workspace in &mut catalog.workspaces {
         workspace.active = workspace.workspace_id == active_workspace_id;
@@ -58,10 +57,17 @@ pub fn state(default_auth_profile_id: Option<&str>) -> Result<WorkspaceState> {
     })
 }
 
+pub fn local_data_ready() -> Result<bool> {
+    Ok(load()?
+        .workspaces
+        .iter()
+        .any(|w| w.workspace_id == DEFAULT_WORKSPACE_ID))
+}
+
 pub fn create(name: &str, auth_profile_id: &str) -> Result<CodexWorkspace> {
     let name = validate_name(name)?;
     credential::prepare_profile_activation(auth_profile_id)?;
-    let mut catalog = load(None)?;
+    let mut catalog = load()?;
     anyhow::ensure!(
         !catalog
             .workspaces
@@ -108,7 +114,7 @@ pub fn switch_auth_profile(
     checkpoint_current: bool,
 ) -> Result<CodexWorkspace> {
     credential::prepare_profile_activation(auth_profile_id)?;
-    let mut catalog = load(None)?;
+    let mut catalog = load()?;
     let workspace_index = catalog
         .workspaces
         .iter()
@@ -135,7 +141,7 @@ pub fn switch_auth_profile(
 }
 
 pub fn activate(workspace_id: &str) -> Result<CodexWorkspace> {
-    let mut catalog = load(None)?;
+    let mut catalog = load()?;
     let now = now_epoch_seconds();
     let workspace = catalog
         .workspaces
@@ -154,7 +160,7 @@ pub fn activate(workspace_id: &str) -> Result<CodexWorkspace> {
 }
 
 pub fn active() -> Result<CodexWorkspace> {
-    let catalog = load(None)?;
+    let catalog = load()?;
     catalog
         .workspaces
         .into_iter()
@@ -163,7 +169,7 @@ pub fn active() -> Result<CodexWorkspace> {
 }
 
 pub fn workspace(workspace_id: &str) -> Result<CodexWorkspace> {
-    load(None)?
+    load()?
         .workspaces
         .into_iter()
         .find(|workspace| workspace.workspace_id == workspace_id)
@@ -171,7 +177,7 @@ pub fn workspace(workspace_id: &str) -> Result<CodexWorkspace> {
 }
 
 pub fn refresh_auth_profile(auth_profile_id: &str) -> Result<()> {
-    let catalog = load(None)?;
+    let catalog = load()?;
     for workspace in catalog
         .workspaces
         .iter()
@@ -187,9 +193,9 @@ pub fn refresh_auth_profile(auth_profile_id: &str) -> Result<()> {
     Ok(())
 }
 
-fn load(default_auth_profile_id: Option<&str>) -> Result<WorkspaceCatalog> {
+fn load() -> Result<WorkspaceCatalog> {
     let path = catalog_path();
-    let mut catalog = if path.exists() {
+    let catalog = if path.exists() {
         let bytes = fs::read(&path)
             .with_context(|| format!("读取 Codex 工作区目录失败: {}", path.display()))?;
         crate::json_compat::from_slice::<WorkspaceCatalog>(&bytes)
@@ -201,14 +207,40 @@ fn load(default_auth_profile_id: Option<&str>) -> Result<WorkspaceCatalog> {
             workspaces: Vec::new(),
         }
     };
-    let changed = normalize(&mut catalog, default_auth_profile_id)?;
-    if changed || !path.exists() {
-        save(&catalog)?;
-    }
+    anyhow::ensure!(
+        catalog.schema_version == CATALOG_SCHEMA_VERSION,
+        "Codex 工作区目录版本不受支持"
+    );
     Ok(catalog)
 }
 
-fn normalize(
+pub fn initialize_local_data(default_auth_profile_id: Option<&str>) -> Result<()> {
+    let mut catalog = load()?;
+    let before = serde_json::to_vec(&catalog)?;
+    bootstrap_default_workspace(&mut catalog, default_auth_profile_id)?;
+    import_legacy_workspaces(
+        &mut catalog,
+        credential::legacy_codex_workspace_candidates()?,
+    )?;
+    if !catalog_path().exists() || before != serde_json::to_vec(&catalog)? {
+        save(&catalog)?;
+    }
+    Ok(())
+}
+
+// Call only when a command has changed the shared home's selected auth profile.
+pub fn update_default_auth_profile(profile_id: Option<&str>) -> Result<()> {
+    let mut catalog = load()?;
+    let workspace = catalog
+        .workspaces
+        .iter_mut()
+        .find(|w| w.is_default)
+        .context("默认 Codex 工作区尚未初始化")?;
+    workspace.auth_profile_id = profile_id.map(str::to_string);
+    save(&catalog)
+}
+
+fn bootstrap_default_workspace(
     catalog: &mut WorkspaceCatalog,
     default_auth_profile_id: Option<&str>,
 ) -> Result<bool> {
@@ -249,9 +281,6 @@ fn normalize(
             is_default: true,
             imported: false,
         });
-        changed = true;
-    }
-    if import_legacy_workspaces(catalog, credential::legacy_codex_workspace_candidates()?)? {
         changed = true;
     }
     if !catalog
@@ -489,7 +518,8 @@ mod tests {
         ));
         std::env::set_var("BAIJIMU_LOCAL_APP_DATA_DIR", &data_dir);
 
-        let catalog = state(Some("personal:installation-backup")).unwrap();
+        initialize_local_data(Some("personal:installation-backup")).unwrap();
+        let catalog = state().unwrap();
 
         assert_eq!(catalog.active_workspace_id, DEFAULT_WORKSPACE_ID);
         assert_eq!(catalog.workspaces.len(), 1);

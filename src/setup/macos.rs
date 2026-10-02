@@ -376,12 +376,14 @@ impl<'a> MacosInstaller<'a> {
     }
 
     fn run_native_action(&self, action: &str, arguments: &[&Path]) -> Result<String> {
-        let output = Command::new("/bin/bash")
-            .arg(self.native_script_path)
-            .arg(action)
-            .args(arguments)
-            .output()
-            .with_context(|| format!("启动 macOS 原生安装动作失败：{action}"))?;
+        let output = crate::child_process::output(
+            Command::new("/bin/bash")
+                .arg(self.native_script_path)
+                .arg(action)
+                .args(arguments),
+            Duration::from_secs(20 * 60),
+        )
+        .with_context(|| format!("启动 macOS 原生安装动作失败：{action}"))?;
         if !output.status.success() {
             let exit = output
                 .status
@@ -678,42 +680,47 @@ fn installed_app_path() -> Option<PathBuf> {
 }
 
 fn read_app_metadata(app_path: &Path, metadata_key: &str, plist_key: &str) -> String {
-    let metadata = Command::new("mdls")
-        .args(["-raw", "-name", metadata_key])
-        .arg(app_path)
-        .output()
+    let metadata = crate::child_process::output(
+        Command::new("mdls")
+            .args(["-raw", "-name", metadata_key])
+            .arg(app_path),
+        Duration::from_secs(5),
+    )
+    .ok()
+    .filter(|output| output.status.success())
+    .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    .filter(|value| !value.is_empty() && value != "(null)");
+    metadata.unwrap_or_else(|| {
+        crate::child_process::output(
+            Command::new("defaults")
+                .arg("read")
+                .arg(app_path.join("Contents/Info"))
+                .arg(plist_key),
+            Duration::from_secs(5),
+        )
         .ok()
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .filter(|value| !value.is_empty() && value != "(null)");
-    metadata.unwrap_or_else(|| {
-        Command::new("defaults")
-            .arg("read")
-            .arg(app_path.join("Contents/Info"))
-            .arg(plist_key)
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-            .unwrap_or_default()
+        .unwrap_or_default()
     })
 }
 
 fn timestamp() -> String {
-    Command::new("/bin/date")
-        .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                .to_string()
-        })
+    crate::child_process::output(
+        Command::new("/bin/date").args(["-u", "+%Y-%m-%dT%H:%M:%SZ"]),
+        Duration::from_secs(5),
+    )
+    .ok()
+    .filter(|output| output.status.success())
+    .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    .filter(|value| !value.is_empty())
+    .unwrap_or_else(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .to_string()
+    })
 }
 
 struct TemporaryDirectory {

@@ -6,6 +6,8 @@ export function connectorStartupRetryable(error) {
     ? error.message.toLowerCase()
     : String(error || "").toLowerCase();
   return code === "connector_initializing"
+    || code === "state_committing"
+    || message.includes("state_committing")
     || message.includes("connector_initializing")
     || message.includes("正在初始化 codex connector");
 }

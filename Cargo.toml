@@ -1,6 +1,6 @@
 [package]
 name = "baijimu-codex-desktop"
-version = "2.0.6"
+version = "2.1.0"
 edition = "2021"
 license = "MIT"
 description = "负责 Codex 桌面安装与工作区切换的百积木本地应用。"
@@ -22,5 +22,8 @@ sha2 = "0.10"
 toml_edit = "0.22"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_Security"] }
 winreg = "0.55"
+
+[target.'cfg(unix)'.dependencies]
+sysinfo = "0.33"

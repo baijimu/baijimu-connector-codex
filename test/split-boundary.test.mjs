@@ -314,10 +314,10 @@ test("status reads never reactivate archived workspace credentials", async () =>
   ]);
   const loadMetadata = store.slice(
     store.indexOf("pub(super) fn load_metadata"),
-    store.indexOf("pub(super) fn save_metadata"),
+    store.indexOf("fn read_metadata"),
   );
   assert.doesNotMatch(loadMetadata, /ensure_workspace_config|sync_credential_to_shared_home|commit_shared_home_ownership/);
-  assert.match(loadMetadata, /reconcile_active_profile_from_shared_home/);
+  assert.doesNotMatch(loadMetadata, /reconcile_active_profile_from_shared_home|save_metadata|migrate_|capture_|ensure_|remove_file/);
   assert.match(credential, /credential_status: "login_required"/);
   assert.match(credential, /forced_login_method: Some\("chatgpt"\.to_string\(\)\)/);
 });

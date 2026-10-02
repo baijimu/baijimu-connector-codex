@@ -279,6 +279,7 @@ impl SetupManager {
         force: bool,
         elevate: bool,
     ) -> Result<SetupStatus> {
+        let operation = crate::state_access::Operation::begin("安装 Codex")?;
         if elevate {
             let status = self.state();
             if !cfg!(target_os = "windows") || status.workspace_id != Some(workspace_id) {
@@ -320,6 +321,7 @@ impl SetupManager {
             }
         };
 
+        crate::state_access::initialize_local_data()?;
         let started_at = now_epoch_seconds();
         let running = SetupStatus {
             schema_version: SETUP_STATUS_SCHEMA_VERSION,
@@ -344,59 +346,63 @@ impl SetupManager {
 
         let manager = self.clone();
         let background = running.clone();
-        thread::spawn(move || match run_install(workspace_id, elevate) {
-            Ok(installed) => {
-                let verifying = SetupStatus {
-                    schema_version: SETUP_STATUS_SCHEMA_VERSION,
-                    attempt_id: background.attempt_id.clone(),
-                    connector_version: Some(CONNECTOR_VERSION.to_string()),
-                    status: "succeeded".to_string(),
-                    workspace_id: Some(workspace_id),
-                    message: installed.completion.verification_in_progress_message(),
-                    error: None,
-                    last_error: None,
-                    error_code: None,
-                    retryable: false,
-                    automatic_retry_count: background.automatic_retry_count,
-                    started_at_epoch_seconds: background.started_at_epoch_seconds,
-                    completed_at_epoch_seconds: None,
-                    installer_status: None,
-                };
-                if manager.replace(verifying.clone()).is_err() {
-                    return;
+        thread::spawn(move || {
+            let install_result = run_install(workspace_id, elevate);
+            drop(operation);
+            match install_result {
+                Ok(installed) => {
+                    let verifying = SetupStatus {
+                        schema_version: SETUP_STATUS_SCHEMA_VERSION,
+                        attempt_id: background.attempt_id.clone(),
+                        connector_version: Some(CONNECTOR_VERSION.to_string()),
+                        status: "succeeded".to_string(),
+                        workspace_id: Some(workspace_id),
+                        message: installed.completion.verification_in_progress_message(),
+                        error: None,
+                        last_error: None,
+                        error_code: None,
+                        retryable: false,
+                        automatic_retry_count: background.automatic_retry_count,
+                        started_at_epoch_seconds: background.started_at_epoch_seconds,
+                        completed_at_epoch_seconds: None,
+                        installer_status: None,
+                    };
+                    if manager.replace(verifying.clone()).is_err() {
+                        return;
+                    }
+                    let verification = router::verify(&installed.router_credential);
+                    let completed = SetupStatus {
+                        message: installed
+                            .completion
+                            .message_with_route_verification(&verification),
+                        last_error: route_validation_failure(&verification),
+                        retryable: !verification.passed(),
+                        completed_at_epoch_seconds: Some(now_epoch_seconds()),
+                        ..verifying
+                    };
+                    let _ = manager.replace(completed);
                 }
-                let verification = router::verify(&installed.router_credential);
-                let completed = SetupStatus {
-                    message: installed
-                        .completion
-                        .message_with_route_verification(&verification),
-                    last_error: route_validation_failure(&verification),
-                    retryable: !verification.passed(),
-                    completed_at_epoch_seconds: Some(now_epoch_seconds()),
-                    ..verifying
-                };
-                let _ = manager.replace(completed);
-            }
-            Err(error) => {
-                let classification = classify_setup_failure(&error);
-                let error = setup_error_detail(&error);
-                let completed = SetupStatus {
-                    schema_version: SETUP_STATUS_SCHEMA_VERSION,
-                    attempt_id: background.attempt_id.clone(),
-                    connector_version: Some(CONNECTOR_VERSION.to_string()),
-                    status: "failed".to_string(),
-                    workspace_id: Some(workspace_id),
-                    message: classification.message.to_string(),
-                    error: Some(error.clone()),
-                    last_error: Some(error),
-                    error_code: Some(classification.error_code.to_string()),
-                    retryable: classification.retryable,
-                    automatic_retry_count: background.automatic_retry_count,
-                    started_at_epoch_seconds: background.started_at_epoch_seconds,
-                    completed_at_epoch_seconds: Some(now_epoch_seconds()),
-                    installer_status: None,
-                };
-                let _ = manager.replace(completed);
+                Err(error) => {
+                    let classification = classify_setup_failure(&error);
+                    let error = setup_error_detail(&error);
+                    let completed = SetupStatus {
+                        schema_version: SETUP_STATUS_SCHEMA_VERSION,
+                        attempt_id: background.attempt_id.clone(),
+                        connector_version: Some(CONNECTOR_VERSION.to_string()),
+                        status: "failed".to_string(),
+                        workspace_id: Some(workspace_id),
+                        message: classification.message.to_string(),
+                        error: Some(error.clone()),
+                        last_error: Some(error),
+                        error_code: Some(classification.error_code.to_string()),
+                        retryable: classification.retryable,
+                        automatic_retry_count: background.automatic_retry_count,
+                        started_at_epoch_seconds: background.started_at_epoch_seconds,
+                        completed_at_epoch_seconds: Some(now_epoch_seconds()),
+                        installer_status: None,
+                    };
+                    let _ = manager.replace(completed);
+                }
             }
         });
         Ok(running)
@@ -597,7 +603,9 @@ fn run_windows_install(workspace_id: u64, elevate: bool) -> Result<SetupInstalla
             .env_remove("CODEX_PROJECT_ID")
             .env_remove("BAIJIMU_PROJECT_ID")
             .env_remove("PROJECT_ID");
-        let output = command.output().context("启动 Codex 官方安装脚本失败")?;
+        let output =
+            crate::child_process::output(&mut command, std::time::Duration::from_secs(30 * 60))
+                .context("执行 Codex 官方安装脚本失败")?;
         let installer_result_path = state_dir.join("result.json");
         let installer_result = read_json::<InstallerResultEnvelope>(&installer_result_path)
             .with_context(|| {

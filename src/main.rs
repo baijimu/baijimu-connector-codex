@@ -9,6 +9,7 @@ mod json_compat;
 mod process_runtime;
 mod product_config;
 mod setup;
+mod state_access;
 mod system_compatibility;
 mod user_environment;
 
@@ -43,7 +44,6 @@ struct ServerOptions {
 }
 
 struct AppState {
-    credential_management: Mutex<()>,
     setup: setup::SetupManager,
     management_token: String,
     startup: StartupReadiness,
@@ -233,7 +233,6 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
     // here makes Bridge Agent installation depend on user AppX inventory and desktop state.
     startup.ready();
     let state = Arc::new(AppState {
-        credential_management: Mutex::new(()),
         setup,
         management_token,
         startup,
@@ -357,12 +356,27 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
 }
 
 fn requires_management_authorization(method: &str, path: &str, test_shutdown: bool) -> bool {
-    !test_shutdown && !(method == "GET" && path == "/readyz")
+    !(test_shutdown || method == "GET" && path == "/readyz")
 }
 
 fn startup_not_ready_response(startup: &StartupReadiness) -> Option<Value> {
     let snapshot = startup.snapshot();
     (!snapshot.is_ready()).then(|| startup_response(&snapshot))
+}
+
+fn management_operation_label(path: &str) -> &str {
+    match path {
+        "/management/v1/prepare-local-state" => "初始化本地数据",
+        "/management/v1/codex/reauthorize" => "重新授权",
+        "/management/v1/codex/auth-channel" => "切换认证通道",
+        "/management/v1/codex/workspaces" => "创建工作区",
+        "/management/v1/codex/workspaces/activate" => "切换工作区",
+        "/management/v1/codex/launch" => "打开 Codex",
+        "/management/v1/codex/restart" => "重启 Codex",
+        "/management/v1/codex/restore-external-home" => "恢复用户环境",
+        "/management/v1/setup/verify-router" => "验证路由",
+        _ => "管理操作",
+    }
 }
 
 fn handle_management(
@@ -371,7 +385,37 @@ fn handle_management(
     body: &Value,
     state: &AppState,
 ) -> Result<Value, HttpError> {
+    // Setup owns its reservation in the background worker. Reads never reserve it.
+    let _operation = if method == "POST"
+        && !matches!(
+            path,
+            "/management/v1/setup/ensure-ready"
+                | "/management/v1/setup/retry"
+                | "/management/v1/codex/initialize"
+                | "/management/v1/workspace-discovery"
+        ) {
+        Some(
+            state_access::Operation::begin(management_operation_label(path)).map_err(|error| {
+                HttpError::coded(
+                    409,
+                    error.to_string(),
+                    "OPERATION_IN_PROGRESS",
+                    state_access::operation_state(),
+                )
+            })?,
+        )
+    } else {
+        None
+    };
     match (method, path) {
+        ("POST", "/management/v1/prepare-local-state") => {
+            state_access::initialize_local_data()
+                .map_err(|error| HttpError::new(409, format!("本地数据初始化失败：{error:#}")))?;
+            drop(_operation);
+            credential_state_value()
+        }
+        ("POST", "/management/v1/workspace-discovery") => credential::discover_workspaces()
+            .map_err(|error| HttpError::new(409, error.to_string())),
         ("GET", "/management/v1/setup/state") => serde_json::to_value(state.setup.state())
             .map_err(|error| HttpError::internal(error.to_string())),
         ("POST", "/management/v1/setup/ensure-ready") => ensure_codex_ready(state),
@@ -383,10 +427,6 @@ fn handle_management(
             Ok(json!({"opened": true}))
         }
         ("POST", "/management/v1/setup/retry") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
             let workspace_id = body
                 .get("workspaceId")
                 .and_then(Value::as_u64)
@@ -407,22 +447,14 @@ fn handle_management(
             .map_err(|error| HttpError::internal(error.to_string()))
         }
         ("POST", "/management/v1/setup/verify-router") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
             let workspace_id = body
                 .get("workspaceId")
                 .and_then(Value::as_u64)
                 .filter(|value| *value > 0)
                 .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?;
-            let credential_state = credential::state()
-                .map_err(|error| HttpError::new(409, format!("读取当前工作区授权失败：{error}")))?;
-            if !credential_state
-                .workspaces
-                .iter()
-                .any(|workspace| workspace.workspace_id == workspace_id && workspace.authorized)
-            {
+            let auth = baijimu_cli::auth_status()
+                .map_err(|error| HttpError::new(409, error.to_string()))?;
+            if !auth.authenticated || !auth.workspace_ids.contains(&workspace_id) {
                 return Err(HttpError::new(403, "当前设备授权不包含该工作区"));
             }
             let router_credential = credential::router_credential_for_workspace(workspace_id)
@@ -435,22 +467,12 @@ fn handle_management(
             )
             .map_err(|error| HttpError::internal(error.to_string()))
         }
-        ("GET", "/management/v1/credential-state") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
-            credential_state_value()
-        }
+        ("GET", "/management/v1/credential-state") => credential_state_value(),
         ("POST", "/management/v1/codex/restore-external-home") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
             if let Some(current) = user_environment::read_codex_home()
                 .map_err(|error| HttpError::new(409, error.to_string()))?
             {
-                let workspaces = codex_workspace::state(None)
+                let workspaces = codex_workspace::state()
                     .map_err(|error| HttpError::internal(error.to_string()))?;
                 if codex_home_is_registered(&current, &workspaces.workspaces) {
                     return Err(HttpError::new(
@@ -459,15 +481,18 @@ fn handle_management(
                     ));
                 }
             }
-            credential::restore_legacy_global_codex_home()
-                .map_err(|error| HttpError::new(409, error.to_string()))?;
+            {
+                let _write =
+                    state_access::write().map_err(|e| HttpError::internal(e.to_string()))?;
+                credential::restore_legacy_global_codex_home()
+                    .map_err(|error| HttpError::new(409, error.to_string()))?;
+            }
+            user_environment::notify_environment_change().map_err(|error| {
+                HttpError::new(409, format!("本地环境已恢复，但通知桌面进程失败：{error}"))
+            })?;
             credential_state_value()
         }
         ("POST", "/management/v1/codex/initialize") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
             let workspace_id = body
                 .get("workspaceId")
                 .and_then(Value::as_u64)
@@ -482,10 +507,6 @@ fn handle_management(
             .map_err(|error| HttpError::internal(error.to_string()))
         }
         ("POST", "/management/v1/codex/reauthorize") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
             ensure_default_workspace_ready(state, "重新授权")?;
             let workspace_id = body
                 .get("workspaceId")
@@ -508,18 +529,12 @@ fn handle_management(
             } else {
                 None
             };
-            if let Err(error) = credential::commit_workspace_reauthorization(prepared) {
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
-                if let Some(desktop_switch) = desktop_switch {
-                    desktop_switch
-                        .restart_workspace_if_needed(std::path::Path::new(
-                            &active_codex_workspace.codex_home,
-                        ))
-                        .map_err(desktop_compatibility_http_error)?;
-                }
-                return Err(HttpError::new(409, error.to_string()));
-            }
-            if let Err(error) = codex_workspace::refresh_auth_profile(&auth_profile_id) {
+            let commit_result = (|| -> anyhow::Result<()> {
+                let _write = state_access::write()?;
+                credential::commit_workspace_reauthorization(prepared)?;
+                codex_workspace::refresh_auth_profile(&auth_profile_id)
+            })();
+            if let Err(error) = commit_result {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
                 if let Some(desktop_switch) = desktop_switch {
                     desktop_switch
@@ -533,10 +548,6 @@ fn handle_management(
             credential_state_value()
         }
         ("POST", "/management/v1/codex/auth-channel") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
             ensure_default_workspace_ready(state, "切换认证通道")?;
             let profile_id = body
                 .get("authProfileId")
@@ -564,29 +575,25 @@ fn handle_management(
             } else {
                 None
             };
-            let switched =
-                match codex_workspace::switch_auth_profile(workspace_id, profile_id, is_active) {
-                    Ok(workspace) => workspace,
-                    Err(error) => {
-                        #[cfg(any(target_os = "macos", target_os = "windows"))]
-                        if let Some(desktop_switch) = desktop_switch {
-                            desktop_switch
-                                .restart_workspace_if_needed(std::path::Path::new(
-                                    &target.codex_home,
-                                ))
-                                .map_err(desktop_compatibility_http_error)?;
-                        }
-                        return Err(HttpError::new(409, error.to_string()));
+            let switched = match (|| -> anyhow::Result<_> {
+                let _write = state_access::write()?;
+                codex_workspace::switch_auth_profile(workspace_id, profile_id, is_active)
+            })() {
+                Ok(workspace) => workspace,
+                Err(error) => {
+                    #[cfg(any(target_os = "macos", target_os = "windows"))]
+                    if let Some(desktop_switch) = desktop_switch {
+                        desktop_switch
+                            .restart_workspace_if_needed(std::path::Path::new(&target.codex_home))
+                            .map_err(desktop_compatibility_http_error)?;
                     }
-                };
+                    return Err(HttpError::new(409, error.to_string()));
+                }
+            };
             let _ = switched;
             credential_state_value()
         }
         ("POST", "/management/v1/codex/workspaces") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
             ensure_default_workspace_ready(state, "新增工作区")?;
             let name = body
                 .get("name")
@@ -598,15 +605,15 @@ fn handle_management(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| HttpError::new(400, "必须提供 authProfileId"))?;
-            codex_workspace::create(name, profile_id)
-                .map_err(|error| HttpError::new(409, error.to_string()))?;
+            {
+                let _write =
+                    state_access::write().map_err(|e| HttpError::internal(e.to_string()))?;
+                codex_workspace::create(name, profile_id)
+                    .map_err(|error| HttpError::new(409, error.to_string()))?;
+            }
             credential_state_value()
         }
         ("POST", "/management/v1/codex/workspaces/activate") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
             ensure_default_workspace_ready(state, "打开工作区")?;
             let workspace_id = body
                 .get("codexWorkspaceId")
@@ -620,10 +627,6 @@ fn handle_management(
             credential_state_value()
         }
         ("POST", "/management/v1/codex/launch") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
             ensure_default_workspace_ready(state, "启动 Codex")?;
             let active = codex_workspace::active()
                 .map_err(|error| HttpError::internal(error.to_string()))?;
@@ -640,10 +643,6 @@ fn handle_management(
             }))
         }
         ("POST", "/management/v1/codex/restart") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
             ensure_default_workspace_ready(state, "重启 Codex")?;
             let active = codex_workspace::active()
                 .map_err(|error| HttpError::internal(error.to_string()))?;
@@ -662,15 +661,26 @@ fn handle_management(
     }
 }
 
+fn state_read_http_error(error: anyhow::Error) -> HttpError {
+    let committing = error.to_string().starts_with("STATE_COMMITTING:");
+    HttpError::coded(
+        if committing { 409 } else { 500 },
+        error.to_string(),
+        if committing {
+            "STATE_COMMITTING"
+        } else {
+            "STATE_UNAVAILABLE"
+        },
+        state_access::operation_state(),
+    )
+}
+
 fn credential_state_value() -> Result<Value, HttpError> {
+    let _read = state_access::read().map_err(state_read_http_error)?;
     let credential_state =
         credential::state().map_err(|error| HttpError::internal(error.to_string()))?;
-    let default_profile_id = credential_state
-        .active_profile
-        .as_ref()
-        .map(|profile| profile.profile_id.as_str());
-    let workspace_state = codex_workspace::state(default_profile_id)
-        .map_err(|error| HttpError::internal(error.to_string()))?;
+    let workspace_state =
+        codex_workspace::state().map_err(|error| HttpError::internal(error.to_string()))?;
     let intentional_environment_projection = credential_state
         .external_codex_home
         .as_deref()
@@ -703,6 +713,11 @@ fn credential_state_value() -> Result<Value, HttpError> {
         value["legacyGlobalCodexHome"]["restoreRequired"] = Value::Bool(false);
         value["legacyGlobalCodexHome"]["canRestore"] = Value::Bool(false);
     }
+    value["operation"] = state_access::operation_state();
+    value["localDataInitialization"] = state_access::initialization_state();
+    value["localDataReady"] = Value::Bool(
+        state_access::local_data_ready().map_err(|e| HttpError::internal(e.to_string()))?,
+    );
     Ok(value)
 }
 
@@ -713,7 +728,9 @@ fn codex_home_is_registered(home: &Path, workspaces: &[codex_workspace::CodexWor
 }
 
 fn ensure_default_workspace_ready(state: &AppState, operation: &str) -> Result<(), HttpError> {
-    if state.setup.state().status == "succeeded" {
+    if state.setup.state().status == "succeeded"
+        && state_access::local_data_ready().map_err(|e| HttpError::new(409, e.to_string()))?
+    {
         return Ok(());
     }
     Err(HttpError::new(
@@ -737,7 +754,7 @@ fn desktop_compatibility_http_error(error: anyhow::Error) -> HttpError {
             }),
         );
     }
-    HttpError::new(409, error.to_string())
+    HttpError::new(409, format!("{error:#}"))
 }
 
 fn setup_readiness_value(
@@ -753,21 +770,26 @@ fn setup_readiness_value(
 }
 
 fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
-    let _credential_guard = state
-        .credential_management
-        .lock()
-        .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
-    let credential_state = credential::state()
-        .map_err(|error| HttpError::new(409, format!("读取当前工作区授权失败：{error}")))?;
-    let current_workspace_id = credential_state.current_workspace_id;
-    let current_workspace_authorized = current_workspace_id.is_some_and(|workspace_id| {
-        credential_state
-            .workspaces
-            .iter()
-            .any(|workspace| workspace.workspace_id == workspace_id && workspace.authorized)
-    });
+    // This is an explicit command. Local migration/bootstrap never occurs in GET.
+    let local_ready = {
+        let _read = state_access::read().map_err(state_read_http_error)?;
+        state_access::local_data_ready().map_err(|e| HttpError::new(409, e.to_string()))?
+    };
+    if !local_ready {
+        let _operation = state_access::Operation::begin("初始化本地数据")
+            .map_err(|e| HttpError::new(409, e.to_string()))?;
+        state_access::initialize_local_data()
+            .map_err(|e| HttpError::new(409, format!("本地数据初始化失败：{e:#}")))?;
+    }
+    let auth = baijimu_cli::auth_status().map_err(|e| HttpError::new(409, e.to_string()))?;
+    let current_workspace_id = auth.current_workspace_id;
+    let current_workspace_authorized = auth.authenticated
+        && current_workspace_id.is_some_and(|id| auth.workspace_ids.contains(&id));
     let setup_status = state.setup.state();
-    let workspace_ready = current_workspace_id.is_some_and(credential::codex_ready_for_workspace);
+    let workspace_ready = {
+        let _read = state_access::read().map_err(state_read_http_error)?;
+        current_workspace_id.is_some_and(credential::codex_ready_for_workspace)
+    };
     match decide_setup_readiness(
         &setup_status,
         current_workspace_id,
@@ -1256,5 +1278,158 @@ mod project_state_tests {
         assert_eq!(resolved[1].project_id.as_deref(), Some("remote-project-id"));
         assert_eq!(resolved[2].path, legacy_root.display().to_string());
         assert_eq!(resolved[2].project_id, None);
+    }
+}
+
+#[cfg(test)]
+mod query_isolation_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    struct Fixture {
+        root: PathBuf,
+        env: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+    impl Fixture {
+        fn new() -> Self {
+            let root = env::temp_dir().join(format!(
+                "codex-query-isolation-{}-{}",
+                std::process::id(),
+                timestamp()
+            ));
+            fs::create_dir_all(&root).unwrap();
+            let values = [
+                ("HOME", root.join("user")),
+                ("USERPROFILE", root.join("user")),
+                ("BAIJIMU_CONFIG_HOME", root.join("config")),
+                ("BAIJIMU_LOCAL_APP_DATA_DIR", root.join("data")),
+                ("CODEX_HOME", root.join("existing-codex")),
+                (
+                    "CODEX_DESKTOP_BAIJIMU_BINARY",
+                    root.join("must-not-call-cli"),
+                ),
+            ];
+            let env = values
+                .into_iter()
+                .map(|(name, value)| {
+                    let previous = env::var_os(name);
+                    env::set_var(name, value);
+                    (name, previous)
+                })
+                .collect();
+            Self { root, env }
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            for (name, value) in &self.env {
+                if let Some(value) = value {
+                    env::set_var(name, value);
+                } else {
+                    env::remove_var(name);
+                }
+            }
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+    fn snapshot(root: &Path) -> BTreeMap<PathBuf, (Vec<u8>, SystemTime)> {
+        let mut result = BTreeMap::new();
+        if root.exists() {
+            for entry in fs::read_dir(root).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    result.extend(snapshot(&path));
+                } else {
+                    result.insert(
+                        path.clone(),
+                        (
+                            fs::read(&path).unwrap(),
+                            fs::metadata(path).unwrap().modified().unwrap(),
+                        ),
+                    );
+                }
+            }
+        }
+        result
+    }
+    #[test]
+    fn queries_are_pure_during_a_long_operation_and_fail_fast_during_commits() {
+        let _env = user_environment::TEST_ENVIRONMENT_LOCK.lock().unwrap();
+        let fixture = Fixture::new();
+        let before = snapshot(&fixture.root);
+        let empty = credential_state_value().unwrap();
+        assert_eq!(empty["localDataReady"], false);
+        assert_eq!(empty["codexWorkspaces"], json!([]));
+        assert_eq!(
+            snapshot(&fixture.root),
+            before,
+            "first GET must not bootstrap"
+        );
+
+        let app = AppState {
+            setup: setup::SetupManager::load(),
+            management_token: "test-only-token".to_string(),
+            startup: StartupReadiness::initializing(),
+        };
+        let prepared = handle_management(
+            "POST",
+            "/management/v1/prepare-local-state",
+            &json!({}),
+            &app,
+        )
+        .unwrap();
+        assert_eq!(prepared["operation"]["running"], false);
+        assert_eq!(prepared["localDataInitialization"]["status"], "ready");
+        let initialized = snapshot(&fixture.root);
+        let operation = state_access::Operation::begin("等待桌面进程退出").unwrap();
+        let started = Instant::now();
+        let response = thread::spawn(credential_state_value)
+            .join()
+            .unwrap()
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(response["operation"]["running"], true);
+        assert_eq!(response["localDataReady"], true);
+        assert!(state_access::Operation::begin("并发切换").is_err());
+        assert_eq!(snapshot(&fixture.root), initialized);
+        {
+            let _commit = state_access::write().unwrap();
+            let error = thread::spawn(credential_state_value)
+                .join()
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.status, 409);
+            assert_eq!(error.code, Some(json!("STATE_COMMITTING")));
+        }
+        drop(operation);
+        for _ in 0..3 {
+            assert!(credential_state_value().is_ok());
+        }
+        assert_eq!(snapshot(&fixture.root), initialized);
+
+        // Explicit initialization is idempotent, including catalog timestamps.
+        state_access::initialize_local_data().unwrap();
+        assert_eq!(snapshot(&fixture.root), initialized);
+        fs::write(
+            fixture.root.join("data/codex-credentials.json"),
+            b"{invalid",
+        )
+        .unwrap();
+        let corrupt = snapshot(&fixture.root);
+        assert!(credential_state_value().is_err());
+        assert_eq!(
+            snapshot(&fixture.root),
+            corrupt,
+            "GET must not repair corrupt files"
+        );
+        assert!(handle_management(
+            "POST",
+            "/management/v1/prepare-local-state",
+            &json!({}),
+            &app
+        )
+        .is_err());
+        assert_eq!(state_access::initialization_state()["status"], "failed");
+        assert_eq!(snapshot(&fixture.root), corrupt);
     }
 }

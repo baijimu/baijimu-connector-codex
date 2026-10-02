@@ -178,8 +178,7 @@ if ($targets.Count -eq 0) { throw 'Windows 已接受 codex: 协议请求，但�
             "-Command",
             &complete,
         ]);
-        let output = command
-            .output()
+        let output = crate::child_process::output(&mut command, std::time::Duration::from_secs(25))
             .context("启动 PowerShell 管理 ChatGPT/Codex 桌面进程失败")?;
         if !output.status.success() {
             anyhow::bail!(
@@ -291,10 +290,12 @@ mod platform {
     }
 
     fn plist_value(path: &Path, key: &str) -> Result<String> {
-        let output = Command::new("/usr/libexec/PlistBuddy")
-            .args(["-c", &format!("Print :{key}")])
-            .arg(path.join("Contents/Info.plist"))
-            .output()?;
+        let output = crate::child_process::output(
+            Command::new("/usr/libexec/PlistBuddy")
+                .args(["-c", &format!("Print :{key}")])
+                .arg(path.join("Contents/Info.plist")),
+            Duration::from_secs(5),
+        )?;
         if !output.status.success() {
             anyhow::bail!("读取桌面应用 {key} 失败：{}", command_error(&output));
         }
@@ -304,16 +305,18 @@ mod platform {
     }
 
     fn is_running(bundle_id: &str) -> Result<bool> {
-        let output = Command::new("/usr/bin/lsappinfo")
-            .args(["info", "-only", "pid", bundle_id])
-            .output()?;
+        let output = crate::child_process::output(
+            Command::new("/usr/bin/lsappinfo").args(["info", "-only", "pid", bundle_id]),
+            Duration::from_secs(5),
+        )?;
         Ok(String::from_utf8_lossy(&output.stdout)
             .lines()
             .any(|line| line.trim().starts_with("\"pid\"=") && !line.contains("[ NULL ]")))
     }
 
     fn run_checked(command: &mut Command, context: &str) -> Result<()> {
-        let output = command.output().with_context(|| context.to_string())?;
+        let output = crate::child_process::output(command, Duration::from_secs(20))
+            .with_context(|| context.to_string())?;
         if !output.status.success() {
             anyhow::bail!("{context}：{}", command_error(&output));
         }

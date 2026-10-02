@@ -81,23 +81,30 @@ pub fn auth_status() -> Result<AuthStatus> {
 }
 
 pub fn list_workspaces() -> Result<Vec<Workspace>> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut page = 1_u64;
     let mut expected_current_workspace = None;
     let mut workspaces = BTreeMap::new();
     loop {
         let page_text = page.to_string();
         let page_size_text = WORKSPACE_PAGE_SIZE.to_string();
-        let contract: WorkspaceListContract = run_cmodel_json(
+        let contract: WorkspaceListContract = cmodel_data(
+            run_json_with_timeout(
+                "workspace list",
+                &[
+                    "workspace",
+                    "list",
+                    "--json",
+                    "--page",
+                    &page_text,
+                    "--page-size",
+                    &page_size_text,
+                ],
+                deadline
+                    .checked_duration_since(std::time::Instant::now())
+                    .context("工作区发现超过 15 秒期限")?,
+            )?,
             "workspace list",
-            &[
-                "workspace",
-                "list",
-                "--json",
-                "--page",
-                &page_text,
-                "--page-size",
-                &page_size_text,
-            ],
         )?;
         let result = WorkspacePage {
             current_workspace_id: contract.current_workspace_id,
@@ -194,10 +201,16 @@ fn run_json<T>(operation: &str, args: &[&str]) -> Result<T>
 where
     T: DeserializeOwned,
 {
-    let output = command()?
-        .args(args)
-        .output()
-        .with_context(|| format!("启动 baijimu CLI {operation} 失败；请检查平台管理的 CLI 安装"))?;
+    run_json_with_timeout(operation, args, std::time::Duration::from_secs(10))
+}
+
+fn run_json_with_timeout<T: DeserializeOwned>(
+    operation: &str,
+    args: &[&str],
+    timeout: std::time::Duration,
+) -> Result<T> {
+    let output = crate::child_process::output(command()?.args(args), timeout)
+        .map_err(|error| anyhow::anyhow!("baijimu CLI {operation} 执行失败：{error:#}"))?;
     if !output.status.success() {
         let detail = compact_error(&String::from_utf8_lossy(&output.stderr));
         bail!(

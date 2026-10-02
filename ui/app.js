@@ -34,6 +34,7 @@ const elementIds = [
 const elements = Object.fromEntries(elementIds.map((id) => [id, document.getElementById(id)]));
 
 let credentialState = null;
+let workspaceDiscovery = null;
 let setupState = null;
 let setupMonitorGeneration = 0;
 let selectedAuthProfileId = null;
@@ -379,7 +380,7 @@ async function createCodexWorkspace() {
   clearNotices();
   setAccountBusy(true);
   try {
-    credentialState = normalizeCredentialState(
+    credentialState = credentialView(
       await invokeManagement("createCodexWorkspace", request),
     );
     renderCredentialState();
@@ -402,7 +403,7 @@ async function activateCodexWorkspace(codexWorkspaceId) {
   elements["codex-operation-message"].textContent = "正在关闭现有 Codex 并设置目标工作区目录；系统通知完成前请稍候。";
   elements["codex-operation-progress"].hidden = false;
   try {
-    credentialState = normalizeCredentialState(await invokeManagement(
+    credentialState = credentialView(await invokeManagement(
       "activateCodexWorkspace",
       { codexWorkspaceId },
     ));
@@ -450,10 +451,22 @@ async function launchCodex() {
   }
 }
 
+function credentialView(local) {
+  if (!workspaceDiscovery) return normalizeCredentialState(local);
+  return normalizeCredentialState({
+    ...local,
+    ...workspaceDiscovery,
+    workspaces: (workspaceDiscovery.workspaces || []).map((workspace) => ({
+      ...workspace,
+      configured: local.workspaces?.find((item) => item.workspaceId === workspace.workspaceId)?.configured === true,
+    })),
+  });
+}
+
 function renderCredentialState() {
   const state = credentialState;
   renderCodexWorkspaces();
-  setMessage("warning", state?.discoveryWarning || "");
+  setMessage("warning", workspaceDiscovery?.discoveryWarning || state?.discoveryWarning || "");
   const migration = state?.legacyGlobalCodexHome;
   elements["legacy-home-migration"].hidden = !migration?.restoreRequired;
   if (migration?.restoreRequired) {
@@ -506,7 +519,7 @@ async function switchAuthChannel(request) {
   elements["codex-operation-progress"].hidden = false;
   try {
     const response = await invokeManagement("switchAuthChannel", request);
-    credentialState = normalizeCredentialState(response);
+    credentialState = credentialView(response);
     renderCredentialState();
     setMessage("message", "目标工作区的认证通道已切换；其他工作区保持不变。");
   } catch (error) {
@@ -563,7 +576,7 @@ async function reauthorizeWorkspace(workspaceId) {
   clearNotices();
   setAccountBusy(true);
   try {
-    credentialState = normalizeCredentialState(
+    credentialState = credentialView(
       await invokeManagement("reauthorizeWorkspace", { workspaceId }),
     );
     renderCredentialState();
@@ -762,15 +775,28 @@ async function loadState({ ensureReady = false, monitor = true } = {}) {
   clearNotices();
   setAccountBusy(true);
   try {
-    const [credential, setup] = await Promise.all([
+    let [credential, setup] = await Promise.all([
       invokeManagement("credentialState"),
       invokeManagement("setupState"),
     ]);
-    credentialState = normalizeCredentialState(credential);
+    if (ensureReady && credential.localDataReady === false) {
+      credential = await invokeManagement("prepareLocalState", {});
+    }
+    workspaceDiscovery = null;
+    credentialState = credentialView(credential);
     setupState = setup;
+    // Render local state first; discovery failure must not hide it or reuse old authorization.
     renderCredentialState();
     renderSetupState();
-    if (ensureReady) await ensureCodexReady();
+    try {
+      workspaceDiscovery = await invokeManagement("discoverWorkspaces", {});
+    } catch (error) {
+      workspaceDiscovery = { workspaces: [], discoveryWarning: errorMessage(error) };
+    }
+    credentialState = credentialView(credential);
+    renderCredentialState();
+    renderSetupState();
+    if (ensureReady && !credential.operation?.running) await ensureCodexReady();
     else if (monitor && (
       setupState?.status === "running"
       || (setupState?.status === "succeeded" && setupState?.completedAtEpochSeconds == null)
@@ -848,7 +874,7 @@ async function restoreExternalCodexHome() {
   clearNotices();
   setAccountBusy(true);
   try {
-    credentialState = normalizeCredentialState(
+    credentialState = credentialView(
       await invokeManagement("restoreExternalCodexHome", {}),
     );
     renderCredentialState();

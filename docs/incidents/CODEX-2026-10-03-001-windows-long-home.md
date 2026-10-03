@@ -76,7 +76,7 @@ Error: read ENOTCONN
 - 原 Home 和用户原有另一份 `~/.codex` 均保留。新 Home 长度 56，故障会话 visualization 目录长度 119。
 - 工作区登记、原始 Home 记录及用户 CODEX_HOME 三者回读一致；管理器本地状态 ready，Codex 配置有效。
 - 启动后第一次同步 Git/窗口检查出现超时。随后使用与故障复现相同的异步 spawn：用户目录 1,348 ms、迁移目录 1,546 ms，均正常退出且无 ENOENT/ENOTCONN。首次启动延迟未据此认定已根治。
-- Codex 窗口正常响应，没有 Error 弹窗；最近会话列表中原 ERP 会话存在。本地 app-server 初始化连接成功。
+- Codex 窗口正常响应，没有 Error 弹窗；原 ERP 会话已重新打开，`thread/resume` 在 572 ms 内成功返回且 errorCode=null。本地 app-server 初始化连接成功。
 - 启动日志另有插件 Git 同步超时、GitHub HTTP 429 与 MCP 握手超时；属于未在本次迁移中修复的独立问题。未发起 ERP 业务部署或续跑消息，业务任务继续执行仍由用户验证。
 
 ## 回滚

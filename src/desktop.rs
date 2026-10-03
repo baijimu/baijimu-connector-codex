@@ -81,7 +81,11 @@ function Get-CodexDesktopProcesses {
         $selected = $true
         $candidate
       }
-    } catch { continue }
+    } catch {
+      # Ignore a process that exited during discovery, not access/inspection
+      # failures for a live candidate: those must not look like "not running".
+      if (-not $candidate.HasExited) { throw }
+    }
     finally {
       if (-not $selected) { $candidate.Dispose() }
     }

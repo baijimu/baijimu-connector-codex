@@ -276,6 +276,35 @@ try {{
         }
 
         #[test]
+        fn inspection_failure_for_a_live_candidate_is_not_treated_as_absence() {
+            let fixture = STOP_FIXTURE
+                .split_once("function Get-CodexDesktopProcesses")
+                .unwrap()
+                .0;
+            let script = format!(
+                r#"{fixture}
+function Get-Process {{ param([string]$Name) $fixture }}
+function Get-AuthenticodeSignature {{ throw 'fixture-signature-inspection-failure' }}
+$propagated = $false
+try {{
+  Get-CodexDesktopProcesses | Out-Null
+}} catch {{
+  if (-not $_.Exception.Message.Contains('fixture-signature-inspection-failure')) {{ throw }}
+  $propagated = $true
+}} finally {{
+  if (-not $retained.HasExited) {{ $retained.Kill(); [void]$retained.WaitForExit(5000) }}
+  $retained.Dispose()
+  $fixture.Dispose()
+}}
+$propagated | ConvertTo-Json -Compress
+"#
+            );
+            let propagated: bool =
+                crate::json_compat::from_slice(&run_powershell(&script).unwrap()).unwrap();
+            assert!(propagated);
+        }
+
+        #[test]
         fn launch_only_activates_the_preselected_windows_workspace() {
             let source = format!("{POWERSHELL_PREAMBLE}\n{STOP_SCRIPT}\n{LAUNCH_SCRIPT}");
             assert!(source.contains("Start-Process -FilePath \"${codexDesktopProtocol}:\""));

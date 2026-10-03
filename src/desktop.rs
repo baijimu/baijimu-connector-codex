@@ -60,38 +60,63 @@ function Get-CodexDesktopProcesses {
   $candidates = @($codexDesktopProcessNames | ForEach-Object {
     Get-Process -Name $_ -ErrorAction SilentlyContinue
   } | Sort-Object Id -Unique)
-  $trustedPaths = @($candidates | ForEach-Object {
+  $trustedPaths = @{}
+  foreach ($candidate in $candidates) {
+    $selected = $false
     try {
-      $path = $_.Path
-      if ([string]::IsNullOrWhiteSpace($path) -or [System.IO.Path]::GetExtension($path) -ne '.exe') { return }
-      $signature = Get-AuthenticodeSignature -LiteralPath $path
-      if ($signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid -and
+      # Keep the original process handle: a PID lookup is not proof of liveness.
+      [void]$candidate.Handle
+      if ($candidate.HasExited) { continue }
+      $path = $candidate.Path
+      if ([string]::IsNullOrWhiteSpace($path) -or [System.IO.Path]::GetExtension($path) -ne '.exe') { continue }
+      if (-not $trustedPaths.ContainsKey($path)) {
+        $signature = Get-AuthenticodeSignature -LiteralPath $path
+        $trustedPaths[$path] = (
+          $signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid -and
           $signature.SignerCertificate -and
-          $codexDesktopTrustedSignerSubjects -contains ([string]$signature.SignerCertificate.Subject)) {
-        return $path
+          $codexDesktopTrustedSignerSubjects -contains ([string]$signature.SignerCertificate.Subject)
+        )
       }
-    } catch { return }
-  } | Sort-Object -Unique)
-  @($candidates | Where-Object {
-      try {
-        $path = $_.Path
-        $path -and $trustedPaths -contains $path
-      } catch { $false }
-    } | Sort-Object Id -Unique)
+      if ($trustedPaths[$path] -and -not $candidate.HasExited) {
+        $selected = $true
+        $candidate
+      }
+    } catch {
+      # Ignore a process that exited during discovery, not access/inspection
+      # failures for a live candidate: those must not look like "not running".
+      if (-not $candidate.HasExited) { throw }
+    }
+    finally {
+      if (-not $selected) { $candidate.Dispose() }
+    }
+  }
 }
 "#;
 
     const STOP_SCRIPT: &str = r#"
 $targets = @(Get-CodexDesktopProcesses)
-$wasRunning = $targets.Count -gt 0
-if ($wasRunning) {
-  $targets | Stop-Process -Force -ErrorAction Stop
-  $deadline = (Get-Date).AddSeconds(15)
-  do {
-    $remaining = @(Get-Process -Id $targets.Id -ErrorAction SilentlyContinue)
-    if ($remaining.Count -gt 0) { Start-Sleep -Milliseconds 250 }
-  } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
-  if ($remaining.Count -gt 0) { throw 'ChatGPT/Codex 桌面应用进程未在 15 秒内停止' }
+$wasRunning = $false
+$stopClock = [System.Diagnostics.Stopwatch]::StartNew()
+try {
+  foreach ($target in $targets) {
+    if ($target.HasExited) { continue }
+    $wasRunning = $true
+    try { $target.Kill() }
+    catch {
+      # Exiting between the liveness check and Kill is already success.
+      if (-not $target.HasExited) { throw }
+    }
+  }
+  foreach ($target in $targets) {
+    if ($target.HasExited) { continue }
+    $remainingMs = [Math]::Max(0, 15000 - $stopClock.ElapsedMilliseconds)
+    if (-not $target.WaitForExit([int]$remainingMs)) {
+      throw "ChatGPT/Codex 桌面应用进程未在 15 秒内停止 (PID $($target.Id))"
+    }
+  }
+} finally {
+  foreach ($target in $targets) { $target.Dispose() }
+  $stopClock.Stop()
 }
 [pscustomobject]@{ wasRunning = $wasRunning } | ConvertTo-Json -Compress
 "#;
@@ -101,12 +126,14 @@ Start-Process -FilePath "${codexDesktopProtocol}:"
 $deadline = (Get-Date).AddSeconds(10)
 do {
   $targets = @(Get-CodexDesktopProcesses)
-  if ($targets.Count -eq 0) { Start-Sleep -Milliseconds 100 }
-} while ($targets.Count -eq 0 -and (Get-Date) -lt $deadline)
-if ($targets.Count -eq 0) { throw 'Windows 已接受 codex: 协议请求，但可信 ChatGPT/Codex 桌面进程未在 10 秒内出现' }
+  $processCount = $targets.Count
+  foreach ($target in $targets) { $target.Dispose() }
+  if ($processCount -eq 0) { Start-Sleep -Milliseconds 100 }
+} while ($processCount -eq 0 -and (Get-Date) -lt $deadline)
+if ($processCount -eq 0) { throw 'Windows 已接受 codex: 协议请求，但可信 ChatGPT/Codex 桌面进程未在 10 秒内出现' }
 [pscustomobject]@{
   activationAccepted = $true
-  processCount = $targets.Count
+  processCount = $processCount
 } | ConvertTo-Json -Compress
 "#;
 
@@ -192,6 +219,91 @@ if ($targets.Count -eq 0) { throw 'Windows 已接受 codex: 协议请求，但�
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        const STOP_FIXTURE: &str = r#"
+$fixture = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 60') -PassThru -WindowStyle Hidden
+[void]$fixture.Handle
+$retained = [System.Diagnostics.Process]::GetProcessById($fixture.Id)
+[void]$retained.Handle
+function Get-CodexDesktopProcesses { @($fixture) }
+# Reproduce the device's stale PID enumeration deterministically while retaining
+# a real native process handle. Kernel enumeration after exit varies by host.
+function Get-Process {
+  param([int[]]$Id)
+  if ($Id -contains $retained.Id) { $retained }
+}
+"#;
+
+        fn verify_stop_with_retained_handle(already_exited: bool) {
+            let before_stop = if already_exited {
+                r#"
+$fixture.Kill()
+if (-not $fixture.WaitForExit(5000)) { throw 'Fixture did not exit' }
+$enumerated = @(Get-Process -Id $fixture.Id -ErrorAction SilentlyContinue)
+if ($enumerated.Count -ne 1 -or -not $enumerated[0].HasExited) {
+  throw 'Fixture must reproduce an enumerated but exited process'
+}
+"#
+            } else {
+                ""
+            };
+            let script = format!(
+                r#"{STOP_FIXTURE}
+try {{
+  {before_stop}
+  {STOP_SCRIPT}
+  if (-not $retained.HasExited) {{ throw 'Original process is still running' }}
+}} finally {{
+  if (-not $retained.HasExited) {{ $retained.Kill(); [void]$retained.WaitForExit(5000) }}
+  $retained.Dispose()
+  $fixture.Dispose()
+}}
+"#
+            );
+            let result: StopResult =
+                crate::json_compat::from_slice(&run_powershell(&script).unwrap()).unwrap();
+            assert_eq!(result.was_running, !already_exited);
+        }
+
+        #[test]
+        fn stopping_a_process_does_not_wait_for_its_retained_pid_record() {
+            verify_stop_with_retained_handle(false);
+        }
+
+        #[test]
+        fn an_already_exited_process_is_not_reported_as_running() {
+            verify_stop_with_retained_handle(true);
+        }
+
+        #[test]
+        fn inspection_failure_for_a_live_candidate_is_not_treated_as_absence() {
+            let fixture = STOP_FIXTURE
+                .split_once("function Get-CodexDesktopProcesses")
+                .unwrap()
+                .0;
+            let script = format!(
+                r#"{fixture}
+function Get-Process {{ param([string]$Name) $fixture }}
+function Get-AuthenticodeSignature {{ throw 'fixture-signature-inspection-failure' }}
+$propagated = $false
+try {{
+  Get-CodexDesktopProcesses | Out-Null
+}} catch {{
+  if (-not $_.Exception.Message.Contains('fixture-signature-inspection-failure')) {{ throw }}
+  $propagated = $true
+}} finally {{
+  if (-not $retained.HasExited) {{ $retained.Kill(); [void]$retained.WaitForExit(5000) }}
+  $retained.Dispose()
+  $fixture.Dispose()
+}}
+$propagated | ConvertTo-Json -Compress
+"#
+            );
+            let propagated: bool =
+                crate::json_compat::from_slice(&run_powershell(&script).unwrap()).unwrap();
+            assert!(propagated);
+        }
+
         #[test]
         fn launch_only_activates_the_preselected_windows_workspace() {
             let source = format!("{POWERSHELL_PREAMBLE}\n{STOP_SCRIPT}\n{LAUNCH_SCRIPT}");

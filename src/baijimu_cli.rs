@@ -212,7 +212,7 @@ fn run_json_with_timeout<T: DeserializeOwned>(
     let output = crate::child_process::output(command()?.args(args), timeout)
         .map_err(|error| anyhow::anyhow!("baijimu CLI {operation} 执行失败：{error:#}"))?;
     if !output.status.success() {
-        let detail = compact_error(&String::from_utf8_lossy(&output.stderr));
+        let detail = command_failure(&output.stdout, &output.stderr);
         bail!(
             "baijimu CLI {operation} 失败{}",
             if detail.is_empty() {
@@ -287,9 +287,82 @@ fn compact_error(value: &str) -> String {
         .collect()
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CliFailureEnvelope {
+    contract_version: String,
+    error_code: baijimu_cmodel_core::ErrorCode,
+    data: Option<CliFailureDetails>,
+}
+
+#[derive(Deserialize)]
+struct CliFailureDetails {
+    message: Option<String>,
+}
+
+fn command_failure(stdout: &[u8], stderr: &[u8]) -> String {
+    let mut details = Vec::new();
+    // Read only failure fields; stdout can contain secret delivery on success.
+    if let Ok(response) = crate::json_compat::from_slice::<CliFailureEnvelope>(stdout) {
+        if response.contract_version == "1.0.0" && response.error_code.as_str() != "0" {
+            details.push(response.error_code.to_string());
+            if let Some(message) = response.data.and_then(|data| data.message) {
+                details.push(message);
+            }
+        }
+    } else if let Ok(response) = crate::json_compat::from_slice::<serde_json::Value>(stdout) {
+        if response["error"]["kind"] == "CLIENT_ERROR" {
+            if let Some(message) = response["error"]["message"].as_str() {
+                details.push(message.to_string());
+            }
+        }
+    }
+    let diagnostic = crate::json_compat::from_slice::<serde_json::Value>(stderr).ok();
+    if let Some(diagnostic) = diagnostic.filter(|value| value["kind"] == "REQUEST_CONTEXT") {
+        if let Some(message) = diagnostic["message"].as_str() {
+            details.push(message.to_string());
+        }
+    } else {
+        let text = String::from_utf8_lossy(stderr);
+        if !text.trim().is_empty() {
+            details.push(text.trim().to_string());
+        }
+    }
+    compact_error(&details.join("；"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_failure_preserves_owner_code_and_request_context_without_dumping_stdout() {
+        let stdout = br#"{"contractVersion":"1.0.0","errorCode":"FORBIDDEN","data":null}"#;
+        let stderr = r#"{"kind":"REQUEST_CONTEXT","context":{"workspaceId":1560,"projectId":8073},"message":"本次请求工作区 1560，项目 8073；请用 --workspace-id 选择目标"}"#.as_bytes();
+        let detail = command_failure(stdout, stderr);
+        assert!(detail.contains("FORBIDDEN"));
+        assert!(detail.contains("1560"));
+        assert!(detail.contains("8073"));
+        assert!(detail.contains("--workspace-id"));
+        let secret = br#"{"contractVersion":"1.0.0","errorCode":"0","data":{"credential":"fixture-secret"}}"#;
+        assert!(!command_failure(secret, b"process failed").contains("fixture-secret"));
+        let failure = br#"{"contractVersion":"1.0.0","errorCode":"DENIED","data":{"message":"scope denied","credential":"fixture-secret"}}"#;
+        let detail = command_failure(failure, b"");
+        assert!(detail.contains("DENIED"));
+        assert!(detail.contains("scope denied"));
+        assert!(!detail.contains("fixture-secret"));
+    }
+
+    #[test]
+    fn cli_failure_preserves_local_error_and_handles_non_json_stderr() {
+        let stdout =
+            br#"{"error":{"kind":"CLIENT_ERROR","message":"workspace 999 has no credential"}}"#;
+        assert!(command_failure(stdout, b"").contains("999"));
+        assert_eq!(
+            command_failure(b"invalid output", b"cannot start process"),
+            "cannot start process"
+        );
+    }
 
     #[test]
     fn auth_status_contract_requires_owned_fields_and_normalizes_ids() {

@@ -319,5 +319,5 @@ test("status reads never reactivate archived workspace credentials", async () =>
   assert.doesNotMatch(loadMetadata, /ensure_workspace_config|sync_credential_to_shared_home|commit_shared_home_ownership/);
   assert.doesNotMatch(loadMetadata, /reconcile_active_profile_from_shared_home|save_metadata|migrate_|capture_|ensure_|remove_file/);
   assert.match(credential, /credential_status: "login_required"/);
-  assert.match(credential, /forced_login_method: Some\("chatgpt"\.to_string\(\)\)/);
+  assert.doesNotMatch(credential, /document\["forced_login_method"\]\s*=|forced_login_method: Some/);
 });

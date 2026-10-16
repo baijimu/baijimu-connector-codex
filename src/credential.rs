@@ -76,7 +76,6 @@ impl Default for CredentialMetadata {
 #[serde(rename_all = "camelCase")]
 struct AuthConfigSnapshot {
     model_provider: Option<String>,
-    forced_login_method: Option<String>,
     cli_auth_credentials_store: Option<String>,
     router_provider_item: Option<String>,
 }
@@ -814,7 +813,7 @@ fn ensure_workspace_config(path: &Path) -> Result<()> {
     };
     document["model_provider"] = value(product.router_provider.as_str());
     document["cli_auth_credentials_store"] = value("file");
-    document["forced_login_method"] = value("api");
+    document.remove("forced_login_method");
     if document
         .get("model_providers")
         .and_then(Item::as_table)
@@ -855,7 +854,6 @@ fn managed_config_ready(path: &Path) -> bool {
             doc.get("model_provider").and_then(Item::as_str)
                 == Some(product.router_provider.as_str())
                 && doc.get("cli_auth_credentials_store").and_then(Item::as_str) == Some("file")
-                && doc.get("forced_login_method").and_then(Item::as_str) == Some("api")
                 && doc
                     .get("model_providers")
                     .and_then(Item::as_table)
@@ -1300,10 +1298,6 @@ fn capture_auth_config(path: &Path) -> Result<AuthConfigSnapshot> {
             .get("model_provider")
             .and_then(Item::as_str)
             .map(ToOwned::to_owned),
-        forced_login_method: document
-            .get("forced_login_method")
-            .and_then(Item::as_str)
-            .map(ToOwned::to_owned),
         cli_auth_credentials_store: document
             .get("cli_auth_credentials_store")
             .and_then(Item::as_str)
@@ -1370,11 +1364,8 @@ fn apply_auth_config(path: &Path, snapshot: &AuthConfigSnapshot) -> Result<()> {
         "model_provider",
         snapshot.model_provider.as_deref(),
     );
-    set_optional_string(
-        &mut document,
-        "forced_login_method",
-        snapshot.forced_login_method.as_deref(),
-    );
+    // Older profile snapshots may contain a login lock. Never restore it.
+    document.remove("forced_login_method");
     set_optional_string(
         &mut document,
         "cli_auth_credentials_store",
@@ -1524,7 +1515,6 @@ fn ensure_chatgpt_profile(metadata: &mut CredentialMetadata) -> Result<bool> {
 fn chatgpt_login_config() -> AuthConfigSnapshot {
     AuthConfigSnapshot {
         model_provider: None,
-        forced_login_method: Some("chatgpt".to_string()),
         cli_auth_credentials_store: None,
         router_provider_item: None,
     }
@@ -1556,11 +1546,10 @@ fn reconcile_active_profile_from_shared_home(metadata: &mut CredentialMetadata) 
             .as_deref()
             .is_some_and(|auth| auth_summary(auth).is_ok_and(|summary| summary.configured))
             && live_workspace_profile.is_none();
-        let personal_config = config.forced_login_method.as_deref() == Some("chatgpt")
-            || matches!(
-                config.cli_auth_credentials_store.as_deref(),
-                Some("keyring" | "auto")
-            );
+        let personal_config = matches!(
+            config.cli_auth_credentials_store.as_deref(),
+            Some("keyring" | "auto")
+        );
         (personal_live_auth || personal_config).then(|| {
             metadata
                 .profiles
@@ -2819,6 +2808,59 @@ mod shared_home_tests {
     }
 
     #[test]
+    fn auth_channel_switches_remove_login_locks_including_legacy_snapshots() {
+        let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("codex-unrestricted-auth-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.toml");
+        for method in ["api", "chatgpt"] {
+            fs::write(
+                &path,
+                format!(
+                    "forced_login_method = \"{method}\"\nmodel = \"user-model\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n"
+                ),
+            )
+            .unwrap();
+            ensure_workspace_config(&path).unwrap();
+            assert!(managed_config_ready(&path));
+            let document = fs::read_to_string(&path)
+                .unwrap()
+                .parse::<DocumentMut>()
+                .unwrap();
+            assert!(document.get("forced_login_method").is_none());
+            assert_eq!(document["model"].as_str(), Some("user-model"));
+            assert_eq!(document["approval_policy"].as_str(), Some("on-request"));
+            assert_eq!(document["sandbox_mode"].as_str(), Some("workspace-write"));
+
+            let legacy: AuthConfigSnapshot = serde_json::from_value(json!({
+                "forcedLoginMethod": method,
+                "modelProvider": "openai"
+            }))
+            .unwrap();
+            assert!(serde_json::to_value(&legacy)
+                .unwrap()
+                .get("forcedLoginMethod")
+                .is_none());
+            // Restoring an old snapshot must also remove a live lock.
+            fs::write(
+                &path,
+                format!("forced_login_method = \"{method}\"\nmodel = \"user-model\"\n"),
+            )
+            .unwrap();
+            apply_auth_config(&path, &legacy).unwrap();
+            let document = fs::read_to_string(&path)
+                .unwrap()
+                .parse::<DocumentMut>()
+                .unwrap();
+            assert!(document.get("forced_login_method").is_none());
+            assert_eq!(document["model_provider"].as_str(), Some("openai"));
+            assert_eq!(document["model"].as_str(), Some("user-model"));
+        }
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn new_workspace_config_leaves_model_selection_to_codex() {
         let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!(
@@ -2833,6 +2875,7 @@ mod shared_home_tests {
         let rendered = fs::read_to_string(&path).unwrap();
         let document = rendered.parse::<DocumentMut>().unwrap();
         assert!(document.get("model").is_none());
+        assert!(document.get("forced_login_method").is_none());
         assert_eq!(
             document.get("model_provider").and_then(Item::as_str),
             Some("baijimu-router")
@@ -3314,7 +3357,7 @@ mod shared_home_tests {
         activate_prepared_profile(&personal).unwrap().commit();
         assert!(!shared.join("auth.json").exists());
         let chatgpt_config = fs::read_to_string(shared.join("config.toml")).unwrap();
-        assert!(chatgpt_config.contains("forced_login_method = \"chatgpt\""));
+        assert!(!chatgpt_config.contains("forced_login_method"));
         assert!(!chatgpt_config.contains("model_provider ="));
         assert!(!chatgpt_config.contains("baijimu-router"));
         assert!(chatgpt_config.contains("custom_setting = \"keep\""));

@@ -648,6 +648,10 @@ function setupDownloadLabel(step) {
 }
 
 function setupStepStateLabel(state) {
+  if (["failed", "interrupted"].includes(setupState?.status)) {
+    if (state === "running") return setupState.status === "interrupted" ? "已中断" : "已停止";
+    if (state === "pending") return "未执行";
+  }
   return ({
     pending: "等待",
     running: "进行中",
@@ -695,7 +699,8 @@ function renderSetupProgress() {
       copy.append(title, detail);
       item.append(marker, copy, state);
     }
-    item.className = `setup-step ${step.state}`;
+    const stopped = ["failed", "interrupted"].includes(setupState?.status) && step.state === "running";
+    item.className = `setup-step ${stopped ? "failed" : step.state}`;
     const marker = item.querySelector(".setup-step-marker");
     const title = item.querySelector("strong");
     const detail = item.querySelector("small");
@@ -704,7 +709,7 @@ function renderSetupProgress() {
     setTextIfChanged(title, step.name);
     setTextIfChanged(
       detail,
-      `${step.detail || setupStepStateLabel(step.state)}${setupDownloadLabel(step)}`,
+      `${stopped && step.detail ? "停止前进度：" : ""}${step.detail || setupStepStateLabel(step.state)}${setupDownloadLabel(step)}`,
     );
     setTextIfChanged(state, setupStepStateLabel(step.state));
     const expectedAtIndex = list.children[stepIndex];

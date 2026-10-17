@@ -5,6 +5,7 @@ import vm from "node:vm";
 import * as stateFunctions from "../ui/state.mjs";
 
 class Element {
+  constructor(tagName = "div") { this.tagName = tagName; }
   hidden = false;
   disabled = false;
   value = "";
@@ -18,6 +19,19 @@ class Element {
   addEventListener(name, fn) { this.listeners[name] = fn; }
   setAttribute() {}
   scrollIntoView() {}
+  querySelector(selector) {
+    for (const child of this.children) {
+      if (selector.startsWith(".") ? child.className?.split(" ").includes(selector.slice(1)) : child.tagName === selector) return child;
+      const found = child.querySelector(selector);
+      if (found) return found;
+    }
+    return null;
+  }
+  insertBefore(child, before) {
+    this.children = this.children.filter((item) => item !== child);
+    const index = before ? this.children.indexOf(before) : this.children.length;
+    this.children.splice(index, 0, child);
+  }
 }
 
 async function failedInstallerPage(discover = async () => ({ currentWorkspaceId: 42 }), overrides = {}) {
@@ -37,7 +51,7 @@ async function failedInstallerPage(discover = async () => ({ currentWorkspaceId:
         if (!elements.has(id)) elements.set(id, new Element());
         return elements.get(id);
       },
-      createElement: () => new Element(),
+      createElement: (tag) => new Element(tag),
       addEventListener: () => {},
       querySelectorAll: () => [],
     },
@@ -144,3 +158,26 @@ test("poll failure clears progress and exposes recheck instead of stale install 
   assert.equal(page.elements.get("message").hidden, true);
   assert.equal(page.elements.get("error-retry-button").textContent, "重新检查");
 });
+
+for (const status of ["failed", "interrupted", "running"]) {
+  test(`${status} setup renders persisted running and pending steps truthfully`, async () => {
+    const setup = { status, retryable: true, message: "安装任务状态", installerStatus: { steps: [
+      { index: 1, name: "下载", state: "completed", detail: "已下载" },
+      { index: 2, name: "安装", state: "running", detail: "正在安装" },
+      { index: 3, name: "配置", state: "pending" },
+    ] } };
+    const page = await failedInstallerPage(undefined, {
+      setupState: () => setup,
+      ensureCodexReady: () => ({ readiness: status === "running" ? "initializing" : "failed", setup }),
+    });
+    const rows = page.elements.get("setup-step-list").children;
+    assert.equal(rows[0].querySelector("em").textContent, "完成");
+    assert.equal(rows[1].querySelector("em").textContent,
+      status === "running" ? "进行中" : status === "interrupted" ? "已中断" : "已停止");
+    assert.equal(rows[1].className, status === "running" ? "setup-step running" : "setup-step failed");
+    assert.equal(rows[1].querySelector("small").textContent,
+      status === "running" ? "正在安装" : "停止前进度：正在安装");
+    assert.equal(rows[2].querySelector("em").textContent, status === "running" ? "等待" : "未执行");
+    assert.equal(setup.installerStatus.steps[1].state, "running");
+  });
+}

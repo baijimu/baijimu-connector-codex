@@ -73,6 +73,7 @@ function setMessage(target, value) {
 
 function showError(value, { action = null, label = "重试" } = {}) {
   const message = value == null ? "" : String(value);
+  if (message) setMessage("message", "");
   errorRetryAction = typeof action === "function" ? action : null;
   elements["error-text"].textContent = message;
   elements.error.hidden = !message;
@@ -619,6 +620,12 @@ function renderSetupState() {
   elements["setup-action-button"].hidden = !action.visible;
   elements["setup-reveal-package-button"].hidden = !installerRecoveryMeta(setupState).canReveal;
   elements["setup-action-button"].textContent = action.label;
+  if (["failed", "interrupted"].includes(status)) {
+    showError(setupState?.error || setupState?.message || "Codex 安装已中断，请重试。", {
+      action: action.visible ? () => retrySetup(action.operation === "elevate") : null,
+      label: action.label,
+    });
+  }
 }
 
 function formatBytes(value) {
@@ -721,13 +728,7 @@ async function monitorSetup() {
         await loadState({ ensureReady: false, monitor: false });
         return;
       }
-      if (setupState?.status === "failed") {
-        showError(setupState?.error || "Codex 初始化失败。", {
-          action: () => retrySetup(setupActionMeta(setupState).operation === "elevate"),
-          label: setupActionMeta(setupState).label,
-        });
-        return;
-      }
+      if (["failed", "interrupted"].includes(setupState?.status)) return;
     } catch (error) {
       setAccountBusy(false);
       showError(errorMessage(error), {
@@ -827,7 +828,9 @@ async function retrySetup(elevate = false) {
   try {
     setupState = await invokeManagement("setupRetry", { workspaceId, elevate });
     renderSetupState();
-    setMessage("message", elevate ? "请在 Windows 授权窗口中允许安装；安装成功后会继续配置。" : "已开始重新安装并修复本机 Codex。");
+    if (setupState?.status === "running") {
+      setMessage("message", elevate ? "请在 Windows 授权窗口中允许安装；安装成功后会继续配置。" : "已开始重新安装并修复本机 Codex。");
+    }
     void monitorSetup();
   } catch (error) {
     setAccountBusy(false);

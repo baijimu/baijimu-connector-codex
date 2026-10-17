@@ -17,11 +17,13 @@ class Element {
   replaceChildren(...children) { this.children = children; }
   addEventListener(name, fn) { this.listeners[name] = fn; }
   setAttribute() {}
+  scrollIntoView() {}
 }
 
-async function failedInstallerPage(discover = async () => ({ currentWorkspaceId: 42 })) {
+async function failedInstallerPage(discover = async () => ({ currentWorkspaceId: 42 }), overrides = {}) {
   const elements = new Map();
   const calls = [];
+  const timers = [];
   const setup = {
     status: "failed", retryable: true, error: "安装此应用需要管理员权限",
     installerStatus: { platform: "windows", steps: [], packageRecovery: {
@@ -40,9 +42,10 @@ async function failedInstallerPage(discover = async () => ({ currentWorkspaceId:
       querySelectorAll: () => [],
     },
     window: {
-      setTimeout: () => {},
+      setTimeout: (fn) => timers.push(fn),
       baijimuLocalApp: { version: 1, async invoke(operation, args) {
         calls.push({ operation, args });
+        if (overrides[operation]) return overrides[operation](args);
         if (operation === "discoverWorkspaces") return discover();
         if (operation === "credentialState") return { currentWorkspaceId: 42 };
         if (operation === "setupState") return setup;
@@ -57,7 +60,7 @@ async function failedInstallerPage(discover = async () => ({ currentWorkspaceId:
     .replace(/^import\s*\{[\s\S]*?\}\s*from\s*"\.\/state\.mjs";/, "");
   vm.runInContext(app, context);
   await new Promise(setImmediate);
-  return { elements, calls };
+  return { elements, calls, timers, context };
 }
 
 test("both failure-page retry buttons explicitly request elevation", async () => {
@@ -95,4 +98,49 @@ test("slow or failed workspace discovery does not hide local installation state"
   await new Promise(setImmediate);
   assert.match(elements.get("warning").textContent, /平台发现超时/);
   assert.notEqual(elements.get("runtime-status-badge").textContent, "检查失败");
+});
+
+for (const status of ["failed", "interrupted"]) {
+  test(`running installation becoming ${status} clears progress notice and keeps recovery`, async () => {
+    let checks = 0;
+    const terminal = { status, retryable: true, error: "需要管理员权限", installerStatus: {
+      platform: "windows", steps: [], packageRecovery: {
+        packagePath: "C:\\package.msix", sha256: "a".repeat(64), requiresElevation: true,
+      },
+    } };
+    const page = await failedInstallerPage(undefined, {
+      setupState: () => ++checks === 1 ? { status: "running" } : terminal,
+      ensureCodexReady: () => ({ readiness: "initializing", setup: { status: "running" } }),
+    });
+    assert.equal(page.elements.get("message").hidden, false);
+    page.timers.shift()();
+    await new Promise(setImmediate);
+    assert.equal(page.elements.get("message").hidden, true);
+    assert.equal(page.elements.get("message").textContent, "");
+    assert.equal(page.elements.get("error").hidden, false);
+    assert.equal(page.elements.get("setup-action-button").textContent, "以管理员权限重试安装");
+    assert.equal(page.elements.get("setup-reveal-package-button").hidden, false);
+    assert.equal(page.elements.get("setup-action-button").disabled, false);
+  });
+}
+
+test("retry returning an immediate failure never displays started or UAC progress", async () => {
+  const { elements } = await failedInstallerPage(undefined, {
+    setupRetry: () => ({ status: "failed", retryable: true, error: "授权被取消" }),
+  });
+  await elements.get("error-retry-button").listeners.click();
+  await new Promise(setImmediate);
+  assert.equal(elements.get("message").hidden, true);
+  assert.match(elements.get("error-text").textContent, /授权被取消/);
+});
+
+test("poll failure clears progress and exposes recheck instead of stale install progress", async () => {
+  const page = await failedInstallerPage();
+  await page.elements.get("error-retry-button").listeners.click();
+  await new Promise(setImmediate);
+  vm.runInContext('invokeManagement = async () => { throw new Error("连接已断开"); }', page.context);
+  page.timers.shift()();
+  await new Promise(setImmediate);
+  assert.equal(page.elements.get("message").hidden, true);
+  assert.equal(page.elements.get("error-retry-button").textContent, "重新检查");
 });

@@ -54,7 +54,7 @@ class Owner(m.Http):
         if url in self.files:
             assert not authenticated
             return 200, self.files[url]
-        assert authenticated and url.startswith(BASE + APP)
+        assert authenticated and url.startswith(BASE + "/partner/")
         route = url[len(BASE):]
         if route == APP:
             return 200, envelope({'source': SOURCE['application'], 'workspaceId': 71,
@@ -199,6 +199,92 @@ class PublicationTests(unittest.TestCase):
         self.owner.oss['artifacts'].append(copy.deepcopy(self.owner.oss['artifacts'][0]))
         with self.assertRaises(m.PublishError):
             self.owner.publisher()
+
+
+class MarketAcceptanceTests(unittest.TestCase):
+    def setUp(self):
+        self.env = patch.dict(os.environ, {'GITHUB_REPOSITORY': 'example/sample'})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.owner = Owner()
+        self.owner.publisher().run()
+        self.owner.receipt['state'] = 'PUBLISHED'
+        self.listing_id = str(uuid.uuid4())
+        self.query = '?workspaceId=71'
+        self.page_url = BASE + m.MARKET + self.query
+        self.exact_url = BASE + m.MARKET + '/' + self.listing_id + '/versions/2.0.5'
+        self.listing = {'contractVersion': '3.0.0', 'listingId': self.listing_id,
+                        'frozenVersion': json.loads(self.owner.frozen())}
+        self.set_page([self.listing])
+        # Preserve the opaque manifest bytes, exactly as the owner does.
+        raw = '{"contractVersion":"3.0.0","listingId":' + json.dumps(self.listing_id) + ',"frozenVersion":' + self.owner.frozen() + '}'
+        self.owner.responses[('GET', self.exact_url + self.query)] = 200, b'{"contractVersion":"1.0.0","errorCode":"0","data":' + raw.encode() + b'}'
+        for key, data in self.owner.objects.items():
+            self.owner.responses[('GET', self.exact_url + '/artifacts/' + key + self.query)] = 200, data
+        self.owner.calls.clear()
+
+    def set_page(self, items, cursor=None, url=None):
+        self.owner.responses[('GET', url or self.page_url)] = 200, envelope({
+            'items': items, 'nextCursor': cursor})
+
+    def test_client_catalog_and_all_three_market_downloads_are_read_only(self):
+        self.assertEqual(self.owner.publisher().verify_market(), 'MARKET_VERIFIED')
+        self.assertEqual(self.owner.writes(), [])
+        downloads = [c for c in self.owner.calls if c[3]]
+        self.assertEqual(len(downloads), 3)
+        self.assertTrue(all('/local-app-market/listings/' in c[0] for c in downloads))
+
+    def test_published_receipt_with_older_catalog_pin_is_not_acceptance(self):
+        self.listing['frozenVersion']['source']['version'] = '2.0.4'
+        self.set_page([self.listing])
+        with self.assertRaisesRegex(m.PublishError, 'different version'):
+            self.owner.publisher().verify_market()
+        self.assertEqual(self.owner.writes(), [])
+
+    def test_pending_review_and_missing_listing_fail_without_mutations(self):
+        self.owner.receipt['state'] = 'PENDING_REVIEW'
+        with self.assertRaisesRegex(m.PublishError, 'not independently approved'):
+            self.owner.publisher().verify_market()
+        self.owner.receipt['state'] = 'PUBLISHED'
+        self.set_page([])
+        with self.assertRaisesRegex(m.PublishError, 'exactly once'):
+            self.owner.publisher().verify_market()
+        self.assertEqual(self.owner.writes(), [])
+
+    def test_other_environment_cannot_satisfy_catalog_match(self):
+        self.listing['frozenVersion']['source']['application']['environmentKey'] = 'other'
+        self.set_page([self.listing])
+        with self.assertRaisesRegex(m.PublishError, 'exactly once'):
+            self.owner.publisher().verify_market()
+
+    def test_paginated_catalog_is_checked(self):
+        other = copy.deepcopy(self.listing)
+        other['listingId'] = str(uuid.uuid4())
+        other['frozenVersion']['source']['application']['appId'] = 'other'
+        self.set_page([other], other['listingId'])
+        self.set_page([self.listing], url=self.page_url + '&after=' + other['listingId'])
+        self.assertEqual(self.owner.publisher().verify_market(), 'MARKET_VERIFIED')
+
+    def test_duplicate_listing_and_pagination_cycle_fail(self):
+        self.set_page([self.listing, self.listing])
+        with self.assertRaisesRegex(m.PublishError, 'exactly once'):
+            self.owner.publisher().verify_market()
+        self.set_page([self.listing], self.listing_id)
+        self.set_page([self.listing], self.listing_id, self.page_url + '&after=' + self.listing_id)
+        with self.assertRaisesRegex(m.PublishError, 'pagination'):
+            self.owner.publisher().verify_market()
+
+    def test_exact_market_manifest_and_artifact_corruption_fail(self):
+        raw = self.owner.responses[('GET', self.exact_url + self.query)][1]
+        self.owner.responses[('GET', self.exact_url + self.query)] = 200, raw.replace(b'"repo":"example/sample"', b'"repo":"example/wrong"')
+        with self.assertRaisesRegex(m.PublishError, 'differs'):
+            self.owner.publisher().verify_market()
+        self.owner.responses[('GET', self.exact_url + self.query)] = 200, raw
+        key = next(iter(self.owner.objects))
+        self.owner.responses[('GET', self.exact_url + '/artifacts/' + key + self.query)] = 200, b'changed'
+        with self.assertRaisesRegex(m.PublishError, 'artifact bytes mismatch'):
+            self.owner.publisher().verify_market()
+
 
 
 class TransportTests(unittest.TestCase):

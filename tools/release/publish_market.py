@@ -13,6 +13,7 @@ import urllib.request
 import uuid
 
 APPS = '/partner/v1/local-app-service/api/local-apps'
+MARKET = '/partner/v1/local-app-service/api/local-app-market/listings'
 NOT_FOUND = 'LOCAL_APP_SERVICE_NOT_FOUND'
 MAX_JSON = 8 * 1024 * 1024
 MAX_ARTIFACT = 512 * 1024 * 1024
@@ -205,13 +206,14 @@ class Publisher:
             require(not any(part in ('.', '..') for part in urllib.parse.unquote(
                 urllib.parse.urlsplit(url).path).split('/')), 'unsafe artifact URL path')
 
-    def verify_frozen(self, frozen, raw):
+    def verify_frozen(self, frozen, raw, *, version_route=None, query="",
+                      manifest_fields=("data", "content", "manifest")):
         require(frozen.get('contractVersion') == '1.0.0' and frozen.get('source') == self.source,
                 'frozen version source mismatch')
         content = frozen['content']
         require(content.get('applicationType') == 'connector'
                 and content.get('sourceRevision') == 'v' + self.version
-                and raw_field(raw, ['data', 'content', 'manifest']) == self.manifest_raw,
+                and raw_field(raw, manifest_fields) == self.manifest_raw,
                 'immutable version manifest/revision mismatch')
         expected = {(a['platform'], a['arch']): a for a in self.oss['artifacts']}
         artifacts = content['artifacts']
@@ -224,7 +226,8 @@ class Publisher:
             item = expected[target]
             require(valid_id(artifact['artifactId']) and artifact['fileName'] == item['name'],
                     'immutable artifact identity mismatch')
-            data = self.http.api(self.version_route + '/artifacts/' + artifact['artifactId'], binary=True)
+            data = self.http.api((version_route or self.version_route) + '/artifacts/'
+                                 + artifact['artifactId'] + query, binary=True)
             require(len(data) == artifact['sizeBytes'] and len(data) > 0
                     and 'sha256:' + hashlib.sha256(data).hexdigest() == item['checksum'],
                     'immutable artifact bytes mismatch')
@@ -234,6 +237,43 @@ class Publisher:
                 and valid_id(receipt.get('publicationId')), 'publication receipt identity mismatch')
         require(receipt.get('state') in ('RECEIVING', 'PENDING_REVIEW', 'PUBLISHED'),
                 'publication requires explicit action: ' + str(receipt.get('state')))
+
+    def verify_market(self):
+        """Read-only acceptance through the same catalog and bytes used by clients."""
+        receipt, _ = self.http.api(self.version_route + '/publication')
+        self.verify_receipt(receipt)
+        require(receipt['state'] == 'PUBLISHED', 'release is not independently approved')
+        query = '?' + urllib.parse.urlencode({'workspaceId': self.workspace})
+        after, seen, matches = None, set(), []
+        while True:
+            route = MARKET + query
+            if after:
+                route += '&' + urllib.parse.urlencode({'after': after})
+            page, _ = self.http.api(route)
+            require(isinstance(page.get('items'), list) and 'nextCursor' in page,
+                    'invalid market page')
+            for item in page['items']:
+                require(item.get('contractVersion') == '3.0.0'
+                        and valid_id(item.get('listingId')), 'invalid market listing')
+                if item['frozenVersion']['source']['application'] == self.source['application']:
+                    matches.append(item)
+            after = page.get('nextCursor')
+            if after is None:
+                break
+            require(valid_id(after) and after not in seen and page['items']
+                    and page['items'][-1]['listingId'] == after, 'invalid market pagination')
+            seen.add(after)
+        require(len(matches) == 1, 'release must appear exactly once in client market catalog')
+        listing = matches[0]
+        require(listing['frozenVersion']['source'] == self.source,
+                'client market displays a different version; review catalog selection')
+        route = MARKET + '/' + listing['listingId'] + '/versions/' + urllib.parse.quote(self.version, safe='')
+        exact, raw = self.http.api(route + query)
+        require(exact == listing, 'exact market version differs from displayed listing')
+        self.verify_frozen(exact['frozenVersion'], raw, version_route=route, query=query,
+                           manifest_fields=('data', 'frozenVersion', 'content', 'manifest'))
+        print(f'Client catalog and all platform artifacts verified: {listing["listingId"]} {self.version}', flush=True)
+        return 'MARKET_VERIFIED'
 
     def run(self):
         print('Checking source application ownership', flush=True)
@@ -302,7 +342,9 @@ class Publisher:
 
 
 def main():
-    require(len(sys.argv) == 4, 'usage: publish-market.sh <version> <connector-manifest> <oss-manifest>')
+    verify = len(sys.argv) == 5 and sys.argv[4] == '--verify-market'
+    require(len(sys.argv) == 4 or verify,
+            'usage: publish-market.sh <version> <connector-manifest> <oss-manifest> [--verify-market]')
     keys = ('LOCAL_APP_API_BASE_URL', 'LOCAL_APP_SOURCE_ENVIRONMENT_KEY',
             'LOCAL_APP_PUBLIC_ARTIFACT_BASE_URL', 'LOCAL_APP_OWNER_WORKSPACE_ID',
             'LOCAL_APP_MARKET_PUBLISH_TOKEN', 'MARKET_PUBLICATION_STATUS_FILE')
@@ -317,9 +359,9 @@ def main():
     publisher = Publisher(http, env['LOCAL_APP_SOURCE_ENVIRONMENT_KEY'], workspace,
                           https_base(env['LOCAL_APP_PUBLIC_ARTIFACT_BASE_URL']), sys.argv[1],
                           Path(sys.argv[2]).read_text(), decode(Path(sys.argv[3]).read_bytes()))
-    state = publisher.run()
+    state = publisher.verify_market() if verify else publisher.run()
     status_file.write_text(state + '\n')
-    print(f'submitted {publisher.source["application"]["appId"]} {publisher.version}; state={state}')
+    print(f'result {publisher.source["application"]["appId"]} {publisher.version}; state={state}')
 
 
 if __name__ == '__main__':

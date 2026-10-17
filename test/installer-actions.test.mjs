@@ -181,3 +181,28 @@ for (const status of ["failed", "interrupted", "running"]) {
     assert.equal(setup.installerStatus.steps[1].state, "running");
   });
 }
+
+
+test("opening and refreshing a completed legacy setup never invokes a model probe or reinstall", async () => {
+  const setup = {
+    schemaVersion: 2, status: "succeeded", retryable: true,
+    completedAtEpochSeconds: null,
+    lastError: "百积木路由验证已尝试 1 次但暂未通过：HTTP 400",
+  };
+  const { elements, calls, timers } = await failedInstallerPage(undefined, {
+    setupState: async () => setup,
+    ensureCodexReady: async () => ({ readiness: "ready", setup }),
+  });
+  elements.get("refresh-button").listeners.click();
+  await new Promise(setImmediate);
+  assert.equal(elements.get("management-workspace-panel").hidden, false);
+  assert.equal(elements.get("setup-panel").hidden, true);
+  assert.equal(elements.get("setup-action-button").hidden, true);
+  assert.equal(elements.get("runtime-status-badge").textContent, "可用");
+  assert.equal(elements.get("error").hidden, true);
+  assert.equal(elements.has("workspace-route-notice"), false);
+  assert.equal(timers.length, 0);
+  assert.ok(calls.every(({ operation }) => [
+    "credentialState", "setupState", "discoverWorkspaces", "ensureCodexReady",
+  ].includes(operation)), JSON.stringify(calls));
+});

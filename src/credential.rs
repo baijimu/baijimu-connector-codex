@@ -440,7 +440,7 @@ pub fn initialize_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspa
         Err(error) => return Err(error).context("该工作区凭证损坏，请使用重新授权"),
     };
     let _write = crate::state_access::write()?;
-    let credential = initialize_workspace_files(&profile, !profile_preexisting, || Ok(issued))?;
+    initialize_workspace_files(&profile, !profile_preexisting, || Ok(issued))?;
     profile.credential_status = "verified".to_string();
     let profile_id = profile.profile_id.clone();
     metadata
@@ -449,10 +449,7 @@ pub fn initialize_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspa
     metadata.profiles.push(profile.clone());
     sort_profiles(&mut metadata.profiles);
     save_metadata(&metadata)?;
-    Ok(PreparedWorkspaceProfile {
-        profile,
-        credential,
-    })
+    Ok(PreparedWorkspaceProfile { profile })
 }
 
 pub fn prepare_profile_activation(profile_id: &str) -> Result<CredentialProfile> {
@@ -768,25 +765,6 @@ pub fn codex_ready_for_workspace(workspace_id: u64) -> bool {
                     .is_some()
         })
     })
-}
-
-pub(crate) fn router_credential_for_workspace(workspace_id: u64) -> Result<String> {
-    let metadata = load_metadata()?;
-    let profile = metadata
-        .profiles
-        .iter()
-        .filter(|profile| {
-            profile.kind == AuthProfileKind::Baijimu && profile.workspace_id == workspace_id
-        })
-        .max_by_key(|profile| {
-            (
-                metadata.active_profile_id.as_deref() == Some(profile.profile_id.as_str()),
-                profile.activated_at_epoch_seconds,
-            )
-        })
-        .context("未找到工作区 Codex 凭证档案")?;
-    read_codex_api_key(&profile_credential_path(profile))?
-        .context("工作区 Codex 凭证文件中缺少 OPENAI_API_KEY")
 }
 
 fn write_workspace_auth(path: &Path, credential: &str) -> Result<()> {

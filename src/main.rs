@@ -374,7 +374,6 @@ fn management_operation_label(path: &str) -> &str {
         "/management/v1/codex/launch" => "打开 Codex",
         "/management/v1/codex/restart" => "重启 Codex",
         "/management/v1/codex/restore-external-home" => "恢复用户环境",
-        "/management/v1/setup/verify-router" => "验证路由",
         _ => "管理操作",
     }
 }
@@ -442,27 +441,6 @@ fn handle_management(
                             .and_then(Value::as_bool)
                             .unwrap_or(false),
                     )
-                    .map_err(|error| HttpError::new(409, error.to_string()))?,
-            )
-            .map_err(|error| HttpError::internal(error.to_string()))
-        }
-        ("POST", "/management/v1/setup/verify-router") => {
-            let workspace_id = body
-                .get("workspaceId")
-                .and_then(Value::as_u64)
-                .filter(|value| *value > 0)
-                .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?;
-            let auth = baijimu_cli::auth_status()
-                .map_err(|error| HttpError::new(409, error.to_string()))?;
-            if !auth.authenticated || !auth.workspace_ids.contains(&workspace_id) {
-                return Err(HttpError::new(403, "当前设备授权不包含该工作区"));
-            }
-            let router_credential = credential::router_credential_for_workspace(workspace_id)
-                .map_err(|error| HttpError::new(409, error.to_string()))?;
-            serde_json::to_value(
-                state
-                    .setup
-                    .verify_router(workspace_id, router_credential)
                     .map_err(|error| HttpError::new(409, error.to_string()))?,
             )
             .map_err(|error| HttpError::internal(error.to_string()))

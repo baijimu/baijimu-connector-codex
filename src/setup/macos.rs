@@ -136,14 +136,6 @@ impl<'a> MacosInstaller<'a> {
 
         self.progress.set_step(
             6,
-            InstallerStepState::Skipped,
-            "安装完成后由桌面管理器在后台验证百积木路由",
-            None,
-            None,
-        )?;
-
-        self.progress.set_step(
-            7,
             InstallerStepState::Running,
             "正在提交授权档案并按需启动桌面应用",
             None,
@@ -166,7 +158,7 @@ impl<'a> MacosInstaller<'a> {
             self.result.warnings.push(warning.to_string());
         }
         self.progress.set_step(
-            7,
+            6,
             InstallerStepState::Completed,
             outcome.message(),
             None,
@@ -176,7 +168,6 @@ impl<'a> MacosInstaller<'a> {
             .complete_pending(InstallerStepState::Skipped, "安装已完成")?;
         Ok(SetupInstallation {
             completion: outcome,
-            router_credential: prepared.credential,
         })
     }
 

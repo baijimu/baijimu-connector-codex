@@ -41,7 +41,7 @@ macOS 启动时向目标进程传递所选 `CODEX_HOME`。
 管理器还维护认证档案、工作区目录、安装状态和 `.baijimu-owner.json` 所有权标记。
 
 管理器不写入模型选择、推理强度、审批策略、沙箱模式、会话历史或 Codex 界面语言。
-`routeVerificationModels` 仅用于路由探测，`defaultUiLocale` 仅用于管理器安装界面。
+管理器不配置验证模型，也不执行模型路由探测；`defaultUiLocale` 仅用于管理器安装界面。
 
 ## 升级验证
 

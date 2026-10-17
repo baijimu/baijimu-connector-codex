@@ -240,19 +240,11 @@ export function setupStatusMeta(value) {
     interrupted: "初始化已中断",
     needs_retry: "需要重新验证",
   };
-  const routeVerificationRunning = status === "succeeded"
-    && value?.completedAtEpochSeconds == null;
-  const routeVerificationFailed = status === "succeeded"
-    && value?.retryable === true;
   return {
     status,
-    label: routeVerificationRunning
-      ? "路由验证中"
-      : routeVerificationFailed
-        ? "路由验证失败"
-        : labels[status] || status,
-    retryable: value?.retryable === true
-      || ["failed", "interrupted", "needs_retry"].includes(status),
+    label: labels[status] || status,
+    retryable: status !== "succeeded" && (value?.retryable === true
+      || ["failed", "interrupted", "needs_retry"].includes(status)),
     showCurrentError: status === "failed" && Boolean(String(value?.error || "").trim()),
   };
 }
@@ -260,27 +252,11 @@ export function setupStatusMeta(value) {
 export function codexCapabilityMeta(value) {
   const status = String(value?.status || "pending");
   if (status === "succeeded") {
-    if (value?.completedAtEpochSeconds == null) {
-      return {
-        available: true,
-        label: "可打开 · 验证中",
-        tone: "warning",
-        message: "Codex 已完成安装配置，可以打开使用；百积木路由正在后台验证。",
-      };
-    }
-    if (value?.retryable === true) {
-      return {
-        available: true,
-        label: "可打开 · 验证失败",
-        tone: "warning",
-        message: "Codex 已完成安装配置，可以打开使用；百积木路由验证暂未通过，可稍后重新验证。",
-      };
-    }
     return {
       available: true,
       label: "可用",
       tone: "success",
-      message: "Codex 运行环境已就绪，可以查询会话、读取线程并发起对话。",
+      message: "Codex 应用安装和工作区配置已完成，可以打开使用。",
     };
   }
   if (status === "running") {
@@ -329,13 +305,6 @@ export function setupActionMeta(value) {
   const meta = setupStatusMeta(value);
   if (installerRecoveryMeta(value).canElevate) {
     return { visible: true, operation: "elevate", label: "以管理员权限重试安装" };
-  }
-  if (meta.status === "succeeded" && value?.retryable === true) {
-    return {
-      visible: true,
-      operation: "verify",
-      label: "重新验证路由",
-    };
   }
   if (meta.retryable) {
     const labels = {

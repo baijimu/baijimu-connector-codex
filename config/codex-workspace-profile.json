@@ -1,8 +1,5 @@
 {
-  "schemaVersion": 4,
-  "routeVerificationModels": [
-    "gpt-5.5"
-  ],
+  "schemaVersion": 5,
   "defaultUiLocale": "zh-CN",
   "routerProvider": "baijimu-router",
   "routerBaseUrl": "https://router.baijimu.com/api/claudecode/v1",

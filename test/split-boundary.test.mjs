@@ -81,10 +81,7 @@ test("desktop manager exposes only its required read-only status method", async 
     method: "POST",
     path: "/management/v1/codex/reauthorize",
   });
-  assert.deepEqual(manifest.management.operations.verifyRouter, {
-    method: "POST",
-    path: "/management/v1/setup/verify-router",
-  });
+  assert.equal(manifest.management.operations.verifyRouter, undefined);
 });
 
 test("desktop manager neither installs CLI nor exposes invoke routes", async () => {
@@ -114,8 +111,8 @@ test("desktop manager neither installs CLI nor exposes invoke routes", async () 
   assert.match(windows, /Rust 凭证管理器未生成当前 Codex 配置文件/);
   assert.doesNotMatch(setup, /CODEX_LLM_CREDENTIAL_FILE|credential-\{unique\}/);
   assert.match(setup, /credential::initialize_workspace_profile\(workspace_id\)/);
-  assert.match(setup, /prepared\.credential/);
-  assert.match(setup, /mod router;/);
+  assert.doesNotMatch(setup, /prepared\.credential/);
+  assert.doesNotMatch(setup, /mod router;/);
   assert.doesNotMatch(macosScript, /install_cli|install-cli/);
   assert.match(macosScript, /export PATH="\/usr\/bin:\/bin:\/usr\/sbin:\/sbin"/);
   assert.doesNotMatch(macosScript, /\.local\/bin|homebrew|\/usr\/local\/bin/);
@@ -320,4 +317,16 @@ test("status reads never reactivate archived workspace credentials", async () =>
   assert.doesNotMatch(loadMetadata, /reconcile_active_profile_from_shared_home|save_metadata|migrate_|capture_|ensure_|remove_file/);
   assert.match(credential, /credential_status: "login_required"/);
   assert.doesNotMatch(credential, /document\["forced_login_method"\]\s*=|forced_login_method: Some/);
+});
+
+test("installation and management contain no model inference request or verification model", async () => {
+  const paths = [
+    "src/setup.rs", "src/setup/macos.rs", "src/main.rs", "src/product_config.rs",
+    "config/codex-workspace-profile.json", "installers/windows-configure-terminal-and-login.ps1",
+    "ui/app.js",
+  ];
+  for (const path of paths) {
+    const content = await read(path);
+    assert.doesNotMatch(content, /\/responses|\/chat\/completions|Reply with exactly OK|routeVerificationModels|route_verification_models|router::verify|verify-router|retryRouterVerification/, path);
+  }
 });

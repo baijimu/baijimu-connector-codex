@@ -58,8 +58,7 @@ $script:InstallSteps = @(
   [pscustomobject]@{ index = 4; name = "校验安装包"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
   [pscustomobject]@{ index = 5; name = "安装 ChatGPT 桌面应用"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
   [pscustomobject]@{ index = 6; name = "确认百积木 LLM 凭证和配置"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
-  [pscustomobject]@{ index = 7; name = "验证百积木路由"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
-  [pscustomobject]@{ index = 8; name = "完成安装配置"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null }
+  [pscustomobject]@{ index = 7; name = "完成安装配置"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null }
 )
 
 $result = [ordered]@{
@@ -75,7 +74,6 @@ $result = [ordered]@{
   codexAuthWritten = $false
   configWritten = $false
   authWritten = $false
-  routerHttpStatus = $null
   elapsedMs = 0
   warnings = @()
   errors = @()
@@ -477,8 +475,7 @@ function Confirm-CodexConfiguration {
 try {
   Ensure-CodexApp
   Confirm-CodexConfiguration
-  Set-InstallStep 7 "skipped" "安装完成后由桌面管理器在后台验证百积木路由"
-  Set-InstallStep 8 "completed" "安装配置已完成，桌面启动由桌面管理器按档案状态处理"
+  Set-InstallStep 7 "completed" "安装配置已完成，桌面启动由桌面管理器按档案状态处理"
 } catch {
   Add-Error $_.Exception.Message
   if ($script:CurrentStepIndex -gt 0) {

@@ -5,13 +5,12 @@ use std::error::Error;
 use std::fmt;
 
 #[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
-pub const MACOS_STEP_NAMES: [&str; 7] = [
+pub const MACOS_STEP_NAMES: [&str; 6] = [
     "检查 ChatGPT 桌面应用",
     "读取应用安装包清单",
     "下载 ChatGPT 桌面应用",
     "校验并安装应用",
     "创建百积木 LLM 凭证和配置",
-    "验证百积木路由",
     "完成安装配置",
 ];
 
@@ -177,7 +176,6 @@ pub struct MacosInstallerResult {
     pub llm_credential_created: bool,
     pub config_written: bool,
     pub auth_written: bool,
-    pub router_http_status: Option<u16>,
     pub elapsed_ms: u128,
     pub warnings: Vec<String>,
     pub errors: Vec<String>,
@@ -201,7 +199,6 @@ impl MacosInstallerResult {
             llm_credential_created: false,
             config_written: false,
             auth_written: false,
-            router_http_status: None,
             elapsed_ms: 0,
             warnings: Vec::new(),
             errors: Vec::new(),
@@ -235,8 +232,8 @@ mod tests {
         assert_eq!(status.steps[2].detail, "正在下载");
         assert_eq!(status.steps[2].downloaded_bytes, Some(123));
         assert_eq!(status.steps[2].total_bytes, Some(1_000));
-        assert_eq!(status.steps[6].detail, "");
-        assert_eq!(status.steps[6].state, InstallerStepState::Pending);
+        assert_eq!(status.steps[5].detail, "");
+        assert_eq!(status.steps[5].state, InstallerStepState::Pending);
     }
 
     #[test]
@@ -257,7 +254,7 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.index, 8);
-        assert_eq!(error.step_count, 7);
+        assert_eq!(error.step_count, 6);
     }
 
     #[test]

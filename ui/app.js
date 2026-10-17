@@ -18,8 +18,6 @@ const elementIds = [
   "error-retry-button", "warning",
   "legacy-home-migration", "legacy-home-message", "restore-external-home-button",
   "auth-profile-list", "add-workspace-button", "codex-workspace-list",
-  "workspace-route-notice", "workspace-route-message",
-  "workspace-route-action",
   "setup-message", "setup-action-button", "setup-reveal-package-button", "setup-progress", "setup-progress-label",
   "setup-progress-percent", "setup-progress-track", "setup-progress-bar", "setup-step-list",
   "codex-operation-progress", "codex-operation-title", "codex-operation-message",
@@ -105,7 +103,6 @@ function setAccountBusy(value) {
   elements["setup-reveal-package-button"].disabled = value;
   elements["add-workspace-button"].disabled = value;
   elements["workspace-create-confirm"].disabled = value || !workspaceCreateCanSubmit();
-  elements["workspace-route-action"].disabled = value;
   elements["auth-switch-confirm"].disabled = value || !authSwitchCanSubmit();
   elements["error-retry-button"].disabled = value || !errorRetryAction;
   elements["restore-external-home-button"].disabled = value;
@@ -596,13 +593,6 @@ function renderPrimaryView() {
   const view = primaryViewMeta(setupState);
   elements["management-workspace-panel"].hidden = !view.workspaceVisible;
   elements["setup-panel"].hidden = !view.setupVisible;
-
-  const capability = codexCapabilityMeta(setupState);
-  const routeStatusVisible = view.workspaceVisible
-    && (setupState?.completedAtEpochSeconds == null || setupState?.retryable === true);
-  elements["workspace-route-notice"].hidden = !routeStatusVisible;
-  elements["workspace-route-message"].textContent = routeStatusVisible ? capability.message : "";
-  elements["workspace-route-action"].hidden = !(routeStatusVisible && setupState?.retryable === true);
 }
 
 function renderSetupState() {
@@ -721,15 +711,14 @@ async function monitorSetup() {
   const generation = ++setupMonitorGeneration;
   while (
     generation === setupMonitorGeneration
-    && (setupState?.status === "running"
-      || (setupState?.status === "succeeded" && setupState?.completedAtEpochSeconds == null))
+    && setupState?.status === "running"
   ) {
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
     if (generation !== setupMonitorGeneration) return;
     try {
       setupState = await invokeManagement("setupState");
       renderSetupState();
-      if (setupState?.status === "succeeded" && setupState?.completedAtEpochSeconds != null) {
+      if (setupState?.status === "succeeded") {
         await loadState({ ensureReady: false, monitor: false });
         return;
       }
@@ -751,9 +740,6 @@ async function ensureCodexReady() {
   renderSetupState();
   switch (readiness?.readiness) {
     case "ready":
-      if (setupState?.status === "succeeded" && setupState?.completedAtEpochSeconds == null) {
-        void monitorSetup();
-      }
       return;
     case "initializing":
       elements["setup-panel"].scrollIntoView({ behavior: "smooth", block: "start" });
@@ -803,10 +789,7 @@ async function loadState({ ensureReady = false, monitor = true } = {}) {
     renderCredentialState();
     renderSetupState();
     if (ensureReady && !credential.operation?.running) await ensureCodexReady();
-    else if (monitor && (
-      setupState?.status === "running"
-      || (setupState?.status === "succeeded" && setupState?.completedAtEpochSeconds == null)
-    )) void monitorSetup();
+    else if (monitor && setupState?.status === "running") void monitorSetup();
   } catch (error) {
     elements["runtime-status-badge"].textContent = "检查失败";
     elements["runtime-status-badge"].className = "status-badge danger";
@@ -846,35 +829,7 @@ async function retrySetup(elevate = false) {
   }
 }
 
-async function retryRouterVerification() {
-  clearNotices();
-  const workspaceId = credentialState?.currentWorkspaceId;
-  if (!workspaceId) {
-    showError("客户端当前授权中缺少工作区信息。", {
-      action: () => loadState({ ensureReady: true }),
-      label: "重新检查",
-    });
-    return;
-  }
-  setAccountBusy(true);
-  try {
-    setupState = await invokeManagement("verifyRouter", { workspaceId });
-    renderSetupState();
-    setMessage("message", "已开始重新验证百积木路由；验证期间仍可打开 Codex。");
-    void monitorSetup();
-  } catch (error) {
-    setAccountBusy(false);
-    showError(errorMessage(error), {
-      action: retryRouterVerification,
-      label: "重新验证",
-    });
-  }
-}
-
 function refreshState() {
-  if (setupState?.status === "succeeded" && setupState?.retryable === true) {
-    return retryRouterVerification();
-  }
   return loadState({ ensureReady: true });
 }
 
@@ -914,8 +869,7 @@ elements["setup-reveal-package-button"].addEventListener("click", async () => {
 
 elements["setup-action-button"].addEventListener("click", () => {
   const action = setupActionMeta(setupState);
-  if (action.operation === "verify") void retryRouterVerification();
-  else void retrySetup(action.operation === "elevate");
+  void retrySetup(action.operation === "elevate");
 });
 elements["add-workspace-button"].addEventListener("click", openWorkspaceCreateModal);
 elements["workspace-create-cancel"].addEventListener("click", closeWorkspaceCreateModal);
@@ -929,7 +883,6 @@ elements["workspace-auth-profile-select"].addEventListener("change", () => {
 elements["workspace-create-modal"].addEventListener("click", (event) => {
   if (event.target === elements["workspace-create-modal"]) closeWorkspaceCreateModal();
 });
-elements["workspace-route-action"].addEventListener("click", () => void retryRouterVerification());
 elements["restore-external-home-button"].addEventListener("click", () => void restoreExternalCodexHome());
 elements["error-retry-button"].addEventListener("click", () => {
   const action = errorRetryAction;

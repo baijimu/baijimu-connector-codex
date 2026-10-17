@@ -17,7 +17,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod contract;
 #[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 mod macos;
-mod router;
 mod source;
 
 #[cfg(any(target_os = "windows", test))]
@@ -26,7 +25,7 @@ pub use contract::InstallerStatus;
 mod windows_recovery;
 
 const SETUP_STATUS_FILE: &str = "setup-status.json";
-const SETUP_STATUS_SCHEMA_VERSION: u32 = 2;
+const SETUP_STATUS_SCHEMA_VERSION: u32 = 3;
 const CONNECTOR_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ERROR_CODE_INTERRUPTED: &str = "SETUP_INTERRUPTED";
 const ERROR_CODE_RETRY_AFTER_UPGRADE: &str = "SETUP_RETRY_REQUIRED_AFTER_UPGRADE";
@@ -76,7 +75,6 @@ enum SetupCompletion {
 #[derive(Clone, Debug)]
 struct SetupInstallation {
     completion: SetupCompletion,
-    router_credential: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,44 +142,6 @@ impl SetupCompletion {
             _ => None,
         }
     }
-
-    fn verification_in_progress_message(&self) -> String {
-        format!(
-            "{} 百积木路由正在后台验证；验证期间仍可打开 Codex。",
-            self.message()
-        )
-    }
-
-    fn message_with_route_verification(&self, verification: &router::RouteVerification) -> String {
-        let route_message = route_verification_message(verification);
-        match self.warning() {
-            Some(warning) => format!("{route_message} {warning}"),
-            None => route_message,
-        }
-    }
-}
-
-fn route_validation_failure(verification: &router::RouteVerification) -> Option<String> {
-    verification.failure_message().map(|failure| {
-        format!(
-            "百积木路由验证已尝试 {} 次但暂未通过：{}",
-            verification.attempts(),
-            compact_error(failure)
-        )
-    })
-}
-
-fn route_verification_message(verification: &router::RouteVerification) -> String {
-    if verification.passed() {
-        return format!(
-            "Codex 应用安装和工作区配置已完成；百积木路由验证在第 {} 次尝试通过，可以正常打开使用。",
-            verification.attempts()
-        );
-    }
-    format!(
-        "Codex 应用安装和工作区配置已完成；{}。这不属于安装失败，可以打开 Codex，也可以稍后刷新或重新验证。",
-        route_validation_failure(verification).unwrap_or_else(|| "百积木路由验证暂未通过".to_string())
-    )
 }
 
 impl Default for SetupStatus {
@@ -301,12 +261,6 @@ impl SetupManager {
                 }
                 anyhow::bail!("另一个工作区的初始化正在进行");
             }
-            if current.status == "succeeded"
-                && current.workspace_id == Some(workspace_id)
-                && current.completed_at_epoch_seconds.is_none()
-            {
-                return Ok(current.clone());
-            }
             if !force
                 && current.status == "succeeded"
                 && current.workspace_id == Some(workspace_id)
@@ -351,34 +305,21 @@ impl SetupManager {
             drop(operation);
             match install_result {
                 Ok(installed) => {
-                    let verifying = SetupStatus {
+                    let completed = SetupStatus {
                         schema_version: SETUP_STATUS_SCHEMA_VERSION,
                         attempt_id: background.attempt_id.clone(),
                         connector_version: Some(CONNECTOR_VERSION.to_string()),
                         status: "succeeded".to_string(),
                         workspace_id: Some(workspace_id),
-                        message: installed.completion.verification_in_progress_message(),
+                        message: installed.completion.message(),
                         error: None,
                         last_error: None,
                         error_code: None,
                         retryable: false,
                         automatic_retry_count: background.automatic_retry_count,
                         started_at_epoch_seconds: background.started_at_epoch_seconds,
-                        completed_at_epoch_seconds: None,
-                        installer_status: None,
-                    };
-                    if manager.replace(verifying.clone()).is_err() {
-                        return;
-                    }
-                    let verification = router::verify(&installed.router_credential);
-                    let completed = SetupStatus {
-                        message: installed
-                            .completion
-                            .message_with_route_verification(&verification),
-                        last_error: route_validation_failure(&verification),
-                        retryable: !verification.passed(),
                         completed_at_epoch_seconds: Some(now_epoch_seconds()),
-                        ..verifying
+                        installer_status: None,
                     };
                     let _ = manager.replace(completed);
                 }
@@ -406,60 +347,6 @@ impl SetupManager {
             }
         });
         Ok(running)
-    }
-
-    pub fn verify_router(&self, workspace_id: u64, credential: String) -> Result<SetupStatus> {
-        if workspace_id == 0 {
-            anyhow::bail!("workspaceId 必须是正整数");
-        }
-        let started_at = now_epoch_seconds();
-        let verifying = {
-            let current = self
-                .state
-                .lock()
-                .map_err(|_| anyhow::anyhow!("初始化状态锁异常"))?;
-            if current.status == "running" {
-                anyhow::bail!("Codex 安装配置仍在进行，完成后再验证路由");
-            }
-            if current.status != "succeeded" || current.workspace_id != Some(workspace_id) {
-                anyhow::bail!("当前工作区尚未完成 Codex 安装配置，不能单独验证路由");
-            }
-            if current.completed_at_epoch_seconds.is_none() {
-                return Ok(current.clone());
-            }
-            SetupStatus {
-                attempt_id: Some(format!(
-                    "route-{CONNECTOR_VERSION}-{}-{started_at}",
-                    std::process::id()
-                )),
-                message: "Codex 已安装，正在后台重新验证百积木路由；验证期间仍可打开使用。"
-                    .to_string(),
-                error: None,
-                last_error: None,
-                error_code: None,
-                retryable: false,
-                started_at_epoch_seconds: Some(started_at),
-                completed_at_epoch_seconds: None,
-                installer_status: None,
-                ..current.clone()
-            }
-        };
-        self.replace(verifying.clone())?;
-
-        let manager = self.clone();
-        let background = verifying.clone();
-        thread::spawn(move || {
-            let verification = router::verify(&credential);
-            let completed = SetupStatus {
-                message: route_verification_message(&verification),
-                last_error: route_validation_failure(&verification),
-                retryable: !verification.passed(),
-                completed_at_epoch_seconds: Some(now_epoch_seconds()),
-                ..background
-            };
-            let _ = manager.replace(completed);
-        });
-        Ok(verifying)
     }
 
     fn replace(&self, status: SetupStatus) -> Result<()> {
@@ -493,17 +380,29 @@ fn recover_persisted_status(mut status: SetupStatus) -> (SetupStatus, bool) {
         return (status, true);
     }
 
-    if status.status == "succeeded" && status.completed_at_epoch_seconds.is_none() {
-        let interruption = "百积木路由验证被 Connector 重启中断".to_string();
+    // Schema 2 recorded a model probe after installation had already succeeded.
+    // Retire only that probe's state; real installation errors and launch warnings survive.
+    if status.schema_version < SETUP_STATUS_SCHEMA_VERSION && status.status == "succeeded" {
         status.schema_version = SETUP_STATUS_SCHEMA_VERSION;
-        status.message = format!(
-            "Codex 应用安装和工作区配置已完成；{interruption}。这不属于安装失败，可以打开 Codex，也可以重新验证。"
-        );
-        status.error = None;
-        status.last_error = Some(interruption);
-        status.error_code = None;
-        status.retryable = true;
-        status.completed_at_epoch_seconds = Some(now_epoch_seconds());
+        if status.message.contains("百积木路由") {
+            const LAUNCH_WARNING: &str =
+                "ChatGPT/Codex 已完成安装配置，但系统桌面应用启动请求失败。";
+            status.message = match status.message.find(LAUNCH_WARNING) {
+                Some(offset) => status.message[offset..].trim().to_string(),
+                None => "Codex 应用安装和工作区配置已完成，可以打开使用。".to_string(),
+            };
+        }
+        if status
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("百积木路由验证"))
+        {
+            status.last_error = None;
+        }
+        status.retryable = false;
+        status
+            .completed_at_epoch_seconds
+            .get_or_insert_with(now_epoch_seconds);
         return (status, true);
     }
 
@@ -569,7 +468,7 @@ fn run_windows_install(workspace_id: u64, elevate: bool) -> Result<SetupInstalla
     let auto_activate = credential::should_auto_activate_workspace_after_setup()?;
     let desktop_guard = SetupDesktopGuard::stop_for_activation(auto_activate)?;
 
-    let install_result = (|| -> Result<(Option<PathBuf>, String)> {
+    let install_result = (|| -> Result<Option<PathBuf>> {
         let prepared = credential::initialize_workspace_profile(workspace_id)?;
         let profile_home = PathBuf::from(&prepared.profile.codex_home);
         credential::finalize_workspace_setup(&prepared.profile, auto_activate)?;
@@ -636,13 +535,10 @@ fn run_windows_install(workspace_id: u64, elevate: bool) -> Result<SetupInstalla
             == credential::AuthMode::Baijimu
             && credential_state.active_workspace_id == Some(workspace_id)
             && Path::new(&credential_state.active_codex_home) == profile_home;
-        Ok((
-            workspace_profile_is_active.then_some(profile_home),
-            prepared.credential,
-        ))
+        Ok(workspace_profile_is_active.then_some(profile_home))
     })();
     let _ = fs::remove_file(&script_path);
-    let (activated_profile_home, router_credential) = install_result?;
+    let activated_profile_home = install_result?;
 
     if !credential::codex_ready_for_workspace(workspace_id) {
         anyhow::bail!("安装脚本执行成功，但工作区凭证归属回查失败");
@@ -651,10 +547,7 @@ fn run_windows_install(workspace_id: u64, elevate: bool) -> Result<SetupInstalla
         Some(_) => desktop_guard.launch(),
         None => SetupCompletion::completed_without_desktop_launch(),
     };
-    Ok(SetupInstallation {
-        completion,
-        router_credential,
-    })
+    Ok(SetupInstallation { completion })
 }
 
 struct SetupDesktopGuard {
@@ -910,24 +803,78 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_route_verification_keeps_the_install_successful_and_retryable() {
-        let mut persisted = persisted_status("succeeded", Some(CONNECTOR_VERSION));
-        persisted.error = None;
-        persisted.completed_at_epoch_seconds = None;
+    fn legacy_probe_states_are_retired_once_without_changing_install_identity() {
+        for completed_at in [None, Some(200)] {
+            let mut persisted = persisted_status("succeeded", Some("2.1.5"));
+            persisted.schema_version = 2;
+            persisted.error = None;
+            persisted.message = "Codex 已安装；百积木路由正在后台验证".to_string();
+            persisted.last_error =
+                Some("百积木路由验证已尝试 1 次但暂未通过：HTTP 400".to_string());
+            persisted.retryable = true;
+            persisted.completed_at_epoch_seconds = completed_at;
+            let (recovered, changed) = recover_persisted_status(persisted);
+            assert!(changed);
+            assert_eq!(recovered.status, "succeeded");
+            assert_eq!(recovered.workspace_id, Some(1197));
+            assert_eq!(recovered.connector_version.as_deref(), Some("2.1.5"));
+            assert_eq!(recovered.started_at_epoch_seconds, Some(100));
+            assert_eq!(recovered.error, None);
+            assert_eq!(recovered.last_error, None);
+            assert!(!recovered.retryable);
+            assert!(!recovered.message.contains("路由"));
+            assert!(recovered.completed_at_epoch_seconds.is_some());
+            if let Some(expected) = completed_at {
+                assert_eq!(recovered.completed_at_epoch_seconds, Some(expected));
+            }
+            assert!(!recover_persisted_status(recovered).1);
+        }
+    }
 
-        let (recovered, changed) = recover_persisted_status(persisted);
+    #[test]
+    fn retiring_probe_preserves_desktop_launch_warning_and_unrelated_errors() {
+        let warning =
+            SetupCompletion::from_desktop_activation(Err(anyhow::anyhow!("launch denied")))
+                .message();
+        for message in [
+            warning.clone(),
+            format!("百积木路由验证暂未通过。 {warning}"),
+        ] {
+            let mut persisted = persisted_status("succeeded", Some("2.1.5"));
+            persisted.message = message;
+            persisted.last_error = Some("unrelated diagnostic".to_string());
+            let (recovered, _) = recover_persisted_status(persisted);
+            assert_eq!(recovered.message, warning);
+            assert_eq!(recovered.error.as_deref(), Some("历史安装错误"));
+            assert_eq!(
+                recovered.last_error.as_deref(),
+                Some("unrelated diagnostic")
+            );
+        }
+    }
 
-        assert!(changed);
-        assert_eq!(recovered.status, "succeeded");
-        assert_eq!(recovered.error, None);
-        assert_eq!(recovered.error_code, None);
-        assert!(recovered.retryable);
-        assert!(recovered
-            .last_error
-            .as_deref()
-            .is_some_and(|value| value.contains("路由验证被 Connector 重启中断")));
-        assert!(recovered.message.contains("不属于安装失败"));
-        assert!(recovered.completed_at_epoch_seconds.is_some());
+    #[test]
+    fn retiring_probe_does_not_erase_failed_or_interrupted_installations() {
+        for state in ["failed", "interrupted"] {
+            let mut persisted = persisted_status(state, Some(CONNECTOR_VERSION));
+            persisted.schema_version = 2;
+            persisted.last_error = Some("MSIX_ELEVATION_REQUIRED".to_string());
+            persisted.error_code = Some("MSIX_ELEVATION_REQUIRED".to_string());
+            persisted.retryable = true;
+            let (recovered, changed) = recover_persisted_status(persisted);
+            assert!(!changed);
+            assert_eq!(recovered.status, state);
+            assert_eq!(recovered.error.as_deref(), Some("历史安装错误"));
+            assert_eq!(
+                recovered.last_error.as_deref(),
+                Some("MSIX_ELEVATION_REQUIRED")
+            );
+            assert_eq!(
+                recovered.error_code.as_deref(),
+                Some("MSIX_ELEVATION_REQUIRED")
+            );
+            assert!(recovered.retryable);
+        }
     }
 
     #[test]

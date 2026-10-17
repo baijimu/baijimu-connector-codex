@@ -79,7 +79,6 @@ pub struct CredentialManagerState {
 #[derive(Clone, Debug)]
 pub struct PreparedWorkspaceProfile {
     pub profile: CredentialProfile,
-    pub credential: String,
 }
 
 #[derive(Clone, Debug)]

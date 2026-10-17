@@ -16,9 +16,13 @@ PAT 通过 `Authorization: Bearer` 发送至配置的来源环境，工作区通
 
 发布器使用 `/partner/v1/local-app-service/api/local-apps`：先校验应用所有权，验证 OSS 制品摘要，上传原始字节，再以原始 `connector.json` 冻结准确版本。冻结记录引用来源拥有的 artifactId；不构造旧版 URL 类型版本体，也不改写 manifest。冻结后回下载验证每个制品，再调用该版本的 `/submit` 并读取 `/publication` 回执。
 
-已公开 Release 的恢复仍使用同一工作流：在 `main` 上运行 `release_ref=v<version>, publish=true`。应用清单和制品来自不可变标签/Release；发布工具来自执行本次工作流的准确 `github.workflow_sha`，且必须已合入主线。恢复不重建二进制、不移动标签、不覆盖 Release 制品。已冻结版本必须逐字节匹配；请求结果不确定时先回查，`RECEIVING` 使用来源拥有的同一提交尝试继续传输。`REJECTED`、`WITHDRAWN` 需要独立明确处理，不自动重新申请。
+制品已公开但来源提交中断时，以 `resume_submission=true` 显式恢复提交；该模式只报告提交阶段，不算客户端发布验收。
 
-`PENDING_REVIEW` 表示提交成功并等待独立审核；只有 `PUBLISHED` 才表示市场已发布。流水线不执行管理员审核。
+已公开 Release 的验收仍使用同一工作流：在 `main` 上运行 `release_ref=v<version>, publish=true`。应用清单和制品来自不可变标签/Release；发布工具来自执行本次工作流的准确 `github.workflow_sha`，且必须已合入主线。验收只读，不重建二进制、不移动标签、不覆盖 Release 制品，也不补交审核。发布阶段请求结果不确定时回查准确版本；`RECEIVING` 使用来源拥有的同一提交尝试继续传输。`REJECTED`、`WITHDRAWN` 需要独立明确处理，不自动重新申请。
+
+`PENDING_REVIEW` 只表示提交成功并等待独立审核；`PUBLISHED` 只证明精确版本已审核，不能证明市场目录选择了它。首次发布工作流成功表示制品和提交阶段完成，不能报告客户端交付完成。流水线不执行管理员审核。
+
+独立审核后，必须按上述方式重跑准确标签的 `publish=true` 工作流。`verify-published` 使用 `--verify-market` 只读验收：要求来源回执 `PUBLISHED`，遍历客户端市场目录并按 environmentKey + appId 唯一匹配，要求展示版本等于本次版本，读取精确市场版本并逐平台下载中心分发字节核对 SHA-256、大小和清单原文。待审核、下架、旧版本固定、分页异常、错误来源或制品不一致均使验收失败；只有 `MARKET_VERIFIED` 才通过。随后仍需使用受支持 Bridge Agent 验证设备安装、启动和应用状态，Windows 提权需在 Windows 设备验证。
 
 发布工具测试：
 

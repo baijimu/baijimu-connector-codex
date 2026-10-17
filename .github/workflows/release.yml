@@ -17,6 +17,12 @@ on:
         default: false
         type: boolean
 
+      resume_submission:
+        description: "Explicitly resume source submission for an existing Release; does not accept client delivery"
+        required: true
+        default: false
+        type: boolean
+
 concurrency:
   group: codex-local-app-release-${{ github.event_name == 'push' && github.ref_name || inputs.release_ref }}
   cancel-in-progress: false
@@ -600,8 +606,9 @@ jobs:
             "$RUNNER_TEMP/oss-manifest/baijimu-codex-desktop-${VERSION}-oss-manifest.json"
           status="$(cat "$MARKET_PUBLICATION_STATUS_FILE")"
           echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "Submission state: $status. This is not client release acceptance. After independent market review, rerun this workflow for the exact tag with publish=true to verify the client catalog and artifact bytes." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Verify release and published market state
+      - name: Report submission stage (independent review and client acceptance still required)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -699,7 +706,7 @@ jobs:
             test "$(sha256sum "$RUNNER_TEMP/oss-$platform.zip" | awk '{print $1}')" = "$expected"
           done
 
-      - name: Verify immutable market version
+      - name: Accept client delivery or explicitly resume submission
         shell: bash
         env:
           LOCAL_APP_MARKET_PUBLISH_TOKEN: ${{ secrets.LOCAL_APP_MARKET_PUBLISH_TOKEN }}
@@ -709,11 +716,14 @@ jobs:
           LOCAL_APP_PUBLIC_ARTIFACT_BASE_URL: ${{ vars.LOCAL_APP_PUBLIC_ARTIFACT_BASE_URL }}
           MARKET_PUBLICATION_STATUS_FILE: ${{ runner.temp }}/publication-status
           VERSION: ${{ needs.validate.outputs.version }}
+          RESUME_SUBMISSION: ${{ inputs.resume_submission }}
         run: |
           set -euo pipefail
-          .release-tools/tools/release/publish-market.sh "$VERSION" connector.json "$RUNNER_TEMP/published-release/baijimu-codex-desktop-${VERSION}-oss-manifest.json"
-          case "$(cat "$MARKET_PUBLICATION_STATUS_FILE")" in
-            PENDING_REVIEW) echo "market submission is pending independent review" ;;
-            PUBLISHED) echo "source owner confirms this immutable version is published" ;;
-            *) exit 1 ;;
-          esac
+          if [ "$RESUME_SUBMISSION" = true ]; then
+            .release-tools/tools/release/publish-market.sh "$VERSION" connector.json "$RUNNER_TEMP/published-release/baijimu-codex-desktop-${VERSION}-oss-manifest.json"
+            echo "Submission resumed: $(cat "$MARKET_PUBLICATION_STATUS_FILE"). Client acceptance still required; rerun without resume_submission after independent review." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          .release-tools/tools/release/publish-market.sh "$VERSION" connector.json "$RUNNER_TEMP/published-release/baijimu-codex-desktop-${VERSION}-oss-manifest.json" --verify-market
+          test "$(cat "$MARKET_PUBLICATION_STATUS_FILE")" = MARKET_VERIFIED
+          echo "Client market selects $VERSION; all platform bytes match the immutable release." >> "$GITHUB_STEP_SUMMARY"

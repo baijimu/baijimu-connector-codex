@@ -136,6 +136,7 @@ impl SetupCompletion {
         }
     }
 
+    #[cfg(any(target_os = "macos", test))]
     fn warning(&self) -> Option<&str> {
         match self {
             Self::Warning(warning) => Some(warning),

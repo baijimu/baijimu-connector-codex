@@ -121,7 +121,7 @@ impl ActivationTransaction {
 pub fn state() -> Result<CredentialManagerState> {
     let mut metadata = load_metadata()?;
     let shared_home = default_original_codex_home();
-    let mut workspaces = merge_workspace_options(&BTreeSet::new(), None, &metadata);
+    let mut workspaces = merge_workspace_options(None, None, &metadata);
     let active_profile_id = metadata.active_profile_id.clone();
     for profile in &mut metadata.profiles {
         normalize_profile(profile);
@@ -256,17 +256,6 @@ pub fn default_auth_profile_id() -> Result<Option<String>> {
 pub fn discover_workspaces() -> Result<Value> {
     let auth_status = baijimu_cli::auth_status();
     let mut warning = auth_status.as_ref().err().map(ToString::to_string);
-    let (current_workspace_id, authorized_workspace_ids) = match auth_status.as_ref() {
-        Ok(status) => (
-            status.current_workspace_id,
-            status
-                .workspace_ids
-                .iter()
-                .copied()
-                .collect::<BTreeSet<_>>(),
-        ),
-        Err(_) => (None, BTreeSet::new()),
-    };
     let discovered = if auth_status
         .as_ref()
         .is_ok_and(|status| status.authenticated)
@@ -283,13 +272,14 @@ pub fn discover_workspaces() -> Result<Value> {
     };
     let _read = crate::state_access::read()?;
     let workspaces = merge_workspace_options(
-        &authorized_workspace_ids,
+        auth_status.as_ref().ok(),
         discovered.as_deref(),
         &load_metadata()?,
     );
 
     Ok(json!({
-        "currentWorkspaceId": current_workspace_id,
+        "authenticated": auth_status.as_ref().is_ok_and(|auth| auth.authenticated),
+        "allUserWorkspaces": auth_status.as_ref().is_ok_and(|auth| auth.all_user_workspaces),
         "workspaces": workspaces,
         "discoveryWarning": warning,
     }))
@@ -618,7 +608,7 @@ fn authorized_workspace(workspace_id: u64) -> Result<baijimu_cli::Workspace> {
         anyhow::bail!("工作区 ID 必须大于 0");
     }
     let auth_status = baijimu_cli::auth_status().context("读取 baijimu CLI 授权状态失败")?;
-    if !auth_status.authenticated || !auth_status.workspace_ids.contains(&workspace_id) {
+    if !auth_status.covers_workspace(workspace_id) {
         anyhow::bail!("baijimu CLI 授权不包含该工作区，请先重新完成设备授权");
     }
     baijimu_cli::get_workspace(workspace_id).context("baijimu CLI 无法确认当前工作区授权")
@@ -860,7 +850,7 @@ fn managed_config_ready(path: &Path) -> bool {
 }
 
 fn merge_workspace_options(
-    authorized_workspace_ids: &BTreeSet<u64>,
+    authorization: Option<&baijimu_cli::AuthStatus>,
     discovered: Option<&[baijimu_cli::Workspace]>,
     metadata: &CredentialMetadata,
 ) -> Vec<WorkspaceOption> {
@@ -869,7 +859,9 @@ fn merge_workspace_options(
         .flatten()
         .map(|item| item.id)
         .collect::<BTreeSet<_>>();
-    ids.extend(authorized_workspace_ids.iter().copied());
+    if let Some(auth) = authorization {
+        ids.extend(auth.workspace_ids.iter().copied());
+    }
     ids.extend(
         metadata
             .profiles
@@ -908,8 +900,9 @@ fn merge_workspace_options(
             WorkspaceOption {
                 workspace_id,
                 name,
-                authorized: discovered.is_some()
-                    && authorized_workspace_ids.contains(&workspace_id),
+                authorized: discovered
+                    .is_some_and(|items| items.iter().any(|item| item.id == workspace_id))
+                    && authorization.is_some_and(|auth| auth.covers_workspace(workspace_id)),
                 configured: metadata.profiles.iter().any(|item| {
                     item.kind == AuthProfileKind::Baijimu
                         && item.workspace_id == workspace_id
@@ -2705,6 +2698,88 @@ mod shared_home_tests {
             codex_home: home.display().to_string(),
             credential_status: "verified".to_string(),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dynamic_scope_still_uses_explicit_workspace_and_propagates_owner_denial() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("codex-explicit-auth-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let cli = root.join("baijimu");
+        let _env = EnvRestore::set(&[("CODEX_DESKTOP_BAIJIMU_BINARY", &cli)]);
+        fs::write(&cli, r#"#!/bin/sh
+if [ "$1 $2" = "auth status" ]; then
+  printf '%s\n' '{"authenticated":true,"baseUrl":"https://example.test","allUserWorkspaces":true,"workspaceIds":[]}'
+elif [ "$1 $2 $3 $4 $5" = "workspace get --workspace-id 42 --json" ]; then
+  printf '%s\n' '{"contractVersion":"1.0.0","errorCode":"0","data":{"id":42,"name":"Allowed"}}'
+else
+  printf '%s\n' '{"contractVersion":"1.0.0","errorCode":"FORBIDDEN","data":{"message":"owner denied membership"}}'
+  exit 1
+fi
+"#).unwrap();
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(authorized_workspace(42).unwrap().id, 42);
+        let error = format!("{:#}", authorized_workspace(99).unwrap_err());
+        assert!(error.contains("FORBIDDEN"));
+        assert!(error.contains("owner denied membership"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_discovery_intersects_live_membership_with_fixed_or_dynamic_scope() {
+        let metadata = CredentialMetadata::default();
+        let discovered = vec![
+            baijimu_cli::Workspace {
+                id: 42,
+                name: "研发".into(),
+            },
+            baijimu_cli::Workspace {
+                id: 99,
+                name: "测试".into(),
+            },
+        ];
+        let mut auth = baijimu_cli::AuthStatus {
+            authenticated: true,
+            base_url: "https://example.test".into(),
+            all_user_workspaces: false,
+            workspace_ids: vec![42, 7],
+        };
+        let fixed = merge_workspace_options(Some(&auth), Some(&discovered), &metadata);
+        assert!(
+            fixed
+                .iter()
+                .find(|w| w.workspace_id == 42)
+                .unwrap()
+                .authorized
+        );
+        assert!(
+            !fixed
+                .iter()
+                .find(|w| w.workspace_id == 99)
+                .unwrap()
+                .authorized
+        );
+        assert!(
+            !fixed
+                .iter()
+                .find(|w| w.workspace_id == 7)
+                .unwrap()
+                .authorized
+        );
+        auth.all_user_workspaces = true;
+        auth.workspace_ids.clear();
+        let dynamic = merge_workspace_options(Some(&auth), Some(&discovered), &metadata);
+        assert_eq!(dynamic.len(), 2);
+        assert!(dynamic.iter().all(|w| w.authorized));
+        assert!(merge_workspace_options(Some(&auth), None, &metadata).is_empty());
+        auth.authenticated = false;
+        assert!(
+            merge_workspace_options(Some(&auth), Some(&discovered), &metadata)
+                .iter()
+                .all(|w| !w.authorized)
+        );
     }
 
     #[test]

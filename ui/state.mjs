@@ -369,3 +369,16 @@ export function shouldShowSetupProgress(value) {
   const progress = normalizeSetupProgress(value);
   return progress.status !== "succeeded" && progress.steps.length > 0;
 }
+
+// This is the user's selected Codex workspace binding, never a CLI default or
+// the first entry in a credential/membership list.
+export function boundSetupWorkspaceId(state) {
+  const binding = state?.activeCodexWorkspace?.authProfileId;
+  const profile = state?.profiles?.find((item) => item.profileId === binding);
+  return profile?.kind === "baijimu" ? positiveInteger(profile.workspaceId) : null;
+}
+
+export function setupRetryWorkspaceId(setup, selectedWorkspaceId) {
+  // Retry the captured operation target even after the UI selection changes.
+  return positiveInteger(setup?.workspaceId) || positiveInteger(selectedWorkspaceId);
+}

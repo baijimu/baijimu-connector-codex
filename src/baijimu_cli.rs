@@ -14,8 +14,16 @@ const WORKSPACE_PAGE_SIZE: u64 = 200;
 pub struct AuthStatus {
     pub authenticated: bool,
     pub base_url: String,
-    pub current_workspace_id: Option<u64>,
+    pub all_user_workspaces: bool,
     pub workspace_ids: Vec<u64>,
+}
+
+impl AuthStatus {
+    pub fn covers_workspace(&self, workspace_id: u64) -> bool {
+        self.authenticated
+            && workspace_id > 0
+            && (self.all_user_workspaces || self.workspace_ids.contains(&workspace_id))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,14 +37,13 @@ pub struct Workspace {
 struct AuthStatusContract {
     authenticated: bool,
     base_url: String,
-    current_workspace_id: Option<u64>,
+    all_user_workspaces: bool,
     workspace_ids: Vec<u64>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WorkspaceListContract {
-    current_workspace_id: Option<u64>,
     list: Vec<WorkspaceContract>,
     total_pages: u64,
 }
@@ -48,7 +55,6 @@ struct WorkspaceContract {
 }
 
 struct WorkspacePage {
-    current_workspace_id: Option<u64>,
     items: Vec<WorkspaceContract>,
     total_pages: u64,
 }
@@ -69,13 +75,18 @@ pub fn command() -> Result<Command> {
 
 pub fn auth_status() -> Result<AuthStatus> {
     let contract: AuthStatusContract = run_json("auth status", &["auth", "status"])?;
-    if contract.authenticated && contract.workspace_ids.is_empty() {
+    parse_auth_status(contract)
+}
+
+fn parse_auth_status(contract: AuthStatusContract) -> Result<AuthStatus> {
+    if contract.authenticated && !contract.all_user_workspaces && contract.workspace_ids.is_empty()
+    {
         bail!("baijimu CLI 报告已认证，但授权工作区为空");
     }
     Ok(AuthStatus {
         authenticated: contract.authenticated,
         base_url: required_text(contract.base_url, "auth status.baseUrl")?,
-        current_workspace_id: contract.current_workspace_id.filter(|id| *id > 0),
+        all_user_workspaces: contract.all_user_workspaces,
         workspace_ids: positive_unique_ids(contract.workspace_ids, "auth status.workspaceIds")?,
     })
 }
@@ -83,7 +94,6 @@ pub fn auth_status() -> Result<AuthStatus> {
 pub fn list_workspaces() -> Result<Vec<Workspace>> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut page = 1_u64;
-    let mut expected_current_workspace = None;
     let mut workspaces = BTreeMap::new();
     loop {
         let page_text = page.to_string();
@@ -107,17 +117,9 @@ pub fn list_workspaces() -> Result<Vec<Workspace>> {
             "workspace list",
         )?;
         let result = WorkspacePage {
-            current_workspace_id: contract.current_workspace_id,
             items: contract.list,
             total_pages: contract.total_pages,
         };
-        match expected_current_workspace {
-            None => expected_current_workspace = result.current_workspace_id,
-            Some(expected) if result.current_workspace_id != Some(expected) => {
-                bail!("baijimu CLI workspace list 分页期间当前工作区发生变化")
-            }
-            _ => {}
-        }
         for workspace in result.items {
             if workspace.id == 0 {
                 bail!("baijimu CLI workspace list 返回了非法工作区 ID");
@@ -365,28 +367,52 @@ mod tests {
     }
 
     #[test]
-    fn auth_status_contract_requires_owned_fields_and_normalizes_ids() {
-        let contract: AuthStatusContract = crate::json_compat::from_slice(
+    fn auth_status_accepts_cli_0128_without_a_default_workspace() {
+        let contract = crate::json_compat::from_slice(
             br#"{
-                "authenticated": true,
-                "baseUrl": "https://api.baijimu.com",
-                "configuredCurrentWorkspaceId": 642,
-                "credentialCount": 2,
-                "currentWorkspaceId": 642,
-                "sharedAuthPath": "/owned/by/baijimu-cli/auth.json",
-                "verification": null,
-                "workspaceIds": [1390, 642, 642]
-            }"#,
+            "authenticated":true,"baseUrl":"https://example.test",
+            "allUserWorkspaces":false,"workspaceIds":[42,7,42]
+        }"#,
         )
         .unwrap();
-        let status = AuthStatus {
-            authenticated: contract.authenticated,
-            base_url: required_text(contract.base_url, "baseUrl").unwrap(),
-            current_workspace_id: contract.current_workspace_id,
-            workspace_ids: positive_unique_ids(contract.workspace_ids, "workspaceIds").unwrap(),
-        };
-        assert_eq!(status.workspace_ids, vec![642, 1390]);
-        assert_eq!(status.current_workspace_id, Some(642));
+        let status = parse_auth_status(contract).unwrap();
+        assert_eq!(status.workspace_ids, vec![7, 42]);
+        assert!(status.covers_workspace(42));
+        assert!(!status.covers_workspace(99));
+    }
+
+    #[test]
+    fn dynamic_authorization_is_not_a_fixed_workspace_enumeration() {
+        let contract = crate::json_compat::from_slice(
+            br#"{
+            "authenticated":true,"baseUrl":"https://example.test",
+            "allUserWorkspaces":true,"workspaceIds":[]
+        }"#,
+        )
+        .unwrap();
+        let mut status = parse_auth_status(contract).unwrap();
+        assert!(status.covers_workspace(99));
+        assert!(!status.covers_workspace(0));
+        status.authenticated = false;
+        assert!(!status.covers_workspace(99));
+    }
+
+    #[test]
+    fn fixed_empty_scope_and_missing_scope_contract_are_rejected() {
+        let contract = crate::json_compat::from_slice(
+            br#"{
+            "authenticated":true,"baseUrl":"https://example.test",
+            "allUserWorkspaces":false,"workspaceIds":[]
+        }"#,
+        )
+        .unwrap();
+        assert!(parse_auth_status(contract).is_err());
+        assert!(crate::json_compat::from_slice::<AuthStatusContract>(
+            br#"{
+            "authenticated":true,"baseUrl":"https://example.test","workspaceIds":[42]
+        }"#
+        )
+        .is_err());
     }
 
     #[test]

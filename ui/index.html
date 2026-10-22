@@ -16,6 +16,14 @@
         <button id="error-retry-button" class="button secondary compact" type="button" hidden>重试</button>
       </div>
 
+      <section id="setup-workspace-panel" class="panel" hidden>
+        <label class="form-field" for="setup-workspace-select">
+          <span>用于安装或修复的百积木工作区</span>
+          <select id="setup-workspace-select"></select>
+        </label>
+        <button id="setup-workspace-confirm" class="button primary" type="button" disabled>安装并配置</button>
+      </section>
+
       <div id="workspace-create-modal" class="modal-backdrop" hidden>
         <section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-create-title">
           <div class="modal-heading">

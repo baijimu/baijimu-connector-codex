@@ -34,12 +34,12 @@ class Element {
   }
 }
 
-async function failedInstallerPage(discover = async () => ({ currentWorkspaceId: 42 }), overrides = {}) {
+async function failedInstallerPage(discover = async () => ({ workspaces: [{ workspaceId: 42, name: "研发", authorized: true }] }), overrides = {}) {
   const elements = new Map();
   const calls = [];
   const timers = [];
   const setup = {
-    status: "failed", retryable: true, error: "安装此应用需要管理员权限",
+    status: "failed", workspaceId: 42, retryable: true, error: "安装此应用需要管理员权限",
     installerStatus: { platform: "windows", steps: [], packageRecovery: {
       packagePath: "C:\\用户\\package.msix", sha256: "a".repeat(64), requiresElevation: true,
     } },
@@ -61,7 +61,7 @@ async function failedInstallerPage(discover = async () => ({ currentWorkspaceId:
         calls.push({ operation, args });
         if (overrides[operation]) return overrides[operation](args);
         if (operation === "discoverWorkspaces") return discover();
-        if (operation === "credentialState") return { currentWorkspaceId: 42 };
+        if (operation === "credentialState") return { profiles: [{ profileId: "bound:42", kind: "baijimu", workspaceId: 42 }], activeCodexWorkspace: { workspaceId: "default", name: "默认工作区", codexHome: "/codex", authProfileId: "bound:42" } };
         if (operation === "setupState") return setup;
         if (operation === "ensureCodexReady") return { readiness: "failed", setup };
         if (operation === "setupRetry") return { status: "running" };
@@ -205,4 +205,55 @@ test("opening and refreshing a completed legacy setup never invokes a model prob
   assert.ok(calls.every(({ operation }) => [
     "credentialState", "setupState", "discoverWorkspaces", "ensureCodexReady",
   ].includes(operation)), JSON.stringify(calls));
+});
+
+
+test("CLI 0.128 discovery without a default uses the active workspace binding", async () => {
+  const page = await failedInstallerPage();
+  const ready = page.calls.find((call) => call.operation === "ensureCodexReady");
+  assert.equal(ready.args.workspaceId, 42);
+});
+
+test("first install requires explicit selection even with one authorized workspace", async () => {
+  const page = await failedInstallerPage(undefined, {
+    credentialState: () => ({}),
+    setupState: () => ({ status: "pending" }),
+    ensureCodexReady: () => ({ readiness: "needs_workspace", setup: { status: "pending" } }),
+  });
+  assert.equal(page.calls.find((call) => call.operation === "ensureCodexReady").args.workspaceId, null);
+  assert.equal(page.elements.get("setup-workspace-panel").hidden, false);
+  const select = page.elements.get("setup-workspace-select");
+  select.value = "42";
+  select.listeners.change();
+  page.elements.get("setup-workspace-confirm").listeners.click();
+  await new Promise(setImmediate);
+  assert.equal(page.calls.filter((call) => call.operation === "ensureCodexReady").at(-1).args.workspaceId, 42);
+});
+
+test("retry retains the failed operation workspace when another target is selected", async () => {
+  const page = await failedInstallerPage();
+  vm.runInContext('selectedSetupWorkspaceId = 7', page.context);
+  page.elements.get("error-retry-button").listeners.click();
+  await new Promise(setImmediate);
+  assert.equal(page.calls.find((call) => call.operation === "setupRetry").args.workspaceId, 42);
+});
+
+
+test("choosing a setup workspace clears the previous selection error on success", async () => {
+  let ready = false;
+  const page = await failedInstallerPage(undefined, {
+    credentialState: () => ({}),
+    setupState: () => ({ status: "pending" }),
+    ensureCodexReady: () => ready
+      ? { readiness: "ready", setup: { status: "succeeded" } }
+      : { readiness: "needs_workspace", message: "请选择工作区", setup: { status: "pending" } },
+  });
+  assert.equal(page.elements.get("error").hidden, false);
+  ready = true;
+  page.elements.get("setup-workspace-select").value = "42";
+  page.elements.get("setup-workspace-select").listeners.change();
+  page.elements.get("setup-workspace-confirm").listeners.click();
+  await new Promise(setImmediate);
+  assert.equal(page.elements.get("error").hidden, true);
+  assert.equal(page.elements.get("setup-workspace-panel").hidden, true);
 });

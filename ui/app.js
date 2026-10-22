@@ -1,4 +1,6 @@
 import {
+  boundSetupWorkspaceId,
+  setupRetryWorkspaceId,
   codexWorkspaceMeta,
   codexCapabilityMeta,
   connectorStartupRetryable,
@@ -27,6 +29,7 @@ const elementIds = [
   "workspace-create-modal", "workspace-name-input", "workspace-auth-profile-select",
   "workspace-create-cancel", "workspace-create-confirm",
   "management-workspace-panel",
+  "setup-workspace-panel", "setup-workspace-select", "setup-workspace-confirm",
   "setup-panel", "setup-actions",
 ];
 const elements = Object.fromEntries(elementIds.map((id) => [id, document.getElementById(id)]));
@@ -34,6 +37,8 @@ const elements = Object.fromEntries(elementIds.map((id) => [id, document.getElem
 let credentialState = null;
 let workspaceDiscovery = null;
 let setupState = null;
+let selectedSetupWorkspaceId = null;
+let setupWorkspaceSelectionInitialized = false;
 let setupMonitorGeneration = 0;
 let selectedAuthProfileId = null;
 let selectedCodexWorkspaceId = null;
@@ -99,6 +104,8 @@ function errorMessage(error) {
 function setAccountBusy(value) {
   accountBusy = value;
   elements["refresh-button"].disabled = value;
+  elements["setup-workspace-select"].disabled = value;
+  elements["setup-workspace-confirm"].disabled = value || !selectedSetupWorkspaceId;
   elements["setup-action-button"].disabled = value;
   elements["setup-reveal-package-button"].disabled = value;
   elements["add-workspace-button"].disabled = value;
@@ -463,6 +470,7 @@ function credentialView(local) {
 
 function renderCredentialState() {
   const state = credentialState;
+  renderSetupWorkspaceSelection();
   renderCodexWorkspaces();
   setMessage("warning", workspaceDiscovery?.discoveryWarning || state?.discoveryWarning || "");
   const migration = state?.legacyGlobalCodexHome;
@@ -734,10 +742,30 @@ async function monitorSetup() {
   }
 }
 
+function renderSetupWorkspaceSelection() {
+  const select = elements["setup-workspace-select"];
+  select.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "请选择百积木工作区";
+  select.append(placeholder);
+  for (const workspace of credentialState?.workspaces || []) {
+    const option = document.createElement("option");
+    option.value = String(workspace.workspaceId);
+    option.textContent = `${workspace.name}（${workspace.workspaceId}）${workspace.authorized ? "" : " · 未授权"}`;
+    option.disabled = !workspace.authorized;
+    select.append(option);
+  }
+  select.value = selectedSetupWorkspaceId ? String(selectedSetupWorkspaceId) : "";
+  elements["setup-workspace-confirm"].disabled = accountBusy || !selectedSetupWorkspaceId;
+}
+
 async function ensureCodexReady() {
-  const readiness = await invokeManagement("ensureCodexReady", {});
+  setAccountBusy(true);
+  const readiness = await invokeManagement("ensureCodexReady", { workspaceId: selectedSetupWorkspaceId });
   setupState = readiness?.setup || setupState;
   renderSetupState();
+  elements["setup-workspace-panel"].hidden = readiness?.readiness !== "needs_workspace";
   switch (readiness?.readiness) {
     case "ready":
       return;
@@ -753,7 +781,8 @@ async function ensureCodexReady() {
       });
       return;
     case "needs_workspace":
-      showError(readiness?.message || "请先完成当前百积木工作区授权。", {
+      renderSetupWorkspaceSelection();
+      showError(readiness?.message || "请选择百积木工作区。", {
         action: () => loadState({ ensureReady: true }),
         label: "重新检查",
       });
@@ -777,6 +806,10 @@ async function loadState({ ensureReady = false, monitor = true } = {}) {
     workspaceDiscovery = null;
     credentialState = credentialView(credential);
     setupState = setup;
+    if (!setupWorkspaceSelectionInitialized) {
+      selectedSetupWorkspaceId = boundSetupWorkspaceId(credentialState);
+      setupWorkspaceSelectionInitialized = true;
+    }
     // Render local state first; discovery failure must not hide it or reuse old authorization.
     renderCredentialState();
     renderSetupState();
@@ -804,9 +837,9 @@ async function loadState({ ensureReady = false, monitor = true } = {}) {
 
 async function retrySetup(elevate = false) {
   clearNotices();
-  const workspaceId = credentialState?.currentWorkspaceId;
+  const workspaceId = setupRetryWorkspaceId(setupState, selectedSetupWorkspaceId);
   if (!workspaceId) {
-    showError("客户端当前授权中缺少工作区信息。", {
+    showError("请先选择用于安装或修复的百积木工作区。", {
       action: () => loadState({ ensureReady: true }),
       label: "重新检查",
     });
@@ -870,6 +903,16 @@ elements["setup-reveal-package-button"].addEventListener("click", async () => {
 elements["setup-action-button"].addEventListener("click", () => {
   const action = setupActionMeta(setupState);
   void retrySetup(action.operation === "elevate");
+});
+elements["setup-workspace-select"].addEventListener("change", () => {
+  const id = Number(elements["setup-workspace-select"].value);
+  selectedSetupWorkspaceId = Number.isSafeInteger(id) && id > 0 ? id : null;
+  elements["setup-workspace-confirm"].disabled = accountBusy || !selectedSetupWorkspaceId;
+});
+elements["setup-workspace-confirm"].addEventListener("click", () => {
+  clearNotices();
+  void ensureCodexReady().catch((error) => showError(errorMessage(error)))
+    .finally(() => setAccountBusy(setupState?.status === "running"));
 });
 elements["add-workspace-button"].addEventListener("click", openWorkspaceCreateModal);
 elements["workspace-create-cancel"].addEventListener("click", closeWorkspaceCreateModal);

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  boundSetupWorkspaceId,
+  setupRetryWorkspaceId,
   codexWorkspaceMeta,
   codexCapabilityMeta,
   defaultWorkspaceMeta,
@@ -265,4 +267,19 @@ test("Windows permission failures offer elevation and the recorded package direc
   setup.installerStatus.packageRecovery = null;
   assert.equal(setupActionMeta(setup).operation, "retry");
   assert.equal(installerRecoveryMeta(setup).canReveal, false);
+});
+
+
+test("setup uses the active Codex binding and never a CLI default or sole membership", () => {
+  assert.equal(boundSetupWorkspaceId({ currentWorkspaceId: 7, workspaces: [{ workspaceId: 42, authorized: true }] }), null);
+  const state = { activeCodexWorkspace: { authProfileId: "chosen" }, profiles: [
+    { profileId: "other", kind: "baijimu", workspaceId: 7 },
+    { profileId: "chosen", kind: "baijimu", workspaceId: 42 },
+  ] };
+  assert.equal(boundSetupWorkspaceId(state), 42);
+  state.profiles[1].kind = "personal";
+  assert.equal(boundSetupWorkspaceId(state), null);
+  assert.equal(setupRetryWorkspaceId({ workspaceId: 42 }, 7), 42);
+  assert.equal(setupRetryWorkspaceId({}, 7), 7);
+  assert.equal(setupRetryWorkspaceId({}, null), null);
 });

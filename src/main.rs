@@ -148,6 +148,11 @@ fn decide_setup_readiness(
     if setup.status == "running" {
         return SetupReadinessDecision::Initializing;
     }
+    // An installed desktop can use personal ChatGPT authentication. No
+    // workspace operation is requested when the caller supplies no target.
+    if setup.status == "succeeded" && current_workspace_id.is_none() {
+        return SetupReadinessDecision::Ready;
+    }
     let Some(workspace_id) = current_workspace_id.filter(|_| current_workspace_authorized) else {
         return SetupReadinessDecision::NeedsWorkspace;
     };
@@ -162,7 +167,7 @@ fn decide_setup_readiness(
     if setup.status == "interrupted" {
         return SetupReadinessDecision::Failed;
     }
-    if setup.status == "succeeded" && setup.workspace_id == Some(workspace_id) && workspace_ready {
+    if setup.status == "succeeded" && workspace_ready {
         SetupReadinessDecision::Ready
     } else {
         SetupReadinessDecision::Start(workspace_id)
@@ -417,7 +422,7 @@ fn handle_management(
             .map_err(|error| HttpError::new(409, error.to_string())),
         ("GET", "/management/v1/setup/state") => serde_json::to_value(state.setup.state())
             .map_err(|error| HttpError::internal(error.to_string())),
-        ("POST", "/management/v1/setup/ensure-ready") => ensure_codex_ready(state),
+        ("POST", "/management/v1/setup/ensure-ready") => ensure_codex_ready(state, body),
         ("POST", "/management/v1/setup/reveal-package") => {
             state
                 .setup
@@ -747,7 +752,19 @@ fn setup_readiness_value(
     })
 }
 
-fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
+fn explicit_workspace_id(body: &Value) -> Result<Option<u64>, HttpError> {
+    match body.get("workspaceId") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .filter(|id| *id > 0)
+            .map(Some)
+            .ok_or_else(|| HttpError::new(400, "workspaceId 必须是正整数")),
+    }
+}
+
+fn ensure_codex_ready(state: &AppState, body: &Value) -> Result<Value, HttpError> {
+    let workspace_id = explicit_workspace_id(body)?;
     // This is an explicit command. Local migration/bootstrap never occurs in GET.
     let local_ready = {
         let _read = state_access::read().map_err(state_read_http_error)?;
@@ -759,11 +776,14 @@ fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
         state_access::initialize_local_data()
             .map_err(|e| HttpError::new(409, format!("本地数据初始化失败：{e:#}")))?;
     }
-    let auth = baijimu_cli::auth_status().map_err(|e| HttpError::new(409, e.to_string()))?;
-    let current_workspace_id = auth.current_workspace_id;
-    let current_workspace_authorized = auth.authenticated
-        && current_workspace_id.is_some_and(|id| auth.workspace_ids.contains(&id));
     let setup_status = state.setup.state();
+    let current_workspace_id = workspace_id;
+    let current_workspace_authorized = match workspace_id {
+        Some(id) => baijimu_cli::auth_status()
+            .map_err(|e| HttpError::new(409, e.to_string()))?
+            .covers_workspace(id),
+        None => false,
+    };
     let workspace_ready = {
         let _read = state_access::read().map_err(state_read_http_error)?;
         current_workspace_id.is_some_and(credential::codex_ready_for_workspace)
@@ -805,7 +825,7 @@ fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
         )),
         SetupReadinessDecision::NeedsWorkspace => Ok(setup_readiness_value(
             "needs_workspace",
-            "当前百积木账号没有明确且已授权的工作区，请先完成工作区授权",
+            "请选择用于安装或修复的百积木工作区，并确认当前账号已获授权",
             setup_status,
         )),
     }
@@ -945,6 +965,91 @@ fn print_help() {
     );
 }
 
+#[cfg(test)]
+mod explicit_workspace_readiness_tests {
+    use super::*;
+    fn setup_status(status: &str, workspace_id: Option<u64>) -> setup::SetupStatus {
+        setup::SetupStatus {
+            status: status.to_string(),
+            workspace_id,
+            message: status.to_string(),
+            error: (status == "failed").then(|| "installer failed".to_string()),
+            retryable: matches!(status, "failed" | "interrupted" | "needs_retry"),
+            ..setup::SetupStatus::default()
+        }
+    }
+
+    #[test]
+    fn explicit_setup_workspace_is_required_and_invalid_ids_fail() {
+        assert_eq!(explicit_workspace_id(&json!({})).unwrap(), None);
+        assert_eq!(
+            explicit_workspace_id(&json!({"workspaceId":42})).unwrap(),
+            Some(42)
+        );
+        for value in [json!(0), json!(-1), json!("42"), json!(1.5)] {
+            assert!(explicit_workspace_id(&json!({"workspaceId":value})).is_err());
+        }
+        assert_eq!(
+            decide_setup_readiness(&setup_status("pending", None), None, true, true),
+            SetupReadinessDecision::NeedsWorkspace
+        );
+        assert_eq!(
+            decide_setup_readiness(&setup_status("pending", None), Some(42), false, false),
+            SetupReadinessDecision::NeedsWorkspace
+        );
+    }
+
+    #[test]
+    fn explicit_setup_readiness_covers_install_repair_and_retry() {
+        for (status, recorded, ready, expected) in [
+            ("pending", None, false, SetupReadinessDecision::Start(42)),
+            ("succeeded", Some(42), true, SetupReadinessDecision::Ready),
+            ("succeeded", Some(7), true, SetupReadinessDecision::Ready),
+            (
+                "succeeded",
+                Some(42),
+                false,
+                SetupReadinessDecision::Start(42),
+            ),
+            (
+                "running",
+                Some(42),
+                false,
+                SetupReadinessDecision::Initializing,
+            ),
+            ("failed", Some(42), false, SetupReadinessDecision::Failed),
+            ("failed", Some(7), false, SetupReadinessDecision::Start(42)),
+            (
+                "interrupted",
+                Some(42),
+                false,
+                SetupReadinessDecision::Start(42),
+            ),
+            (
+                "needs_retry",
+                Some(42),
+                false,
+                SetupReadinessDecision::Start(42),
+            ),
+        ] {
+            assert_eq!(
+                decide_setup_readiness(&setup_status(status, recorded), Some(42), true, ready),
+                expected
+            );
+        }
+        assert_eq!(
+            decide_setup_readiness(&setup_status("succeeded", Some(42)), None, false, false),
+            SetupReadinessDecision::Ready
+        );
+        let mut repeated = setup_status("interrupted", Some(42));
+        repeated.automatic_retry_count = 2;
+        assert_eq!(
+            decide_setup_readiness(&repeated, Some(42), true, false),
+            SetupReadinessDecision::Failed
+        );
+    }
+}
+
 #[cfg(all(test, any()))]
 mod project_state_tests {
     use super::*;
@@ -999,117 +1104,6 @@ mod project_state_tests {
 
         assert_eq!(read_json_file(&path), json!({"projects": ["one"]}));
         fs::remove_file(path).unwrap();
-    }
-
-    fn setup_status(status: &str, workspace_id: Option<u64>) -> setup::SetupStatus {
-        setup::SetupStatus {
-            status: status.to_string(),
-            workspace_id,
-            message: status.to_string(),
-            error: (status == "failed").then(|| "installer failed".to_string()),
-            retryable: matches!(status, "failed" | "interrupted" | "needs_retry"),
-            ..setup::SetupStatus::default()
-        }
-    }
-
-    #[test]
-    fn automatic_setup_readiness_covers_install_repair_and_manual_retry_states() {
-        assert_eq!(
-            decide_setup_readiness(
-                &setup_status("pending", None),
-                Some(642),
-                true,
-                false,
-                false
-            ),
-            SetupReadinessDecision::Start(642)
-        );
-        assert_eq!(
-            decide_setup_readiness(
-                &setup_status("succeeded", Some(642)),
-                Some(642),
-                true,
-                true,
-                true,
-            ),
-            SetupReadinessDecision::Ready
-        );
-        assert_eq!(
-            decide_setup_readiness(
-                &setup_status("succeeded", Some(642)),
-                Some(642),
-                true,
-                false,
-                true,
-            ),
-            SetupReadinessDecision::Start(642)
-        );
-        assert_eq!(
-            decide_setup_readiness(
-                &setup_status("running", Some(642)),
-                Some(642),
-                true,
-                false,
-                false,
-            ),
-            SetupReadinessDecision::Initializing
-        );
-        assert_eq!(
-            decide_setup_readiness(
-                &setup_status("failed", Some(642)),
-                Some(642),
-                true,
-                false,
-                false,
-            ),
-            SetupReadinessDecision::Failed
-        );
-        assert_eq!(
-            decide_setup_readiness(
-                &setup_status("failed", Some(100)),
-                Some(642),
-                true,
-                false,
-                false,
-            ),
-            SetupReadinessDecision::Start(642)
-        );
-        assert_eq!(
-            decide_setup_readiness(
-                &setup_status("interrupted", Some(642)),
-                Some(642),
-                true,
-                false,
-                false,
-            ),
-            SetupReadinessDecision::Start(642)
-        );
-        assert_eq!(
-            decide_setup_readiness(
-                &setup_status("needs_retry", Some(642)),
-                Some(642),
-                true,
-                false,
-                false,
-            ),
-            SetupReadinessDecision::Start(642)
-        );
-        let mut repeated_interruption = setup_status("interrupted", Some(642));
-        repeated_interruption.automatic_retry_count = 2;
-        assert_eq!(
-            decide_setup_readiness(&repeated_interruption, Some(642), true, false, false,),
-            SetupReadinessDecision::Failed
-        );
-        assert_eq!(
-            decide_setup_readiness(
-                &setup_status("pending", None),
-                Some(642),
-                false,
-                false,
-                false
-            ),
-            SetupReadinessDecision::NeedsWorkspace
-        );
     }
 
     fn health_options(port: u16) -> ServerOptions {

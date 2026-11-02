@@ -253,7 +253,7 @@ test("Windows permission failures offer elevation and the recorded package direc
   };
   assert.deepEqual(installerRecoveryMeta(setup), { canReveal: true, canElevate: true });
   assert.deepEqual(setupActionMeta(setup), {
-    visible: true, operation: "elevate", label: "以管理员权限重试安装",
+    visible: true, operation: "elevate", label: "授权并继续安装",
   });
   for (const status of ["running", "succeeded", "pending"]) {
     assert.deepEqual(installerRecoveryMeta({ ...setup, status }), { canReveal: false, canElevate: false });

@@ -304,7 +304,7 @@ export function installerRecoveryMeta(value) {
 export function setupActionMeta(value) {
   const meta = setupStatusMeta(value);
   if (installerRecoveryMeta(value).canElevate) {
-    return { visible: true, operation: "elevate", label: "以管理员权限重试安装" };
+    return { visible: true, operation: "elevate", label: "授权并继续安装" };
   }
   if (meta.retryable) {
     const labels = {

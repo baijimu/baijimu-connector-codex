@@ -30,7 +30,7 @@ const elementIds = [
   "workspace-create-cancel", "workspace-create-confirm",
   "management-workspace-panel",
   "setup-workspace-panel", "setup-workspace-select", "setup-workspace-confirm",
-  "setup-panel", "setup-actions",
+  "setup-panel", "setup-actions", "setup-action-guidance",
 ];
 const elements = Object.fromEntries(elementIds.map((id) => [id, document.getElementById(id)]));
 
@@ -614,9 +614,24 @@ function renderSetupState() {
   renderInstallationState();
   renderPrimaryView();
   setAccountBusy(status === "running");
-  elements["setup-actions"].hidden = false;
+  const recovery = installerRecoveryMeta(setupState);
+  const failedStep = ["failed", "interrupted"].includes(status)
+    ? elements["setup-step-list"].querySelector(".failed")?.querySelector(".setup-step-copy")
+    : null;
+  const actions = elements["setup-actions"];
+  const actionParent = failedStep || elements["setup-panel"];
+  if (actions.parentElement !== actionParent) actionParent.append(actions);
+  actions.className = failedStep ? "form-actions setup-step-actions" : "form-actions";
+  actions.hidden = !action.visible && !recovery.canReveal;
+  elements["setup-action-guidance"].textContent = recovery.canElevate
+    ? "安装包已下载并校验。点击“授权并继续安装”，在 Windows 弹窗中允许管理员授权；也可查看安装包，手动安装后再重试。"
+    : recovery.canReveal
+      ? "安装包已下载并校验。可直接重试，或查看安装包并手动安装；手动安装完成后，点击重试继续配置。"
+      : failedStep
+        ? "请根据本步骤的错误提示处理后，点击重试继续安装和配置。"
+        : "这里仅负责 Codex 桌面环境的安装和修复；安装完成后将进入工作区管理界面。";
   elements["setup-action-button"].hidden = !action.visible;
-  elements["setup-reveal-package-button"].hidden = !installerRecoveryMeta(setupState).canReveal;
+  elements["setup-reveal-package-button"].hidden = !recovery.canReveal;
   elements["setup-action-button"].textContent = action.label;
   if (["failed", "interrupted"].includes(status)) {
     showError(setupState?.error || setupState?.message || "Codex 安装已中断，请重试。", {
@@ -689,7 +704,7 @@ function renderSetupProgress() {
       item.dataset.stepIndex = String(step.index);
       const marker = document.createElement("span");
       marker.className = "setup-step-marker";
-      const copy = document.createElement("span");
+      const copy = document.createElement("div");
       copy.className = "setup-step-copy";
       const title = document.createElement("strong");
       const detail = document.createElement("small");

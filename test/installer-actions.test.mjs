@@ -14,7 +14,17 @@ class Element {
   dataset = {};
   style = {};
   listeners = {};
-  append(...children) { this.children.push(...children); }
+  append(...children) {
+    for (const child of children) {
+      child.remove();
+      child.parentElement = this;
+      this.children.push(child);
+    }
+  }
+  remove() {
+    if (this.parentElement) this.parentElement.children = this.parentElement.children.filter((item) => item !== this);
+    this.parentElement = null;
+  }
   replaceChildren(...children) { this.children = children; }
   addEventListener(name, fn) { this.listeners[name] = fn; }
   setAttribute() {}
@@ -28,9 +38,10 @@ class Element {
     return null;
   }
   insertBefore(child, before) {
-    this.children = this.children.filter((item) => item !== child);
+    child.remove();
     const index = before ? this.children.indexOf(before) : this.children.length;
     this.children.splice(index, 0, child);
+    child.parentElement = this;
   }
 }
 
@@ -80,7 +91,7 @@ async function failedInstallerPage(discover = async () => ({ workspaces: [{ work
 test("both failure-page retry buttons explicitly request elevation", async () => {
   for (const id of ["setup-action-button", "error-retry-button"]) {
     const { elements, calls } = await failedInstallerPage();
-    assert.equal(elements.get(id).textContent, "以管理员权限重试安装");
+    assert.equal(elements.get(id).textContent, "授权并继续安装");
     assert.equal(elements.get(id).disabled, false);
     elements.get(id).listeners.click();
     await new Promise(setImmediate);
@@ -101,13 +112,45 @@ test("open-directory button uses the backend record without submitting a path", 
   assert.match(elements.get("message").textContent, /选中文件/);
 });
 
+test("recovery controls stay inside the failed step across refreshes and leave it on retry", async () => {
+  const setup = {
+    status: "failed", workspaceId: 42, retryable: true, error: "需要管理员权限",
+    installerStatus: { platform: "windows", steps: [
+      { index: 4, name: "校验安装包", state: "completed" },
+      { index: 5, name: "安装桌面应用", state: "failed" },
+      { index: 6, name: "配置授权", state: "skipped" },
+    ], packageRecovery: {
+      packagePath: "C:\\package.msix", sha256: "a".repeat(64), requiresElevation: true,
+    } },
+  };
+  const page = await failedInstallerPage(undefined, {
+    setupState: () => setup,
+    ensureCodexReady: () => ({ readiness: "failed", setup }),
+  });
+  const actions = page.elements.get("setup-actions");
+  const failedCopy = page.elements.get("setup-step-list").children[1].querySelector(".setup-step-copy");
+  assert.equal(actions.parentElement, failedCopy);
+  assert.equal(actions.hidden, false);
+  assert.match(page.elements.get("setup-action-guidance").textContent, /Windows 弹窗/);
+  page.elements.get("refresh-button").listeners.click();
+  await new Promise(setImmediate);
+  assert.equal(actions.parentElement, failedCopy);
+  assert.equal(failedCopy.children.filter((item) => item === actions).length, 1);
+  await page.elements.get("setup-action-button").listeners.click();
+  await new Promise(setImmediate);
+  assert.equal(actions.parentElement, page.elements.get("setup-panel"));
+  assert.equal(actions.hidden, true);
+  assert.equal(failedCopy.children.includes(actions), false);
+  assert.equal(page.calls.find((call) => call.operation === "setupRetry").args.elevate, true);
+});
+
 
 test("slow or failed workspace discovery does not hide local installation state", async () => {
   let reject;
   const pending = new Promise((_, rejectPromise) => { reject = rejectPromise; });
   const { elements, calls } = await failedInstallerPage(() => pending);
   assert.ok(calls.some((call) => call.operation === "discoverWorkspaces"));
-  assert.equal(elements.get("setup-action-button").textContent, "以管理员权限重试安装");
+  assert.equal(elements.get("setup-action-button").textContent, "授权并继续安装");
   reject(new Error("平台发现超时"));
   await new Promise(setImmediate);
   assert.match(elements.get("warning").textContent, /平台发现超时/);
@@ -132,7 +175,7 @@ for (const status of ["failed", "interrupted"]) {
     assert.equal(page.elements.get("message").hidden, true);
     assert.equal(page.elements.get("message").textContent, "");
     assert.equal(page.elements.get("error").hidden, false);
-    assert.equal(page.elements.get("setup-action-button").textContent, "以管理员权限重试安装");
+    assert.equal(page.elements.get("setup-action-button").textContent, "授权并继续安装");
     assert.equal(page.elements.get("setup-reveal-package-button").hidden, false);
     assert.equal(page.elements.get("setup-action-button").disabled, false);
   });

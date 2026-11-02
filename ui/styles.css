@@ -300,7 +300,15 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 }
 .form-actions[hidden] { display: none; }
 .form-actions p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
-.setup-action-buttons { display: flex; flex: 0 0 auto; gap: 10px; }
+.setup-action-buttons { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 10px; }
+.form-actions.setup-step-actions {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+}
+.setup-step-actions p { color: var(--ink); }
+.setup-step:has(.setup-step-actions:not([hidden])) { align-items: start; padding-block: 12px; }
 
 .setup-progress {
   display: grid;

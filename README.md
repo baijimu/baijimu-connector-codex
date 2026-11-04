@@ -39,3 +39,7 @@ npm test
 ```
 
 本仓库是 `codex` 客户端本地应用的唯一发布单元，继续使用 `baijimu/baijimu-connector-codex` 的 `main`、`v<version>` 标签、签名制品和既有 `local-app-market` 记录。
+
+## 故障诊断与恢复
+
+[故障库](docs/incidents/README.md) 记录可检索的症状、根因、历史修复边界、独立恢复步骤与验证结果。排查已有错误时先搜索故障库，再验证现场是否满足条目的触发条件。

@@ -2,9 +2,9 @@
   "schemaVersion": "3.0.0",
   "appId": "codex",
   "name": "Codex 桌面管理器",
-  "version": "2.1.9",
+  "version": "2.1.10",
   "description": "安装 Codex 桌面应用，管理多个隔离 Codex 工作区，并让每个工作区使用完整认证通道目录。",
-  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v2.1.9"},
+  "source": {"type": "github", "repo": "baijimu/baijimu-connector-codex", "revision": "v2.1.10"},
   "runtime": {
     "type": "process",
     "command": "baijimu-codex-desktop",
@@ -53,7 +53,7 @@
   "managedToolDependencies": [
     {
       "id": "baijimu-cli",
-      "minimumVersion": "0.128.0",
+      "minimumVersion": "0.159.0",
       "requiredFor": ["install", "start"],
       "executablePathEnv": "CODEX_DESKTOP_BAIJIMU_BINARY"
     }

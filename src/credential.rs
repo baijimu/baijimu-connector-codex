@@ -2727,6 +2727,71 @@ fi
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn initialization_and_reauthorization_issue_through_the_workspace_command() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("codex-workspace-issuance-{}", std::process::id()));
+        let user_home = root.join("user");
+        let data_home = root.join("data");
+        let cli = root.join("baijimu");
+        let issuance_log = root.join("issuance.log");
+        let _env = EnvRestore::set(&[
+            ("HOME", &user_home),
+            ("USERPROFILE", &user_home),
+            ("BAIJIMU_LOCAL_APP_DATA_DIR", &data_home),
+            ("CODEX_DESKTOP_BAIJIMU_BINARY", &cli),
+        ]);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&cli, r#"#!/bin/sh
+case "$*" in
+  "auth status")
+    printf '%s\n' '{"authenticated":true,"baseUrl":"https://example.test","allUserWorkspaces":true,"workspaceIds":[]}'
+    ;;
+  "workspace get --workspace-id 42 --json")
+    printf '%s\n' '{"contractVersion":"1.0.0","errorCode":"0","data":{"id":42,"name":"Allowed"}}'
+    ;;
+  "workspace llm-credential create --json --workspace-id 42 --show-secret")
+    log="${0%/*}/issuance.log"
+    if [ -f "$log" ]; then
+      credential="rotated-test-credential"
+    else
+      credential="initial-test-credential"
+    fi
+    printf '%s\n' "$credential" >> "$log"
+    printf '{"created":true,"keyType":"llmCredential","workspaceId":42,"projectId":null,"credential":"%s"}\n' "$credential"
+    ;;
+  *)
+    printf '%s\n' "unexpected baijimu invocation" >&2
+    exit 1
+    ;;
+esac
+"#).unwrap();
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let initialized = initialize_workspace_profile(42).unwrap();
+        let auth_path = profile_credential_path(&initialized.profile);
+        assert_eq!(
+            read_codex_api_key(&auth_path).unwrap().as_deref(),
+            Some("initial-test-credential")
+        );
+        initialize_workspace_profile(42).unwrap();
+
+        let reauthorization = prepare_workspace_reauthorization(42).unwrap();
+        commit_workspace_reauthorization(reauthorization).unwrap();
+        assert_eq!(
+            read_codex_api_key(&auth_path).unwrap().as_deref(),
+            Some("rotated-test-credential")
+        );
+        assert_eq!(
+            fs::read_to_string(issuance_log).unwrap(),
+            "initial-test-credential\nrotated-test-credential\n"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn workspace_discovery_intersects_live_membership_with_fixed_or_dynamic_scope() {
         let metadata = CredentialMetadata::default();

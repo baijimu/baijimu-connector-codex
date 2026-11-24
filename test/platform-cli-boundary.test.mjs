@@ -32,9 +32,10 @@ test("Baijimu CLI exclusively owns platform authentication and Partner API calls
   assert.match(platformCli, /\["auth", "status"\]/);
   assert.match(platformCli, /"workspace",\s*"list"/);
   assert.match(platformCli, /"workspace", "get"/);
-  assert.match(platformCli, /"llm-credential",\s*"create"/);
-  assert.match(platformCli, /"--json"/);
-  assert.match(platformCli, /"--show-secret"/);
+  assert.match(
+    platformCli,
+    /run_json\(\s*"workspace llm-credential create",\s*&\[\s*"workspace",\s*"llm-credential",\s*"create",\s*"--json",\s*"--workspace-id",\s*&workspace_text,\s*"--show-secret",\s*\]/,
+  );
   assert.doesNotMatch(platformCli, /pub\s+shared_auth_path\s*:/);
   const platformCliProduction = platformCli.slice(0, platformCli.indexOf("#[cfg(test)]"));
   assert.doesNotMatch(

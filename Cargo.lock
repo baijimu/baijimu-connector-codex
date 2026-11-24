@@ -26,7 +26,7 @@ dependencies = [
 
 [[package]]
 name = "baijimu-codex-desktop"
-version = "2.1.9"
+version = "2.1.10"
 dependencies = [
  "anyhow",
  "baijimu-cmodel-core",

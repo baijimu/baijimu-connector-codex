@@ -163,8 +163,9 @@ pub fn create_llm_credential(workspace_id: u64) -> Result<String> {
     require_workspace_id(workspace_id)?;
     let workspace_text = workspace_id.to_string();
     let contract: LlmCredentialContract = run_json(
-        "llm-credential create",
+        "workspace llm-credential create",
         &[
+            "workspace",
             "llm-credential",
             "create",
             "--json",
@@ -179,7 +180,10 @@ pub fn create_llm_credential(workspace_id: u64) -> Result<String> {
     if contract.workspace_id != workspace_id || contract.project_id.is_some() {
         bail!("baijimu CLI 返回的 LLM credential 归属不匹配");
     }
-    required_text(contract.credential, "llm-credential create.credential")
+    required_text(
+        contract.credential,
+        "workspace llm-credential create.credential",
+    )
 }
 
 fn binary() -> Result<PathBuf> {
